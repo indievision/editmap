@@ -1,0 +1,251 @@
+import {
+  AdaptiveCutDetector,
+  buildShotsFromCuts,
+  computeFrameDelta,
+  type SceneDetectionOptions,
+} from "./sceneDetection";
+import type { Shot } from "../models/project";
+
+export interface ScanProgress {
+  percent: number; // 0 to 100
+  currentTime: number;
+  totalDuration: number;
+  shotsCount: number;
+}
+
+export interface VideoScanOptions extends SceneDetectionOptions {
+  /**
+   * Sampling stride in seconds. Default: 0.25s (approx 4 samples per second).
+   * Ensures no rapid cuts or short shots are skipped.
+   */
+  sampleIntervalSeconds?: number;
+  /**
+   * Frame rate of the project (e.g. 24, 25, 29.97).
+   */
+  fps?: number;
+  /**
+   * Drop frame timecode flag.
+   */
+  dropFrame?: boolean;
+  /**
+   * Callback fired as scanning progresses.
+   */
+  onProgress?: (progress: ScanProgress) => void;
+  /**
+   * Abort signal to cancel detection.
+   */
+  signal?: AbortSignal;
+}
+
+const CANVAS_WIDTH = 160;
+const CANVAS_HEIGHT = 90;
+
+/**
+ * Scans an HTML video source to automatically detect scene cuts and return EDITMAP Shot objects.
+ * Uses high-speed fixed-anchor binary search boundary refinement.
+ */
+export async function detectVideoShots(
+  videoUrl: string,
+  options: VideoScanOptions = {},
+): Promise<Shot[]> {
+  const {
+    sampleIntervalSeconds = 0.25,
+    fps = 24,
+    dropFrame = false,
+    adaptiveThreshold = 2.8,
+    minContentVal = 16.0,
+    minShotDurationSeconds = 0.4,
+    windowWidth = 8,
+    onProgress,
+    signal,
+  } = options;
+
+  return new Promise<Shot[]>((resolve, reject) => {
+    if (signal?.aborted) {
+      return reject(new DOMException("Aborted", "AbortError"));
+    }
+
+    const video = document.createElement("video");
+    video.muted = true;
+    video.preload = "auto";
+    video.playsInline = true;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = CANVAS_WIDTH;
+    canvas.height = CANVAS_HEIGHT;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+    if (!ctx) {
+      return reject(new Error("Could not create 2D canvas context for scene detection."));
+    }
+
+    const detector = new AdaptiveCutDetector({
+      adaptiveThreshold,
+      minContentVal,
+      minShotDurationSeconds,
+      windowWidth,
+    });
+
+    const cleanup = () => {
+      video.removeAttribute("src");
+      video.load();
+    };
+
+    signal?.addEventListener("abort", () => {
+      cleanup();
+      reject(new DOMException("Aborted", "AbortError"));
+    }, { once: true });
+
+    video.onerror = () => {
+      cleanup();
+      reject(new Error("Failed to load video for scene detection."));
+    };
+
+    video.onloadedmetadata = async () => {
+      try {
+        const duration = video.duration;
+        if (!duration || duration <= 0 || !Number.isFinite(duration)) {
+          cleanup();
+          return resolve([]);
+        }
+
+        const seekTo = (targetSeconds: number): Promise<void> =>
+          new Promise<void>((res, rej) => {
+            const target = Math.min(Math.max(0, targetSeconds), duration - 0.001);
+            if (Math.abs(video.currentTime - target) < 0.001) {
+              res();
+              return;
+            }
+
+            const onSeeked = () => {
+              cleanupListeners();
+              res();
+            };
+            const onError = () => {
+              cleanupListeners();
+              rej(new Error("Seek failed"));
+            };
+            const onAbort = () => {
+              cleanupListeners();
+              rej(new DOMException("Aborted", "AbortError"));
+            };
+            const timeout = setTimeout(() => {
+              cleanupListeners();
+              rej(new Error("Seek timeout"));
+            }, 8000);
+
+            const cleanupListeners = () => {
+              clearTimeout(timeout);
+              video.removeEventListener("seeked", onSeeked);
+              video.removeEventListener("error", onError);
+              signal?.removeEventListener("abort", onAbort);
+            };
+
+            video.addEventListener("seeked", onSeeked, { once: true });
+            video.addEventListener("error", onError, { once: true });
+            signal?.addEventListener("abort", onAbort, { once: true });
+
+            video.currentTime = target;
+          });
+
+        let currentTime = 0;
+        let lastFrameData: Uint8ClampedArray | null = null;
+        let lastSampleTime = 0;
+        let sampleCount = 0;
+
+        while (currentTime < duration) {
+          if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
+          await seekTo(currentTime);
+
+          ctx.drawImage(video, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+          const frameImg = ctx.getImageData(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+          const currentFrameData = frameImg.data;
+
+          if (lastFrameData) {
+            const delta = computeFrameDelta(currentFrameData, lastFrameData);
+            const frameDuration = 1 / fps;
+            const timeSpan = currentTime - lastSampleTime;
+
+            // If delta indicates a likely cut between lastSampleTime and currentTime,
+            // refine boundary with fixed-anchor binary search
+            if (delta >= minContentVal && timeSpan > 1.5 * frameDuration) {
+              let tLow = lastSampleTime;
+              let tHigh = currentTime;
+              let frameHigh = currentFrameData;
+
+              const maxIters = Math.ceil(Math.log2(timeSpan / frameDuration));
+              for (let iter = 0; iter < maxIters && (tHigh - tLow) > frameDuration; iter++) {
+                if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
+                const tMid = (tLow + tHigh) / 2;
+                await seekTo(tMid);
+                ctx.drawImage(video, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+                const midData = ctx.getImageData(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT).data;
+                const deltaFromStart = computeFrameDelta(midData, lastFrameData);
+
+                if (deltaFromStart >= delta * 0.7) {
+                  tHigh = tMid;
+                  frameHigh = midData;
+                } else {
+                  tLow = tMid;
+                }
+              }
+
+              // Register cut at refined boundary
+              detector.processFrame(frameHigh, tHigh);
+
+              if (currentTime - tHigh > frameDuration) {
+                detector.processFrame(currentFrameData, currentTime);
+                lastFrameData = new Uint8ClampedArray(currentFrameData);
+                lastSampleTime = currentTime;
+              } else {
+                lastFrameData = new Uint8ClampedArray(frameHigh);
+                lastSampleTime = tHigh;
+              }
+            } else {
+              detector.processFrame(currentFrameData, currentTime);
+              lastFrameData = new Uint8ClampedArray(currentFrameData);
+              lastSampleTime = currentTime;
+            }
+          } else {
+            detector.processFrame(currentFrameData, currentTime);
+            lastFrameData = new Uint8ClampedArray(currentFrameData);
+            lastSampleTime = currentTime;
+          }
+
+          // Advance time
+          currentTime += sampleIntervalSeconds;
+          sampleCount++;
+
+          // Notify progress
+          if (onProgress) {
+            const percent = Math.min(100, Math.round((currentTime / duration) * 100));
+            onProgress({
+              percent,
+              currentTime: Math.min(currentTime, duration),
+              totalDuration: duration,
+              shotsCount: detector.getCuts().length + 1,
+            });
+          }
+
+          // Periodic yield to UI event loop every 5 samples
+          if (sampleCount % 5 === 0) {
+            await new Promise((r) => setTimeout(r, 0));
+          }
+        }
+
+        const cuts = detector.getCuts();
+        const shots = buildShotsFromCuts(cuts, duration, fps, dropFrame, 0.25);
+
+        cleanup();
+        resolve(shots);
+      } catch (err) {
+        cleanup();
+        reject(err);
+      }
+    };
+
+    video.src = videoUrl;
+  });
+}

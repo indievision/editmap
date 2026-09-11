@@ -1,0 +1,1623 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EditMap Pro — Apple & DaVinci Resolve Redesign Mockup</title>
+  <style>
+    :root {
+      /* DaVinci Resolve & Apple Pro Design System Tokens */
+      --bg-base: #0B0C0E;
+      --bg-surface: #13151A;
+      --bg-elevated: #1A1D24;
+      --bg-hover: #232731;
+      --bg-active: #2C313E;
+      --bg-glass: rgba(19, 21, 26, 0.82);
+      
+      --border-subtle: rgba(255, 255, 255, 0.06);
+      --border-medium: rgba(255, 255, 255, 0.12);
+      --border-highlight: rgba(255, 255, 255, 0.18);
+      
+      --text-primary: #F4F5F7;
+      --text-secondary: #9DA4B0;
+      --text-tertiary: #616977;
+      --text-inverse: #0B0C0E;
+      
+      /* DaVinci Resolve + Apple Pro Accents */
+      --accent-resolve: #F59E0B; /* Resolve Amber / Gold */
+      --accent-resolve-hover: #FBBF24;
+      --accent-resolve-glow: rgba(245, 158, 11, 0.28);
+      --accent-cyan: #06B6D4;
+      --accent-green: #10B981;
+      --accent-red: #F43F5E;
+      --accent-purple: #8B5CF6;
+      --accent-blue: #3B82F6;
+      
+      /* Shot size color palette (Resolve Grade Color Style) */
+      --shot-ews: #38BDF8;
+      --shot-ws: #2DD4BF;
+      --shot-mws: #34D399;
+      --shot-ms: #FBBF24;
+      --shot-mcu: #FB923C;
+      --shot-cu: #F87171;
+      --shot-ecu: #EC4899;
+      --shot-insert: #A78BFA;
+      
+      --radius-sm: 4px;
+      --radius-md: 7px;
+      --radius-lg: 10px;
+      --radius-pill: 9999px;
+      
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+      --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.5);
+      --shadow-glow: 0 0 16px var(--accent-resolve-glow);
+      
+      --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", "Segoe UI", sans-serif;
+      --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Monaco, Consolas, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg-base);
+      color: var(--text-primary);
+      font-size: 12px;
+      line-height: 1.4;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+    }
+
+    /* TOP BAR: macOS Unified App Toolbar & DaVinci Page Switcher */
+    .app-header {
+      height: 48px;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      position: relative;
+      z-index: 50;
+      backdrop-filter: blur(20px);
+    }
+
+    .window-controls {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-right: 14px;
+    }
+    .traffic-light {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .traffic-close { background: #FF5F56; border: 0.5px solid #E0443E; }
+    .traffic-min { background: #FFBD2E; border: 0.5px solid #DEA123; }
+    .traffic-max { background: #27C93F; border: 0.5px solid #1AAB29; }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-mark {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      font-size: 13px;
+      letter-spacing: 1.5px;
+      color: var(--text-primary);
+      text-decoration: none;
+    }
+    .brand-icon {
+      width: 20px;
+      height: 20px;
+      background: linear-gradient(135deg, var(--accent-resolve), #D97706);
+      border-radius: 5px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #000;
+      font-weight: 900;
+      font-size: 12px;
+      box-shadow: 0 2px 6px rgba(245, 158, 11, 0.35);
+    }
+
+    .project-chip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      padding: 4px 10px;
+      border-radius: var(--radius-pill);
+      font-size: 11px;
+      font-weight: 500;
+      transition: all 0.15s ease;
+      cursor: pointer;
+    }
+    .project-chip:hover {
+      border-color: var(--border-medium);
+      background: var(--bg-hover);
+    }
+    .project-title-text {
+      color: var(--text-primary);
+      font-weight: 600;
+      max-width: 140px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .sync-status {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 10px;
+      color: var(--text-secondary);
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent-green);
+      box-shadow: 0 0 6px var(--accent-green);
+    }
+
+    /* DaVinci Page Switcher / Apple Segmented Control in Center */
+    .workspace-switcher {
+      display: flex;
+      align-items: center;
+      background: rgba(11, 12, 14, 0.7);
+      padding: 3px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-subtle);
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+    .workspace-tab {
+      padding: 4px 14px;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+      background: transparent;
+      border: none;
+    }
+    .workspace-tab:hover {
+      color: var(--text-primary);
+    }
+    .workspace-tab.active {
+      background: var(--bg-active);
+      color: #FFF;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+      font-weight: 600;
+    }
+    .workspace-tab.active svg {
+      color: var(--accent-resolve);
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 500;
+      padding: 5px 11px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      cursor: pointer;
+      transition: all 0.12s ease;
+      height: 28px;
+    }
+    .btn:hover {
+      background: var(--bg-hover);
+      border-color: var(--border-medium);
+    }
+    .btn:active {
+      background: var(--bg-active);
+      transform: scale(0.98);
+    }
+    .btn-primary {
+      background: linear-gradient(180deg, #FBBF24 0%, #D97706 100%);
+      color: #000;
+      font-weight: 600;
+      border: 1px solid #B45309;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+    }
+    .btn-primary:hover {
+      background: linear-gradient(180deg, #FDE68A 0%, #F59E0B 100%);
+    }
+    .btn-icon {
+      padding: 0;
+      width: 28px;
+      height: 28px;
+    }
+
+    /* MAIN WORKSTATION LAYOUT */
+    .app-body {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--bg-base);
+    }
+
+    /* Top Row: Viewer Monitor + Inspector */
+    .upper-workspace {
+      height: 48%;
+      min-height: 260px;
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 1px;
+      background: var(--border-subtle);
+      position: relative;
+    }
+
+    /* Monitor Section */
+    .monitor-panel {
+      background: var(--bg-base);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow: hidden;
+    }
+    .panel-header-bar {
+      height: 32px;
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .panel-title {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .panel-pill-badge {
+      font-size: 9px;
+      padding: 1px 6px;
+      border-radius: var(--radius-pill);
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+    }
+    .active-shot-tag {
+      background: rgba(245, 158, 11, 0.18);
+      color: var(--accent-resolve);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      font-weight: 600;
+    }
+
+    /* Cinematic Film Screen */
+    .viewport-canvas {
+      flex: 1;
+      background: #000;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .mockup-film-frame {
+      width: 100%;
+      height: 100%;
+      position: relative;
+      background: radial-gradient(circle at 60% 40%, #2A3644 0%, #10151C 60%, #080A0E 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .cinematic-scene {
+      width: 100%;
+      height: 100%;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .grid-overlay {
+      position: absolute;
+      inset: 0;
+      background-image: 
+        linear-gradient(to right, rgba(255,255,255,0.04) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255,255,255,0.04) 1px, transparent 1px);
+      background-size: 33.33% 33.33%;
+      pointer-events: none;
+    }
+    .aspect-guide {
+      position: absolute;
+      width: 80%;
+      height: 75%;
+      border: 1px dashed rgba(245, 158, 11, 0.4);
+      border-radius: 2px;
+      pointer-events: none;
+    }
+    .aspect-label {
+      position: absolute;
+      top: 6px;
+      left: 8px;
+      font-size: 9px;
+      font-family: var(--font-mono);
+      color: var(--accent-resolve);
+      opacity: 0.7;
+    }
+
+    /* AI Vision Tracker Annotation */
+    .vision-bounding-box {
+      position: absolute;
+      width: 180px;
+      height: 170px;
+      top: 25%;
+      left: 45%;
+      border: 1.5px solid var(--accent-resolve);
+      border-radius: 4px;
+      background: rgba(245, 158, 11, 0.08);
+      box-shadow: 0 0 20px rgba(245, 158, 11, 0.2);
+    }
+    .vision-tag {
+      position: absolute;
+      top: -22px;
+      left: 0;
+      background: var(--accent-resolve);
+      color: #000;
+      font-size: 9px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      padding: 2px 6px;
+      border-radius: 3px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      letter-spacing: 0.5px;
+    }
+    .vision-confidence {
+      opacity: 0.8;
+      font-size: 8px;
+    }
+
+    /* DaVinci Transport Bar */
+    .transport-bar {
+      height: 44px;
+      background: var(--bg-surface);
+      border-top: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      gap: 12px;
+    }
+    .transport-controls {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .transport-btn {
+      width: 28px;
+      height: 28px;
+      border-radius: var(--radius-sm);
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.1s ease;
+    }
+    .transport-btn:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+      border-color: var(--border-medium);
+    }
+    .transport-play {
+      background: var(--accent-resolve);
+      border-color: #D97706;
+      color: #000;
+      width: 32px;
+      height: 28px;
+    }
+    .transport-play:hover {
+      background: var(--accent-resolve-hover);
+      color: #000;
+    }
+
+    /* High-Contrast Glowing Digital Timecode */
+    .timecode-display {
+      background: #080A0D;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: var(--radius-sm);
+      padding: 3px 10px;
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      font-family: var(--font-mono);
+      box-shadow: inset 0 1px 3px rgba(0,0,0,0.6);
+    }
+    .tc-current {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      color: #FFF;
+      text-shadow: 0 0 8px rgba(255, 255, 255, 0.3);
+    }
+    .tc-fps {
+      font-size: 9px;
+      color: var(--accent-resolve);
+      font-weight: 600;
+    }
+
+    .scrub-track {
+      flex: 1;
+      height: 6px;
+      background: var(--bg-elevated);
+      border-radius: 3px;
+      position: relative;
+      cursor: pointer;
+      border: 1px solid var(--border-subtle);
+    }
+    .scrub-progress {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 34%;
+      background: linear-gradient(90deg, var(--accent-resolve), #FBBF24);
+      border-radius: 3px;
+    }
+    .scrub-thumb {
+      position: absolute;
+      left: 34%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 12px;
+      height: 12px;
+      background: #FFF;
+      border-radius: 50%;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.6);
+    }
+
+    .audio-meter {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      height: 16px;
+      padding: 0 6px;
+    }
+    .meter-bar {
+      width: 3px;
+      height: 100%;
+      background: #1C222B;
+      border-radius: 1px;
+      position: relative;
+      overflow: hidden;
+    }
+    .meter-fill-l {
+      position: absolute;
+      bottom: 0;
+      width: 100%;
+      height: 68%;
+      background: linear-gradient(to top, #10B981 70%, #F59E0B 88%, #F43F5E 100%);
+    }
+    .meter-fill-r {
+      position: absolute;
+      bottom: 0;
+      width: 100%;
+      height: 62%;
+      background: linear-gradient(to top, #10B981 70%, #F59E0B 88%, #F43F5E 100%);
+    }
+
+    /* RIGHT INSPECTOR */
+    .inspector-panel {
+      background: var(--bg-surface);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      border-left: 1px solid var(--border-subtle);
+    }
+
+    .inspector-header {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg-elevated);
+    }
+    .shot-heading {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+    .shot-num {
+      font-size: 16px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      color: #FFF;
+    }
+    .shot-reel {
+      font-size: 10px;
+      color: var(--text-tertiary);
+      font-family: var(--font-mono);
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 8px;
+      border-radius: var(--radius-pill);
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+    .badge-confirmed {
+      background: rgba(16, 185, 129, 0.15);
+      color: #10B981;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .inspector-content {
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      background: var(--bg-base);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 10px;
+    }
+    .meta-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .meta-label {
+      font-size: 9px;
+      color: var(--text-tertiary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .meta-val {
+      font-size: 11px;
+      font-weight: 600;
+      font-family: var(--font-mono);
+      color: var(--text-primary);
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .form-label {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-secondary);
+      display: flex;
+      justify-content: space-between;
+    }
+    .form-select, .form-input, .form-textarea {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-primary);
+      padding: 6px 9px;
+      border-radius: var(--radius-md);
+      font-family: inherit;
+      font-size: 11px;
+      transition: all 0.15s ease;
+      outline: none;
+    }
+    .form-select:focus, .form-input:focus, .form-textarea:focus {
+      border-color: var(--accent-resolve);
+      box-shadow: 0 0 0 2px var(--accent-resolve-glow);
+    }
+
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+    .chip {
+      padding: 3px 8px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      font-size: 10px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      transition: all 0.12s ease;
+    }
+    .chip:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+      border-color: var(--border-medium);
+    }
+    .chip.active {
+      background: rgba(245, 158, 11, 0.15);
+      border-color: var(--accent-resolve);
+      color: #FFF;
+      font-weight: 600;
+    }
+    .chip-color-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+    }
+
+    .char-avatar-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .char-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg-base);
+      border: 1px solid var(--border-subtle);
+      padding: 3px 8px 3px 4px;
+      border-radius: var(--radius-pill);
+      font-size: 10px;
+    }
+    .char-avatar {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #6366F1, #A855F7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 8px;
+      font-weight: 700;
+      color: #FFF;
+    }
+
+    /* MIDDLE ROW: TIMELINE */
+    .timeline-section {
+      height: 28%;
+      min-height: 160px;
+      background: var(--bg-surface);
+      border-top: 1px solid var(--border-subtle);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+
+    .timeline-toolbar {
+      height: 32px;
+      padding: 0 14px;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .timeline-tools-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .zoom-control {
+      display: flex;
+      align-items: center;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+    }
+    .zoom-btn {
+      width: 22px;
+      height: 20px;
+      background: transparent;
+      border: none;
+      color: var(--text-secondary);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 12px;
+    }
+    .zoom-btn:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+    }
+    .zoom-readout {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      padding: 0 6px;
+      color: var(--text-tertiary);
+    }
+
+    .timeline-canvas {
+      flex: 1;
+      position: relative;
+      overflow-x: auto;
+      overflow-y: hidden;
+      background: #0D0E12;
+    }
+
+    .ruler-track {
+      height: 20px;
+      border-bottom: 1px solid var(--border-subtle);
+      position: relative;
+      background: rgba(19, 21, 26, 0.6);
+    }
+    .ruler-mark {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      border-left: 1px solid rgba(255, 255, 255, 0.1);
+      padding-left: 4px;
+      font-size: 9px;
+      font-family: var(--font-mono);
+      color: var(--text-tertiary);
+      line-height: 20px;
+    }
+
+    .shots-track {
+      height: 64px;
+      position: relative;
+      margin-top: 4px;
+    }
+    .timeline-shot-block {
+      position: absolute;
+      top: 0;
+      height: 100%;
+      border-radius: 4px;
+      border: 1px solid rgba(0,0,0,0.4);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 4px 6px;
+      cursor: pointer;
+      transition: filter 0.12s ease, transform 0.1s ease;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.2), 0 1px 3px rgba(0,0,0,0.4);
+    }
+    .timeline-shot-block:hover {
+      filter: brightness(1.15);
+      z-index: 10;
+    }
+    .timeline-shot-block.selected {
+      border: 2px solid #FFF;
+      box-shadow: 0 0 12px rgba(245, 158, 11, 0.6), inset 0 0 0 1px #F59E0B;
+      z-index: 15;
+    }
+    .shot-header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .shot-id-num {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 700;
+      color: rgba(0,0,0,0.85);
+      background: rgba(255,255,255,0.7);
+      padding: 0 4px;
+      border-radius: 2px;
+    }
+    .shot-size-pill {
+      font-size: 9px;
+      font-weight: 700;
+      color: #000;
+      letter-spacing: 0.5px;
+    }
+    .shot-thumb-preview {
+      width: 100%;
+      height: 26px;
+      border-radius: 2px;
+      background: rgba(0,0,0,0.3);
+      background-size: cover;
+      background-position: center;
+      margin: 2px 0;
+    }
+    .shot-dur-text {
+      font-size: 8px;
+      font-family: var(--font-mono);
+      color: rgba(0,0,0,0.7);
+      font-weight: 600;
+    }
+
+    .cut-point-indicator {
+      position: absolute;
+      top: -2px;
+      width: 2px;
+      height: 68px;
+      background: var(--accent-resolve);
+      box-shadow: 0 0 6px var(--accent-resolve);
+      z-index: 20;
+    }
+
+    .audio-track-lane {
+      height: 36px;
+      position: relative;
+      margin-top: 4px;
+      background: rgba(14, 16, 20, 0.7);
+      border-top: 1px solid var(--border-subtle);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+    }
+    .waveform-visual {
+      width: 100%;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      gap: 1px;
+      padding: 0 4px;
+    }
+    .wave-slice {
+      flex: 1;
+      background: #10B981;
+      opacity: 0.65;
+      border-radius: 1px;
+    }
+
+    .playhead-needle {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 34%;
+      width: 1px;
+      background: var(--accent-resolve);
+      box-shadow: 0 0 8px var(--accent-resolve);
+      z-index: 40;
+      pointer-events: none;
+    }
+    .playhead-scrub-head {
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 11px;
+      height: 14px;
+      background: var(--accent-resolve);
+      clip-path: polygon(0% 0%, 100% 0%, 100% 60%, 50% 100%, 0% 60%);
+      box-shadow: 0 1px 4px rgba(0,0,0,0.6);
+    }
+
+    /* LOWER WORKSPACE DECK */
+    .lower-deck {
+      height: 24%;
+      min-height: 150px;
+      background: var(--bg-surface);
+      display: flex;
+      flex-direction: column;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .deck-nav-bar {
+      height: 32px;
+      padding: 0 14px;
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .deck-tabs {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+    }
+    .deck-tab-btn {
+      padding: 5px 12px;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      border-radius: var(--radius-sm);
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.12s ease;
+    }
+    .deck-tab-btn:hover {
+      color: var(--text-primary);
+      background: var(--bg-hover);
+    }
+    .deck-tab-btn.active {
+      color: #FFF;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-bottom: none;
+      font-weight: 600;
+    }
+    .deck-tab-btn.active .tab-icon {
+      color: var(--accent-resolve);
+    }
+
+    .deck-panel-content {
+      flex: 1;
+      padding: 12px 16px;
+      overflow: hidden;
+      display: grid;
+      grid-template-columns: 1fr 1fr 1.2fr;
+      gap: 16px;
+    }
+
+    .deck-card {
+      background: var(--bg-base);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+    .deck-card-title {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .rhythm-chart-svg {
+      width: 100%;
+      height: 100%;
+    }
+
+    .cut-compare-grid {
+      display: grid;
+      grid-template-columns: 1fr 20px 1fr;
+      align-items: center;
+      gap: 8px;
+      height: 100%;
+    }
+    .cut-mini-frame {
+      border-radius: 4px;
+      border: 1px solid var(--border-subtle);
+      background: #111;
+      height: 100%;
+      max-height: 80px;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      padding: 4px 6px;
+      position: relative;
+      background-size: cover;
+      background-position: center;
+    }
+    .cut-frame-label {
+      font-size: 9px;
+      font-weight: 600;
+      color: #FFF;
+      background: rgba(0,0,0,0.7);
+      padding: 2px 4px;
+      border-radius: 2px;
+      display: inline-block;
+      width: fit-content;
+      font-family: var(--font-mono);
+    }
+    .cut-arrow {
+      color: var(--accent-resolve);
+      text-align: center;
+      font-weight: 700;
+    }
+
+    .framing-bar-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 5px;
+    }
+    .framing-label {
+      width: 32px;
+      font-size: 9px;
+      font-weight: 600;
+      font-family: var(--font-mono);
+      color: var(--text-secondary);
+    }
+    .framing-track {
+      flex: 1;
+      height: 7px;
+      background: var(--bg-elevated);
+      border-radius: 3px;
+      overflow: hidden;
+      display: flex;
+    }
+    .framing-fill {
+      height: 100%;
+      border-radius: 3px;
+    }
+    .framing-pct {
+      width: 30px;
+      text-align: right;
+      font-size: 9px;
+      font-family: var(--font-mono);
+      color: var(--text-tertiary);
+    }
+
+    /* FAST TAG KEYS */
+    .fast-keys-bar {
+      height: 28px;
+      background: #090A0D;
+      border-top: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      font-size: 10px;
+      color: var(--text-tertiary);
+    }
+    .keys-list {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    kbd {
+      display: inline-block;
+      background: var(--bg-elevated);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      box-shadow: 0 1px 0 rgba(0,0,0,0.5);
+      border-radius: 3px;
+      padding: 0 4px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      color: var(--accent-resolve);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- TOP APP HEADER -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="window-controls">
+        <span class="traffic-light traffic-close"></span>
+        <span class="traffic-light traffic-min"></span>
+        <span class="traffic-light traffic-max"></span>
+      </div>
+      <a class="brand-mark" href="#">
+        <div class="brand-icon">M</div>
+        EDITMAP<span style="font-weight: 400; opacity: 0.6;">PRO</span>
+      </a>
+      <div class="project-chip">
+        <span class="project-title-text">Oppenheimer_Scene4</span>
+        <span class="sync-status">
+          <span class="status-dot"></span>
+          <span>IndexedDB</span>
+        </span>
+      </div>
+    </div>
+
+    <!-- DaVinci Resolve Central Page Navigation -->
+    <div class="workspace-switcher">
+      <button class="workspace-tab active">
+        <svg class="tab-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+        Edit &amp; Map
+      </button>
+      <button class="workspace-tab">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
+        Rhythm &amp; Pacing
+      </button>
+      <button class="workspace-tab">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="7" r="4"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></svg>
+        Story &amp; Cast
+      </button>
+      <button class="workspace-tab">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
+        Sound Map
+      </button>
+    </div>
+
+    <div class="header-right">
+      <button class="btn" title="Import Video Reference">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+        Import Media
+      </button>
+      <button class="btn" title="Import CMX 3600 EDL">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        Import EDL
+      </button>
+      <button class="btn btn-primary" title="AI Vision Batch Scan">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z"/><path d="m14 7 3 3"/></svg>
+        Auto-Scan All
+      </button>
+    </div>
+  </header>
+
+  <!-- WORKSTATION BODY -->
+  <main class="app-body">
+
+    <!-- UPPER WORKSPACE: VIEWER + INSPECTOR -->
+    <div class="upper-workspace">
+
+      <!-- LEFT: FILM PREVIEW MONITOR -->
+      <section class="monitor-panel">
+        <div class="panel-header-bar">
+          <div class="panel-title">
+            <span>Film Monitor</span>
+            <span class="panel-pill-badge active-shot-tag">SHOT 014</span>
+            <span class="panel-pill-badge">24.000 FPS</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 10px; color: var(--text-tertiary); font-family: var(--font-mono);">SOURCE: REEL_A01_C004</span>
+            <button class="btn btn-icon" style="width: 22px; height: 22px;" title="Full Screen Preview">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Cinema Viewport -->
+        <div class="viewport-canvas">
+          <div class="mockup-film-frame">
+            <div class="cinematic-scene">
+              <div class="grid-overlay"></div>
+              <div class="aspect-guide">
+                <span class="aspect-label">2.39:1 SCOPE GUIDES</span>
+              </div>
+
+              <!-- AI Vision Box -->
+              <div class="vision-bounding-box">
+                <div class="vision-tag">
+                  <span>MCU</span>
+                  <span class="vision-confidence">96%</span>
+                </div>
+              </div>
+
+              <!-- Cinematic subject placeholder -->
+              <div style="width: 140px; height: 190px; background: radial-gradient(ellipse at center, #3A4758 0%, #171E28 70%, transparent 100%); border-radius: 70px 70px 20px 20px; opacity: 0.85; filter: blur(2px);"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- DaVinci Transport Control Deck -->
+        <div class="transport-bar">
+          <div class="transport-controls">
+            <button class="transport-btn" title="Previous Cut (A)">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/></svg>
+            </button>
+            <button class="transport-btn" title="Step 1 Frame Back (Left Arrow)">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <button class="transport-btn transport-play" title="Play / Pause (Space)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+            </button>
+            <button class="transport-btn" title="Step 1 Frame Forward (Right Arrow)">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+            <button class="transport-btn" title="Next Cut (S)">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+            </button>
+          </div>
+
+          <!-- Digital TC readout -->
+          <div class="timecode-display">
+            <span class="tc-current">01:04:18:12</span>
+            <span class="tc-fps">NDF</span>
+          </div>
+
+          <!-- Scrub track -->
+          <div class="scrub-track">
+            <div class="scrub-progress"></div>
+            <div class="scrub-thumb"></div>
+          </div>
+
+          <!-- Mini Audio meters -->
+          <div class="audio-meter" title="Audio Levels (-14 LUFS)">
+            <div class="meter-bar"><div class="meter-fill-l"></div></div>
+            <div class="meter-bar"><div class="meter-fill-r"></div></div>
+          </div>
+
+          <span style="font-size: 10px; color: var(--text-tertiary); font-family: var(--font-mono);">01:34:02:00</span>
+        </div>
+      </section>
+
+      <!-- RIGHT: SHOT INSPECTOR -->
+      <aside class="inspector-panel">
+        <div class="inspector-header">
+          <div class="shot-heading">
+            <span class="shot-num">Shot 014</span>
+            <span class="shot-reel">CUT #14 · DISSOLVE</span>
+          </div>
+          <span class="status-badge badge-confirmed">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+            CONFIRMED
+          </span>
+        </div>
+
+        <div class="inspector-content">
+          <!-- Timecode Metrics Grid -->
+          <div class="meta-grid">
+            <div class="meta-item">
+              <span class="meta-label">Record In</span>
+              <span class="meta-val">01:04:12:00</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Record Out</span>
+              <span class="meta-val">01:04:21:18</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Duration</span>
+              <span class="meta-val" style="color: var(--accent-resolve);">9.750 sec</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Frames</span>
+              <span class="meta-val">234 frames</span>
+            </div>
+          </div>
+
+          <!-- Shot Framing & Size -->
+          <div class="form-group">
+            <div class="form-label">
+              <span>Shot Framing</span>
+              <span style="color: var(--accent-resolve);">Shortcut [5]</span>
+            </div>
+            <select class="form-select">
+              <option>MCU — Medium Close-Up (Chest up)</option>
+              <option>CU — Close-Up (Face fills frame)</option>
+              <option>MS — Medium Shot (Waist up)</option>
+              <option>WS — Wide Shot</option>
+              <option>ECU — Extreme Close-Up</option>
+              <option>Insert — Cutaway detail</option>
+            </select>
+          </div>
+
+          <!-- Composition & People -->
+          <div class="form-group">
+            <div class="form-label">Composition &amp; Subject</div>
+            <div class="chip-row">
+              <span class="chip active"><span class="chip-color-dot" style="background: var(--accent-resolve);"></span>Solo Person</span>
+              <span class="chip">Two-Shot</span>
+              <span class="chip">Character Face</span>
+              <span class="chip">Prop / Graphic</span>
+            </div>
+          </div>
+
+          <!-- Characters In Frame -->
+          <div class="form-group">
+            <div class="form-label">Featured Characters</div>
+            <div class="char-avatar-group">
+              <div class="char-pill">
+                <div class="char-avatar">J</div>
+                <span>J. Robert Oppenheimer</span>
+              </div>
+              <button class="btn btn-icon" style="width: 22px; height: 22px; border-radius: 50%; font-size: 13px;" title="Tag Character">+</button>
+            </div>
+          </div>
+
+          <!-- Editing Notes -->
+          <div class="form-group">
+            <div class="form-label">Editorial Note</div>
+            <textarea class="form-textarea" rows="2" placeholder="Key reaction shot before trinity test countdown...">Held reaction shot with rising ambient score tension. Cut immediately before dialogue starts.</textarea>
+          </div>
+
+          <!-- AI Model Suggestions Card -->
+          <div style="background: var(--bg-elevated); border: 1px solid rgba(245, 158, 11, 0.2); border-radius: var(--radius-md); padding: 8px 10px; display: flex; align-items: center; justify-content: space-between;">
+            <div>
+              <div style="font-size: 10px; font-weight: 600; color: var(--accent-resolve);">Qwen3-VL Analysis</div>
+              <div style="font-size: 9px; color: var(--text-tertiary);">Medium Close-Up · Solo character · Confident</div>
+            </div>
+            <button class="btn" style="height: 22px; padding: 0 8px; font-size: 9px;">Re-run</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- MIDDLE TIMELINE: THE EDITING MAP -->
+    <section class="timeline-section">
+      <div class="timeline-toolbar">
+        <div class="timeline-tools-left">
+          <span style="font-size: 11px; font-weight: 700; letter-spacing: 0.8px; color: var(--text-primary);">TIMELINE MAP</span>
+          
+          <!-- Color Encoding Selector -->
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span style="font-size: 10px; color: var(--text-tertiary);">Color by:</span>
+            <select class="form-select" style="padding: 2px 6px; height: 22px; font-size: 10px;">
+              <option>Shot Size (Framing Hierarchy)</option>
+              <option>Subject / People Count</option>
+              <option>Character Appearances</option>
+              <option>Editorial Review Status</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <!-- Legend Badges -->
+          <div style="display: flex; align-items: center; gap: 6px; font-size: 9px; color: var(--text-secondary);">
+            <span style="display: flex; align-items: center; gap: 3px;"><span style="width: 6px; height: 6px; border-radius: 1px; background: var(--shot-ws);"></span>WS</span>
+            <span style="display: flex; align-items: center; gap: 3px;"><span style="width: 6px; height: 6px; border-radius: 1px; background: var(--shot-ms);"></span>MS</span>
+            <span style="display: flex; align-items: center; gap: 3px;"><span style="width: 6px; height: 6px; border-radius: 1px; background: var(--shot-mcu);"></span>MCU</span>
+            <span style="display: flex; align-items: center; gap: 3px;"><span style="width: 6px; height: 6px; border-radius: 1px; background: var(--shot-cu);"></span>CU</span>
+          </div>
+
+          <!-- Apple Zoom Pill -->
+          <div class="zoom-control">
+            <button class="zoom-btn">−</button>
+            <span class="zoom-readout">1.8×</span>
+            <button class="zoom-btn">+</button>
+          </div>
+          <button class="btn" style="height: 22px; padding: 0 8px; font-size: 10px;">Fit All</button>
+        </div>
+      </div>
+
+      <!-- Timeline Tracks Canvas -->
+      <div class="timeline-canvas">
+        <!-- Timecode Ruler -->
+        <div class="ruler-track">
+          <div class="ruler-mark" style="left: 0%;">01:03:40:00</div>
+          <div class="ruler-mark" style="left: 15%;">01:04:00:00</div>
+          <div class="ruler-mark" style="left: 30%;">01:04:20:00</div>
+          <div class="ruler-mark" style="left: 45%;">01:04:40:00</div>
+          <div class="ruler-mark" style="left: 60%;">01:05:00:00</div>
+          <div class="ruler-mark" style="left: 75%;">01:05:20:00</div>
+          <div class="ruler-mark" style="left: 90%;">01:05:40:00</div>
+        </div>
+
+        <!-- Video Shots Track -->
+        <div class="shots-track">
+          <!-- Shot 011 -->
+          <div class="timeline-shot-block" style="left: 2%; width: 9%; background: linear-gradient(180deg, #38BDF8 0%, #0284C7 100%);">
+            <div class="shot-header-row"><span class="shot-id-num">011</span><span class="shot-size-pill">EWS</span></div>
+            <div class="shot-thumb-preview" style="background: rgba(0,0,0,0.25);"></div>
+            <span class="shot-dur-text">4.1s</span>
+          </div>
+          <div class="cut-point-indicator" style="left: 11%;"></div>
+
+          <!-- Shot 012 -->
+          <div class="timeline-shot-block" style="left: 11.2%; width: 12%; background: linear-gradient(180deg, #2DD4BF 0%, #0D9488 100%);">
+            <div class="shot-header-row"><span class="shot-id-num">012</span><span class="shot-size-pill">WS</span></div>
+            <div class="shot-thumb-preview" style="background: rgba(0,0,0,0.25);"></div>
+            <span class="shot-dur-text">5.8s</span>
+          </div>
+          <div class="cut-point-indicator" style="left: 23.2%;"></div>
+
+          <!-- Shot 013 -->
+          <div class="timeline-shot-block" style="left: 23.4%; width: 6%; background: linear-gradient(180deg, #FBBF24 0%, #D97706 100%);">
+            <div class="shot-header-row"><span class="shot-id-num">013</span><span class="shot-size-pill">MS</span></div>
+            <div class="shot-thumb-preview" style="background: rgba(0,0,0,0.25);"></div>
+            <span class="shot-dur-text">2.4s</span>
+          </div>
+          <div class="cut-point-indicator" style="left: 29.4%;"></div>
+
+          <!-- Shot 014 (SELECTED ACTIVE) -->
+          <div class="timeline-shot-block selected" style="left: 29.6%; width: 18%; background: linear-gradient(180deg, #FB923C 0%, #EA580C 100%);">
+            <div class="shot-header-row"><span class="shot-id-num" style="background: #FFF; color: #000;">014</span><span class="shot-size-pill" style="color: #FFF;">MCU</span></div>
+            <div class="shot-thumb-preview" style="background: rgba(0,0,0,0.35);"></div>
+            <span class="shot-dur-text" style="color: #FFF;">9.75s</span>
+          </div>
+          <div class="cut-point-indicator" style="left: 47.6%;"></div>
+
+          <!-- Shot 015 -->
+          <div class="timeline-shot-block" style="left: 47.8%; width: 7%; background: linear-gradient(180deg, #F87171 0%, #DC2626 100%);">
+            <div class="shot-header-row"><span class="shot-id-num">015</span><span class="shot-size-pill">CU</span></div>
+            <div class="shot-thumb-preview" style="background: rgba(0,0,0,0.25);"></div>
+            <span class="shot-dur-text">3.2s</span>
+          </div>
+          <div class="cut-point-indicator" style="left: 54.8%;"></div>
+
+          <!-- Shot 016 -->
+          <div class="timeline-shot-block" style="left: 55%; width: 14%; background: linear-gradient(180deg, #EC4899 0%, #DB2777 100%);">
+            <div class="shot-header-row"><span class="shot-id-num">016</span><span class="shot-size-pill">ECU</span></div>
+            <div class="shot-thumb-preview" style="background: rgba(0,0,0,0.25);"></div>
+            <span class="shot-dur-text">6.5s</span>
+          </div>
+          <div class="cut-point-indicator" style="left: 69%;"></div>
+
+          <!-- Shot 017 -->
+          <div class="timeline-shot-block" style="left: 69.2%; width: 11%; background: linear-gradient(180deg, #34D399 0%, #059669 100%);">
+            <div class="shot-header-row"><span class="shot-id-num">017</span><span class="shot-size-pill">MWS</span></div>
+            <div class="shot-thumb-preview" style="background: rgba(0,0,0,0.25);"></div>
+            <span class="shot-dur-text">4.9s</span>
+          </div>
+          <div class="cut-point-indicator" style="left: 80.2%;"></div>
+
+          <!-- Shot 018 -->
+          <div class="timeline-shot-block" style="left: 80.4%; width: 18%; background: linear-gradient(180deg, #2DD4BF 0%, #0D9488 100%);">
+            <div class="shot-header-row"><span class="shot-id-num">018</span><span class="shot-size-pill">WS</span></div>
+            <div class="shot-thumb-preview" style="background: rgba(0,0,0,0.25);"></div>
+            <span class="shot-dur-text">8.3s</span>
+          </div>
+        </div>
+
+        <!-- Audio Waveform Lane -->
+        <div class="audio-track-lane">
+          <div class="waveform-visual">
+            <div class="wave-slice" style="height: 12%;"></div>
+            <div class="wave-slice" style="height: 25%;"></div>
+            <div class="wave-slice" style="height: 45%;"></div>
+            <div class="wave-slice" style="height: 70%;"></div>
+            <div class="wave-slice" style="height: 35%;"></div>
+            <div class="wave-slice" style="height: 18%;"></div>
+            <div class="wave-slice" style="height: 55%;"></div>
+            <div class="wave-slice" style="height: 85%;"></div>
+            <div class="wave-slice" style="height: 95%;"></div>
+            <div class="wave-slice" style="height: 60%;"></div>
+            <div class="wave-slice" style="height: 30%;"></div>
+            <div class="wave-slice" style="height: 75%;"></div>
+            <div class="wave-slice" style="height: 80%;"></div>
+            <div class="wave-slice" style="height: 40%;"></div>
+            <div class="wave-slice" style="height: 20%;"></div>
+            <div class="wave-slice" style="height: 50%;"></div>
+            <div class="wave-slice" style="height: 90%;"></div>
+            <div class="wave-slice" style="height: 65%;"></div>
+            <div class="wave-slice" style="height: 25%;"></div>
+            <div class="wave-slice" style="height: 10%;"></div>
+          </div>
+        </div>
+
+        <!-- DaVinci Resolve Amber Needle Scrubber -->
+        <div class="playhead-needle">
+          <div class="playhead-scrub-head"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- LOWER WORKSPACE DECK: EDITORIAL INSIGHTS & RHYTHM -->
+    <section class="lower-deck">
+      <div class="deck-nav-bar">
+        <div class="deck-tabs">
+          <button class="deck-tab-btn active">
+            <svg class="tab-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
+            Editing Rhythm &amp; Pacing
+          </button>
+          <button class="deck-tab-btn">
+            <svg class="tab-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M12 4v16"/></svg>
+            Cut Inspector (A/B)
+          </button>
+          <button class="deck-tab-btn">
+            <svg class="tab-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h7"/></svg>
+            Narrative Sequences
+          </button>
+          <button class="deck-tab-btn">
+            <svg class="tab-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="7" r="4"/><path d="M10 15H6a4 4 0 0 0-4 4v2"/><circle cx="19" cy="11" r="3"/><path d="M21 21v-1a3 3 0 0 0-3-3h-2"/></svg>
+            Cast Appearances
+          </button>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 10px; color: var(--text-tertiary);">WINDOW: 30s</span>
+          <button class="btn btn-icon" style="width: 20px; height: 20px;" title="Collapse Deck">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Deck Content Panels -->
+      <div class="deck-panel-content">
+        <!-- Card 1: Cutting Velocity Graph -->
+        <div class="deck-card">
+          <div class="deck-card-title">
+            <span>Pacing Curve (Cuts/Min)</span>
+            <span style="color: var(--accent-resolve);">14.2 cuts/min peak</span>
+          </div>
+          <svg class="rhythm-chart-svg" viewBox="0 0 300 70">
+            <defs>
+              <linearGradient id="curveGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#F59E0B" stop-opacity="0.3"/>
+                <stop offset="100%" stop-color="#F59E0B" stop-opacity="0.0"/>
+              </linearGradient>
+            </defs>
+            <path d="M0,55 Q40,50 80,42 T150,15 T220,38 T300,48 L300,70 L0,70 Z" fill="url(#curveGrad)"/>
+            <path d="M0,55 Q40,50 80,42 T150,15 T220,38 T300,48" fill="none" stroke="#F59E0B" stroke-width="2"/>
+            <!-- Current playhead vertical line -->
+            <line x1="102" y1="0" x2="102" y2="70" stroke="#FFF" stroke-width="1" stroke-dasharray="2,2"/>
+          </svg>
+        </div>
+
+        <!-- Card 2: Framing Breakdown -->
+        <div class="deck-card">
+          <div class="deck-card-title">
+            <span>Framing Distribution</span>
+            <span>48 Shots Total</span>
+          </div>
+          <div style="display: flex; flex-direction: column; justify-content: center; height: 100%;">
+            <div class="framing-bar-row">
+              <span class="framing-label">ECU/CU</span>
+              <div class="framing-track"><div class="framing-fill" style="width: 38%; background: var(--shot-cu);"></div></div>
+              <span class="framing-pct">38%</span>
+            </div>
+            <div class="framing-bar-row">
+              <span class="framing-label">MCU/MS</span>
+              <div class="framing-track"><div class="framing-fill" style="width: 42%; background: var(--shot-mcu);"></div></div>
+              <span class="framing-pct">42%</span>
+            </div>
+            <div class="framing-bar-row">
+              <span class="framing-label">WS/EWS</span>
+              <div class="framing-track"><div class="framing-fill" style="width: 20%; background: var(--shot-ws);"></div></div>
+              <span class="framing-pct">20%</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 3: Cut Inspector (A/B Frame Comparison) -->
+        <div class="deck-card">
+          <div class="deck-card-title">
+            <span>Cut Transition Inspector (A → B)</span>
+            <span style="color: var(--accent-green); font-size: 9px;">Matched Eyeline</span>
+          </div>
+          <div class="cut-compare-grid">
+            <div class="cut-mini-frame" style="background: radial-gradient(circle at 40% 40%, #1E293B, #0F172A);">
+              <span class="cut-frame-label">OUT: 013 (MS)</span>
+            </div>
+            <div class="cut-arrow">→</div>
+            <div class="cut-mini-frame" style="background: radial-gradient(circle at 60% 40%, #2A3644, #10151C); border-color: var(--accent-resolve);">
+              <span class="cut-frame-label" style="background: var(--accent-resolve); color: #000;">IN: 014 (MCU)</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- FAST KEYS & STATUS FOOTER -->
+  <footer class="fast-keys-bar">
+    <div class="keys-list">
+      <span style="font-weight: 600; color: var(--text-secondary); margin-right: 4px;">FAST TAG:</span>
+      <span><kbd>1</kbd> EWS</span>
+      <span><kbd>2</kbd> WS</span>
+      <span><kbd>3</kbd> MWS</span>
+      <span><kbd>4</kbd> MS</span>
+      <span><kbd>5</kbd> MCU</span>
+      <span><kbd>6</kbd> CU</span>
+      <span><kbd>7</kbd> ECU</span>
+      <span><kbd>8</kbd> Insert</span>
+      <span style="margin-left: 8px;"><kbd>Space</kbd> Play/Pause</span>
+      <span><kbd>J</kbd> <kbd>K</kbd> <kbd>L</kbd> Shuttle</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 14px;">
+      <span style="color: var(--accent-green);">● Local Video Engine Ready</span>
+      <span>No Media Uploads · Private &amp; Offline</span>
+    </div>
+  </footer>
+
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "inventoryStatus": 200,
+  "modelPresent": true,
+  "tags": {
+    "shotSize": "Unknown",
+    "composition": "No people",
+    "content": "Other",
+    "uncertain": true
+  },
+  "elapsedMs": 12620.60000000149,
+  "fixture": "test-film.mp4 synthetic test pattern; validates transport only"
+}

@@ -1,0 +1,61 @@
+{
+  "taxonomy": {
+    "selectableShotSizes": [
+      "EWS",
+      "WS",
+      "MWS",
+      "MS",
+      "MCU",
+      "CU",
+      "ECU",
+      "Insert",
+      "OTS",
+      "POV",
+      "Unknown"
+    ],
+    "fsRecognized": 10,
+    "closeShare": 1,
+    "total": 20
+  },
+  "emptyEDL": {
+    "shots": 0,
+    "duration": "-Infinity"
+  },
+  "castPrompt": "The last image is a film frame. The preceding 3 images are cast references in this exact order: 1=Anna, 2=Anna, 3=Bob. Return the number for every clearly recognizable listed character visible in the last image. Do not infer identity from clothing alone. Set unresolved=true only if a visible person cannot be matched safely; still include any listed character you do recognize. Return exactly the JSON object required by the schema—no explanation or Markdown.",
+  "castSchema": [
+    "1",
+    "2"
+  ],
+  "reply2MapsTo": [
+    "bob"
+  ],
+  "failedScan": {
+    "intervals": [],
+    "unresolvedTimes": [
+      5
+    ],
+    "failedTimes": [
+      5
+    ],
+    "lastError": "Character analysis failed (HTTP 400). Check that Ollama is running.",
+    "sampleTimes": [
+      5
+    ],
+    "reviewStatus": "Needs review",
+    "model": "qwen3-vl:4b",
+    "createdAt": "2026-09-10T21:25:48.120Z",
+    "mode": "fast",
+    "partial": false,
+    "referenceSignature": "slots-v2|anna:a1,a2|bob:b1"
+  },
+  "unknownEligible": true,
+  "projectName": "AUDIT isolated character markers",
+  "fastMarkerUI": "CHARACTER APPEARANCES\nSampled presence and manual shot review\n1 samples · 0 unresolved\n\nSampled intervals are estimates; midpoint results are markers, not measured screen time. A non-match is unresolved, never an absence.\n\nPRESENCE ARC\nClick a block to select and play its sampled passage.\nAnna\nBob\nAnna\n0:00\n0.0% · 0 shots\nBob\n0:00\n0.0% · 0 shots",
+  "mobile": {
+    "width": 390,
+    "scrollWidth": 390,
+    "mapTop": 1462.25,
+    "overflow": []
+  },
+  "errors": []
+}

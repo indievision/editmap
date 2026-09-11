@@ -1,0 +1,282 @@
+
+Running 18 tests using 1 worker
+
+(node:29050) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘   1 tests/browser/analysis.spec.ts:3:1 › local analysis fills inspector fields and persists after confirmation (10.1s)
+(node:29095) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘   2 tests/browser/bulk-analysis.spec.ts:30:1 › scan follows each sampled frame, then scrubbing restores the live monitor (5.4s)
+(node:29128) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘   3 tests/browser/bulk-analysis.spec.ts:131:1 › scans every shot, protects confirmed edits, and saves direct readings (5.5s)
+(node:29160) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘   4 tests/browser/bulk-analysis.spec.ts:195:1 › single-shot analysis blocks bulk scanning until cancelled (5.5s)
+(node:29175) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘   5 tests/browser/bulk-analysis.spec.ts:220:1 › cancels an active scan and resumes from the unfinished shot (5.5s)
+(node:29210) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘   6 tests/browser/bulk-analysis.spec.ts:249:1 › stops on model failure, preserves completed results and retries without rescanning them (5.5s)
+(node:29225) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘   7 tests/browser/bulk-analysis.spec.ts:278:3 › changing EDL aborts the scan and ignores late results (5.4s)
+(node:29254) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘   8 tests/browser/bulk-analysis.spec.ts:278:3 › changing video aborts the scan and ignores late results (5.4s)
+(node:29291) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘   9 tests/browser/bulk-analysis.spec.ts:278:3 › changing project aborts the scan and ignores late results (5.5s)
+(node:29322) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  10 tests/browser/framing.spec.ts:4:1 › framing summary, arc selection and local share follow current tags (1.0s)
+  ✓  11 tests/browser/workflow.spec.ts:3:1 › local film, EDL, playback, annotation, zoom and persistence (4.0s)
+  ✓  12 tests/browser/workflow.spec.ts:97:1 › boundary reading compares the cut and keeps a manual interpretation (1.2s)
+  ✓  13 tests/browser/workflow.spec.ts:127:1 › sound spans are manual, editable, and persisted with a selected passage (784ms)
+  ✓  14 tests/browser/workflow.spec.ts:150:1 › thumbnails and keyboard tag-and-advance preserve playback and notes (1.1s)
+  ✓  15 tests/browser/workflow.spec.ts:211:1 › rhythm keeps short cuts readable beside a long hold (612ms)
+  ✓  16 tests/browser/workflow.spec.ts:250:1 › local pacing window and seeking (561ms)
+  ✓  17 tests/browser/workflow.spec.ts:273:1 › separate classification fields persist and text blocks size tagging (880ms)
+  ✓  18 tests/browser/workflow.spec.ts:318:1 › clear category labels and expanded subjects survive save and reopen (865ms)
+
+
+  1) tests/browser/analysis.spec.ts:3:1 › local analysis fills inspector fields and persists after confirmation 
+
+    Test timeout of 10000ms exceeded.
+
+    Error: locator.click: Test timeout of 10000ms exceeded.
+    Call log:
+      - waiting for getByRole('button', { name: 'Analyze selected shot', exact: true })
+
+
+      34 |   await page
+      35 |     .getByRole("button", { name: "Analyze selected shot", exact: true })
+    > 36 |     .click();
+         |      ^
+      37 |   await expect(page.getByLabel("Shot size", { exact: true })).toHaveValue("CU");
+      38 |   await expect(page.getByLabel("People in frame", { exact: true })).toHaveValue("Single person");
+      39 |   await expect(page.getByLabel("Main subject", { exact: true })).toHaveValue("People");
+        at /Users/indievision/Proiecte/EDITMAP_GEMINI/tests/browser/analysis.spec.ts:36:6
+
+    Error Context: test-results/analysis-local-analysis-fi-575e0-persists-after-confirmation/error-context.md
+
+  2) tests/browser/bulk-analysis.spec.ts:30:1 › scan follows each sampled frame, then scrubbing restores the live monitor 
+
+    Error: expect(locator).toBeDisabled() failed
+
+    Locator: getByRole('button', { name: 'Scan all shots', exact: true })
+    Expected: disabled
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeDisabled" getByRole('button', { name: 'Scan all shots', exact: true }) with timeout 5000ms
+      - waiting for getByRole('button', { name: 'Scan all shots', exact: true })
+
+
+      120 |   await expect(
+      121 |     page.getByRole("button", { name: "Scan all shots", exact: true }),
+    > 122 |   ).toBeDisabled();
+          |     ^
+      123 |   await page
+      124 |     .locator("input[type=file]")
+      125 |     .first()
+        at setup (/Users/indievision/Proiecte/EDITMAP_GEMINI/tests/browser/bulk-analysis.spec.ts:122:5)
+        at /Users/indievision/Proiecte/EDITMAP_GEMINI/tests/browser/bulk-analysis.spec.ts:33:3
+
+    Error Context: test-results/bulk-analysis-scan-follows-8789c-g-restores-the-live-monitor/error-context.md
+
+  3) tests/browser/bulk-analysis.spec.ts:131:1 › scans every shot, protects confirmed edits, and saves direct readings 
+
+    Error: expect(locator).toBeDisabled() failed
+
+    Locator: getByRole('button', { name: 'Scan all shots', exact: true })
+    Expected: disabled
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeDisabled" getByRole('button', { name: 'Scan all shots', exact: true }) with timeout 5000ms
+      - waiting for getByRole('button', { name: 'Scan all shots', exact: true })
+
+
+      120 |   await expect(
+      121 |     page.getByRole("button", { name: "Scan all shots", exact: true }),
+    > 122 |   ).toBeDisabled();
+          |     ^
+      123 |   await page
+      124 |     .locator("input[type=file]")
+      125 |     .first()
+        at setup (/Users/indievision/Proiecte/EDITMAP_GEMINI/tests/browser/bulk-analysis.spec.ts:122:5)
+        at /Users/indievision/Proiecte/EDITMAP_GEMINI/tests/browser/bulk-analysis.spec.ts:134:3
+
+    Error Context: test-results/bulk-analysis-scans-every--35c63-s-and-saves-direct-readings/error-context.md
+
+  4) tests/browser/bulk-analysis.spec.ts:195:1 › single-shot analysis blocks bulk scanning until cancelled 
+
+    Error: expect(locator).toBeDisabled() failed
+
+    Locator: getByRole('button', { name: 'Scan all shots', exact: true })
+    Expected: disabled
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeDisabled" getByRole('button', { name: 'Scan all shots', exact: true }) with timeout 5000ms
+      - waiting for getByRole('button', { name: 'Scan all shots', exact: true })
+
+
+      120 |   await expect(
+      121 |     page.getByRole("button", { name: "Scan all shots", exact: true }),
+    > 122 |   ).toBeDisabled();
+          |     ^
+      123 |   await page
+      124 |     .locator("input[type=file]")
+      125 |     .first()
+        at setup (/Users/indievision/Proiecte/EDITMAP_GEMINI/tests/browser/bulk-analysis.spec.ts:122:5)
+        at /Users/indievision/Proiecte/EDITMAP_GEMINI/tests/browser/bulk-analysis.spec.ts:198:3
+
+    Error Context: test-results/bulk-analysis-single-shot--09de5-lk-scanning-until-cancelled/error-context.md
+
+  5) tests/browser/bulk-analysis.spec.ts:220:1 › cancels an active scan and resumes from the unfinished shot 
+
+    Error: expect(locator).toBeDisabled() failed
+
+    Locator: getByRole('button', { name: 'Scan all shots', exact: true })
+    Expected: disabled
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeDisabled" getByRole('button', { name: 'Scan all shots', exact: true }) with timeout 5000ms
+      - waiting for getByRole('button', { name: 'Scan all shots', exact: true })
+
+
+      120 |   await expect(
+      121 |     page.getByRole("button", { name: "Scan all shots", exact: true }),
+    > 122 |   ).toBeDisabled();
+          |     ^
+      123 |   await page
+      124 |     .locator("input[type=file]")
+      125 |     .first()
+        at setup (/Users/indievision/Proiecte/EDITMAP_GEMINI/tests/browser/bulk-analysis.spec.ts:122:5)
+        at /Users/indievision/Proiecte/EDITMAP_GEMINI/tests/browser/bulk-analysis.spec.ts:223:3
+
+    Error Context: test-results/bulk-analysis-cancels-an-a-4bffc-es-from-the-unfinished-shot/error-context.md
+
+  6) tests/browser/bulk-analysis.spec.ts:249:1 › stops on model failure, preserves completed results and retries without rescanning them 
+
+    Error: expect(locator).toBeDisabled() failed
+
+    Locator: getByRole('button', { name: 'Scan all shots', exact: true })
+    Expected: disabled
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeDisabled" getByRole('button', { name: 'Scan all shots', exact: true }) with timeout 5000ms
+      - waiting for getByRole('button', { name: 'Scan all shots', exact: true })
+
+
+      120 |   await expect(
+      121 |     page.getByRole("button", { name: "Scan all shots", exact: true }),
+    > 122 |   ).toBeDisabled();
+          |     ^
+      123 |   await page
+      124 |     .locator("input[type=file]")
+      125 |     .first()
+        at setup (/Users/indievision/Proiecte/EDITMAP_GEMINI/tests/browser/bulk-analysis.spec.ts:122:5)
+        at /Users/indievision/Proiecte/EDITMAP_GEMINI/tests/browser/bulk-analysis.spec.ts:252:3
+
+    Error Context: test-results/bulk-analysis-stops-on-mod-3a481-ies-without-rescanning-them/error-context.md
+
+  7) tests/browser/bulk-analysis.spec.ts:278:3 › changing EDL aborts the scan and ignores late results 
+
+    Error: expect(locator).toBeDisabled() failed
+
+    Locator: getByRole('button', { name: 'Scan all shots', exact: true })
+    Expected: disabled
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeDisabled" getByRole('button', { name: 'Scan all shots', exact: true }) with timeout 5000ms
+      - waiting for getByRole('button', { name: 'Scan all shots', exact: true })
+
+
+      120 |   await expect(
+      121 |     page.getByRole("button", { name: "Scan all shots", exact: true }),
+    > 122 |   ).toBeDisabled();
+          |     ^
+      123 |   await page
+      124 |     .locator("input[type=file]")
+      125 |     .first()
+        at setup (/Users/indievision/Proiecte/EDITMAP_GEMINI/tests/browser/bulk-analysis.spec.ts:122:5)
+        at /Users/indievision/Proiecte/EDITMAP_GEMINI/tests/browser/bulk-analysis.spec.ts:281:5
+
+    Error Context: test-results/bulk-analysis-changing-EDL-2fa43-an-and-ignores-late-results/error-context.md
+
+  8) tests/browser/bulk-analysis.spec.ts:278:3 › changing video aborts the scan and ignores late results 
+
+    Error: expect(locator).toBeDisabled() failed
+
+    Locator: getByRole('button', { name: 'Scan all shots', exact: true })
+    Expected: disabled
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeDisabled" getByRole('button', { name: 'Scan all shots', exact: true }) with timeout 5000ms
+      - waiting for getByRole('button', { name: 'Scan all shots', exact: true })
+
+
+      120 |   await expect(
+      121 |     page.getByRole("button", { name: "Scan all shots", exact: true }),
+    > 122 |   ).toBeDisabled();
+          |     ^
+      123 |   await page
+      124 |     .locator("input[type=file]")
+      125 |     .first()
+        at setup (/Users/indievision/Proiecte/EDITMAP_GEMINI/tests/browser/bulk-analysis.spec.ts:122:5)
+        at /Users/indievision/Proiecte/EDITMAP_GEMINI/tests/browser/bulk-analysis.spec.ts:281:5
+
+    Error Context: test-results/bulk-analysis-changing-vid-f4e17-an-and-ignores-late-results/error-context.md
+
+  9) tests/browser/bulk-analysis.spec.ts:278:3 › changing project aborts the scan and ignores late results 
+
+    Error: expect(locator).toBeDisabled() failed
+
+    Locator: getByRole('button', { name: 'Scan all shots', exact: true })
+    Expected: disabled
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeDisabled" getByRole('button', { name: 'Scan all shots', exact: true }) with timeout 5000ms
+      - waiting for getByRole('button', { name: 'Scan all shots', exact: true })
+
+
+      120 |   await expect(
+      121 |     page.getByRole("button", { name: "Scan all shots", exact: true }),
+    > 122 |   ).toBeDisabled();
+          |     ^
+      123 |   await page
+      124 |     .locator("input[type=file]")
+      125 |     .first()
+        at setup (/Users/indievision/Proiecte/EDITMAP_GEMINI/tests/browser/bulk-analysis.spec.ts:122:5)
+        at /Users/indievision/Proiecte/EDITMAP_GEMINI/tests/browser/bulk-analysis.spec.ts:281:5
+
+    Error Context: test-results/bulk-analysis-changing-pro-381cb-an-and-ignores-late-results/error-context.md
+
+  9 failed
+    tests/browser/analysis.spec.ts:3:1 › local analysis fills inspector fields and persists after confirmation 
+    tests/browser/bulk-analysis.spec.ts:30:1 › scan follows each sampled frame, then scrubbing restores the live monitor 
+    tests/browser/bulk-analysis.spec.ts:131:1 › scans every shot, protects confirmed edits, and saves direct readings 
+    tests/browser/bulk-analysis.spec.ts:195:1 › single-shot analysis blocks bulk scanning until cancelled 
+    tests/browser/bulk-analysis.spec.ts:220:1 › cancels an active scan and resumes from the unfinished shot 
+    tests/browser/bulk-analysis.spec.ts:249:1 › stops on model failure, preserves completed results and retries without rescanning them 
+    tests/browser/bulk-analysis.spec.ts:278:3 › changing EDL aborts the scan and ignores late results 
+    tests/browser/bulk-analysis.spec.ts:278:3 › changing video aborts the scan and ignores late results 
+    tests/browser/bulk-analysis.spec.ts:278:3 › changing project aborts the scan and ignores late results 
+  9 passed (1.2m)

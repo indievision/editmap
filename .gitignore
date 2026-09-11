@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.tsbuildinfo
+test-results/
+playwright-report/
+tests/browser/*.png
+
+.venv-benchmark/
+benchmark/
+FILME/
+
+server/.venv/
+server/**/__pycache__/
+server/*.pt
+server/*.onnx
