@@ -20,6 +20,8 @@ export default function ColorReading({
   const [hoveredShot, setHoveredShot] = useState<Shot | null>(null);
   const [activeMoodFilter, setActiveMoodFilter] = useState<string | null>(null);
   const [activeHarmonyFilter, setActiveHarmonyFilter] = useState<HarmonyType | null>(null);
+  const [squintMode, setSquintMode] = useState(false);
+  const [squintDepth, setSquintDepth] = useState(6);
 
   const duration = Math.max(project.duration, 1);
   const shots = project.shots;
@@ -334,6 +336,99 @@ export default function ColorReading({
               {mood} ({count})
             </button>
           ))}
+        </div>
+      </div>
+
+      {/* 3. THE SQUINT TEST (SEQUENCE TONAL VALUE STRIP) */}
+      <div className="squint-test-section">
+        <div className="subhead squint-subhead">
+          <div>
+            <h3>The Squint Test (Tonal Value Strip)</h3>
+            <span className="muted">
+              Mimics squinting to eliminate fine surface detail and reveal pure light & dark contrast hierarchy (Chiaroscuro / Notan).
+            </span>
+          </div>
+
+          <div className="squint-controls">
+            <div className="squint-toggle-group">
+              <button
+                type="button"
+                className={`squint-mode-btn ${!squintMode ? "active" : ""}`}
+                onClick={() => setSquintMode(false)}
+              >
+                🖼 Normal Color
+              </button>
+              <button
+                type="button"
+                className={`squint-mode-btn ${squintMode ? "active" : ""}`}
+                onClick={() => setSquintMode(true)}
+              >
+                😑 Squint Mode (Values)
+              </button>
+            </div>
+
+            {squintMode && (
+              <label className="squint-depth-slider">
+                <span>Squint Blur: <b>{squintDepth}px</b></span>
+                <input
+                  type="range"
+                  min="2"
+                  max="14"
+                  step="1"
+                  value={squintDepth}
+                  onChange={(e) => setSquintDepth(Number(e.target.value))}
+                />
+              </label>
+            )}
+          </div>
+        </div>
+
+        <div className="squint-contact-sheet">
+          {shots.map((s) => {
+            const thumb = thumbnails[s.id];
+            const isSelected = selected === s.id;
+            const luma = s.colorProfile?.luminance !== undefined ? Math.round(s.colorProfile.luminance * 100) : null;
+
+            return (
+              <div
+                key={s.id}
+                className={`squint-card ${isSelected ? "selected" : ""}`}
+                onClick={() => {
+                  onSeek(s.startSeconds);
+                  onSelect(s.id);
+                }}
+                title={`Shot ${s.index} · ${s.shotSize} · ${formatTimecode(s.startSeconds, project.frameRate, project.dropFrame)} · ${luma !== null ? `${luma}% Luma` : ""}`}
+              >
+                <div className="squint-thumb-wrapper">
+                  {thumb ? (
+                    <img
+                      src={thumb}
+                      alt={`Shot ${s.index}`}
+                      className={`squint-img ${squintMode ? "squint-active" : ""}`}
+                      style={
+                        squintMode
+                          ? {
+                              filter: `grayscale(100%) contrast(180%) brightness(95%) blur(${squintDepth}px)`,
+                            }
+                          : undefined
+                      }
+                    />
+                  ) : (
+                    <div className="squint-empty">Shot {s.index}</div>
+                  )}
+                  {luma !== null && (
+                    <span className={`squint-luma-badge ${luma < 25 ? "dark" : luma > 70 ? "bright" : "mid"}`}>
+                      {luma}%
+                    </span>
+                  )}
+                </div>
+                <div className="squint-card-footer">
+                  <span className="squint-card-idx">Shot {String(s.index).padStart(3, "0")}</span>
+                  <span className="squint-card-size">{s.shotSize}</span>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>

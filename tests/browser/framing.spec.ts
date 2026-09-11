@@ -5,7 +5,7 @@ test("framing summary, arc selection and local share follow current tags", async
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await page.getByRole("button", { name: "New project" }).first().click();
   await page
     .locator('input[accept*=".edl"]')
     .setInputFiles(path.resolve("fixtures/cuts-24.edl"));

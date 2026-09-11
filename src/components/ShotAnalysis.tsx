@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Shot } from "../models/project";
-import { analyzeFrame, sampleFrame } from "../analysis/localModel";
+import { analyzeFrame, sampleFrame, MODEL } from "../analysis/localModel";
 export default function ShotAnalysis({
   shot,
   url,
@@ -23,7 +23,7 @@ export default function ShotAnalysis({
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const controller = useRef<AbortController | null>(null);
-  useEffect(() => () => controller.current?.abort(), [url]);
+  useEffect(() => () => controller.current?.abort(), [url, shot.id]);
   useEffect(() => {
     onBusyChange(busy);
     return () => onBusyChange(false);
@@ -48,7 +48,7 @@ export default function ShotAnalysis({
           reviewStatus: "Needs review",
           suggestion: {
             ...tags,
-            model: "qwen3-vl:4b",
+            model: MODEL,
             createdAt: new Date().toISOString(),
             frame: { image, time },
           },
@@ -67,36 +67,36 @@ export default function ShotAnalysis({
   };
   return (
     <section className="shot-analysis">
-      <div className="analysis-actions">
-        <button disabled={!url || busy || disabled} onClick={() => void run()}>
+      <div className="analysis-header">
+        <span className="analysis-model-tag">
+          Local CV · <b>{shot.reviewStatus ?? "Unreviewed"}</b>
+        </span>
+        <button
+          disabled={!url || busy || disabled}
+          onClick={() => void run()}
+          className="reanalyze-btn"
+        >
           {busy
             ? "Analyzing…"
             : shot.reviewStatus
-              ? "Reanalyze shot"
-              : "Analyze selected shot"}
+              ? "Reanalyze frame ⚡"
+              : "Analyze frame ⚡"}
         </button>
         {busy && (
-          <button onClick={() => controller.current?.abort()}>Cancel</button>
+          <button
+            className="cancel-analysis-btn"
+            onClick={() => controller.current?.abort()}
+          >
+            Cancel
+          </button>
         )}
-        <button onClick={onNext}>Next unreviewed</button>
       </div>
-      <p className="tag-help">
-        Local Qwen · {shot.reviewStatus ?? "Unreviewed"} · Single-frame
-        analysis
-      </p>
       {!url && (
         <p className="tag-help">
-          Relink video to analyze. Run through the local EDITMAP development
-          server with Ollama running.
+          Connect video to run local computer vision analysis.
         </p>
       )}
       {error && <p role="alert">{error}</p>}
-      <button
-        disabled={busy || disabled}
-        onClick={() => onUpdate({ reviewStatus: "Confirmed" })}
-      >
-        Confirm current tags
-      </button>
     </section>
   );
 }

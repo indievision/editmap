@@ -20,6 +20,7 @@ import ShotAnalysis from "../components/ShotAnalysis";
 import AllShotsAnalysis from "../components/AllShotsAnalysis";
 import EditingRhythm from "../components/EditingRhythm";
 import SequenceReading, { type TimeRange } from "../components/SequenceReading";
+import SoundReading from "../components/SoundReading";
 import CutReading from "../components/CutReading";
 import type { CutPair } from "../analysis/cuts";
 import { useThumbnails } from "../video/useThumbnails";
@@ -29,11 +30,20 @@ import CharacterSummary, { CastGallery } from "../components/CharacterSummary";
 import { sampleFrame, createFrameSampler, analyzeFrame } from "../analysis/localModel";
 import { discoverCharactersAcrossShots, isEligibleForCharacterScan } from "../analysis/characters";
 import ReviewFilters from "../components/ReviewFilters";
-import { matchesReviewFilter, type ReviewFilter } from "../analysis/review";
+import { matchesReviewFilter, reviewReasons, reviewReasonLabel, type ReviewFilter } from "../analysis/review";
 import ColorReading from "../components/ColorReading";
 import ReportExportModal, { type ReportExportConfig } from "../components/ReportExportModal";
 import PrintableReport from "../components/PrintableReport";
 import { detectVideoShots, type ScanProgress } from "../analysis/videoScanner";
+import { splitShotAtTime, mergeShotsAtCut, rollCutBoundary, nudgeCutBoundary } from "../timeline/timelineOps";
+import ProjectHeader, { type WorkspaceMode } from "../components/ProjectHeader";
+import ShotInspector from "../components/ShotInspector";
+import ReviewQueue from "../components/ReviewQueue";
+import ReviewContextFilmstrip from "../components/ReviewContextFilmstrip";
+import MapSequenceOverview from "../components/MapSequenceOverview";
+import MapShotSummary from "../components/MapShotSummary";
+import ResizeHandle from "../components/ResizeHandle";
+import { useWorkspaceLayout } from "../hooks/useWorkspaceLayout";
 
 const shotSizeLabels: Record<Shot["shotSize"], string> = {
   EWS: "Extreme wide shot",
@@ -124,11 +134,30 @@ export default function App() {
   const [scanningShot, setScanningShot] = useState(false);
   const [selectedCharacter, setSelectedCharacter] = useState<string>();
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
-  const [deckTab, setDeckTab] = useState<"rhythm" | "sequence" | "inspector" | "cuts" | "cast" | "color">("rhythm");
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("studio");
+  const workspaceRef = useRef<HTMLElement>(null);
+  const {
+    leftWidth,
+    rightWidth,
+    topHeightRatio,
+    leftCollapsed,
+    rightCollapsed,
+    resizeLeft,
+    resizeRight,
+    resizeTopPixels,
+    toggleLeftCollapse,
+    toggleRightCollapse,
+    resetLeftWidth,
+    resetRightWidth,
+    resetTopHeightRatio,
+  } = useWorkspaceLayout(workspaceMode);
+  const [inspectorDrawerOpen, setInspectorDrawerOpen] = useState(false);
+  const [deckTab, setDeckTab] = useState<"rhythm" | "sequence" | "cuts" | "cast" | "color">("rhythm");
   const [edlRevision, setEdlRevision] = useState(0);
   const [analysisProgress, setAnalysisProgress] = useState<UnifiedAnalysisProgress | null>(null);
   const [isDmeSeparating, setIsDmeSeparating] = useState(false);
   const [dmeSeparationStatus, setDmeSeparationStatus] = useState("");
+  const [snapToCuts, setSnapToCuts] = useState(true);
   const detectAbortRef = useRef<AbortController | null>(null);
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [reportConfig, setReportConfig] = useState<ReportExportConfig>({
@@ -222,11 +251,30 @@ export default function App() {
   const [historyState, setHistoryState] = useState({ undo: 0, redo: 0 });
   const current = project ? activeShot(project.shots, time) : undefined,
     shot = project?.shots.find((s) => s.id === selected);
+  const [reviewSearchQuery, setReviewSearchQuery] = useState("");
   const reviewMatches = useMemo(
     () => project ? project.shots.filter((candidate) => matchesReviewFilter(candidate, reviewFilter)) : [],
     [project?.shots, reviewFilter],
   );
   const reviewMatchIds = useMemo(() => reviewMatches.map((candidate) => candidate.id), [reviewMatches]);
+  const queuedReviewShots = useMemo(() => {
+    if (!project) return [];
+    const query = reviewSearchQuery.trim().toLowerCase();
+    return project.shots.filter((s) => {
+      if (!matchesReviewFilter(s, reviewFilter)) return false;
+      if (!query) return true;
+      const indexStr = String(s.index);
+      const subjectStr = (s.content || "").toLowerCase();
+      const notesStr = (s.notes || "").toLowerCase();
+      const reasonsStr = reviewReasonLabel(reviewReasons(s)).toLowerCase();
+      return (
+        indexStr.includes(query) ||
+        subjectStr.includes(query) ||
+        notesStr.includes(query) ||
+        reasonsStr.includes(query)
+      );
+    });
+  }, [project?.shots, reviewFilter, reviewSearchQuery]);
   useEffect(() => { projectRef.current = project; }, [project]);
   useEffect(
     () => () => {
@@ -332,22 +380,134 @@ export default function App() {
       void v.play().catch((e) => setError(e.message));
     } else v.pause();
   };
+
+  const handleSplitShot = (targetTime: number) => {
+    if (!project) return;
+    const res = splitShotAtTime(project, targetTime);
+    if (!res) {
+      setMessage("Cannot add cut here (too close to shot boundary or outside film).");
+      return;
+    }
+    recordHistory(project);
+    revision.current++;
+    setProject(res.updatedProject);
+    setDirty(true);
+    setEdlRevision((rev) => rev + 1);
+    setSelected(res.newCutId);
+    setSelectedCut(res.newCutId);
+    seek(res.splitShot.startSeconds);
+    setMessage(`Split shot at ${formatTimecode(res.splitShot.startSeconds, project.frameRate, project.dropFrame)}.`);
+  };
+
+  const handleMergeShots = (incomingId: string) => {
+    if (!project) return;
+    const res = mergeShotsAtCut(project, incomingId);
+    if (!res) {
+      setMessage("Cannot merge shots across this boundary.");
+      return;
+    }
+    recordHistory(project);
+    revision.current++;
+    setProject(res.updatedProject);
+    setDirty(true);
+    setEdlRevision((rev) => rev + 1);
+    setSelected(res.mergedShotId);
+    setSelectedCut(undefined);
+    setMessage("Cut deleted and adjacent shots merged.");
+  };
+
+  const handleRollCut = (incomingId: string, newTime: number) => {
+    if (!project) return;
+    const res = rollCutBoundary(project, incomingId, newTime);
+    if (!res) return;
+    recordHistory(project);
+    revision.current++;
+    setProject(res.updatedProject);
+    setDirty(true);
+    setEdlRevision((rev) => rev + 1);
+    seek(res.rolledTime);
+    setMessage(`Rolled cut boundary to ${formatTimecode(res.rolledTime, project.frameRate, project.dropFrame)}.`);
+  };
+
+  const handleNudgeCut = (incomingId: string, framesDelta: number) => {
+    if (!project) return;
+    const res = nudgeCutBoundary(project, incomingId, framesDelta);
+    if (!res) return;
+    recordHistory(project);
+    revision.current++;
+    setProject(res.updatedProject);
+    setDirty(true);
+    setEdlRevision((rev) => rev + 1);
+    seek(res.rolledTime);
+    const sign = framesDelta > 0 ? "+" : "";
+    setMessage(`Nudged cut ${sign}${framesDelta} frame${Math.abs(framesDelta) > 1 ? "s" : ""}.`);
+  };
+
+  const handleToggleSnap = () => {
+    setSnapToCuts((s) => {
+      const next = !s;
+      setMessage(`Playhead snapping ${next ? "enabled" : "disabled"}.`);
+      return next;
+    });
+  };
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (
         e.repeat ||
-        ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() !== "z") ||
         e.altKey ||
         (e.target as HTMLElement).closest(
           "input,textarea,select,[contenteditable=true]",
         )
       )
         return;
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        void save();
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
         restoreHistory(e.shiftKey ? "redo" : "undo");
         return;
       }
+      if (e.ctrlKey || e.metaKey) return;
+
+      if (e.key === "Escape") {
+        if (inspectorDrawerOpen) {
+          e.preventDefault();
+          setInspectorDrawerOpen(false);
+          return;
+        }
+      }
+
+      if (e.key === "c" || e.key === "C") {
+        e.preventDefault();
+        handleSplitShot(time);
+        return;
+      }
+      if (e.key === "s" || e.key === "S") {
+        e.preventDefault();
+        handleToggleSnap();
+        return;
+      }
+      if (selectedCut && (e.key === "Delete" || e.key === "Backspace")) {
+        e.preventDefault();
+        handleMergeShots(selectedCut);
+        return;
+      }
+      if (selectedCut && (e.key === "[" || e.key === "{")) {
+        e.preventDefault();
+        handleNudgeCut(selectedCut, e.shiftKey ? -5 : -1);
+        return;
+      }
+      if (selectedCut && (e.key === "]" || e.key === "}")) {
+        e.preventDefault();
+        handleNudgeCut(selectedCut, e.shiftKey ? 5 : 1);
+        return;
+      }
+
       const size = (
         {
           "1": "EWS",
@@ -371,6 +531,12 @@ export default function App() {
       if (e.code === "Space" && !(e.target as HTMLElement).closest("button")) {
         e.preventDefault();
         toggle();
+        return;
+      }
+      if (e.key === "Enter" && shot && !e.shiftKey && !e.ctrlKey && !e.metaKey && !(e.target as HTMLElement).closest("button")) {
+        e.preventDefault();
+        confirmAndNext();
+        return;
       }
     };
     window.addEventListener("keydown", handler);
@@ -456,6 +622,48 @@ export default function App() {
       if (next) selectShot(next);
       else setMessage(reviewFilter === "all" ? "Last shot tagged. Review the map or save your project." : "No other matching shots. Review filters wrap when matches remain.");
     }
+  };
+  const confirmAndNext = () => {
+    if (!project || !shot) return;
+    video.current?.pause();
+    applyShotPatch(project.id, shot.id, { reviewStatus: "Confirmed", uncertain: false }, true);
+    if (autoAdvance) {
+      const unconfirmedCandidates = queuedReviewShots.filter(
+        (s) => s.id !== shot.id && s.reviewStatus !== "Confirmed",
+      );
+      if (unconfirmedCandidates.length === 0) {
+        setMessage("All matching shots in review queue confirmed.");
+        return;
+      }
+      const curIdx = queuedReviewShots.findIndex((s) => s.id === shot.id);
+      const subsequentCandidates = queuedReviewShots
+        .slice(curIdx + 1)
+        .filter((s) => s.id !== shot.id && s.reviewStatus !== "Confirmed");
+      const next = subsequentCandidates.length > 0 ? subsequentCandidates[0] : unconfirmedCandidates[0];
+      if (next) selectShot(next);
+      else setMessage("All matching shots in review queue confirmed.");
+    }
+  };
+  const markUncertainAndNext = () => {
+    if (!project || !shot) return;
+    const nextUncertain = !shot.uncertain;
+    applyShotPatch(project.id, shot.id, { uncertain: nextUncertain }, true);
+    if (autoAdvance && nextUncertain) {
+      const curIdx = queuedReviewShots.findIndex((s) => s.id === shot.id);
+      const after = queuedReviewShots.slice(curIdx + 1).filter((s) => s.id !== shot.id);
+      const next = after.length > 0 ? after[0] : undefined;
+      if (next) selectShot(next);
+    }
+  };
+  const goToPrevShot = () => {
+    if (!project || !shot) return;
+    const curIdx = project.shots.indexOf(shot);
+    if (curIdx > 0) selectShot(project.shots[curIdx - 1]);
+  };
+  const goToNextShot = () => {
+    if (!project || !shot) return;
+    const curIdx = project.shots.indexOf(shot);
+    if (curIdx < project.shots.length - 1) selectShot(project.shots[curIdx + 1]);
   };
   const nextReviewShot = (fromId: string | undefined, candidates: Shot[], direction = 1) => {
     if (!candidates.length) return undefined;
@@ -927,10 +1135,17 @@ export default function App() {
           const protectedFields = human
             ? [...new Set([...(item.protectedFields ?? []), ...(["shotSize", "composition", "content", "uncertain", "notes"] as const).filter((field) => field in patch)])]
             : item.protectedFields;
-          const safePatch = human ? patch : Object.fromEntries(Object.entries(patch).filter(([field]) =>
-            field === "suggestion" ||
-            (field === "reviewStatus" ? item.reviewStatus !== "Confirmed" : !item.protectedFields?.includes(field as "shotSize")),
-          )) as Partial<Shot>;
+          const isConfirmed = item.reviewStatus === "Confirmed";
+          const safePatch = human
+            ? patch
+            : (Object.fromEntries(
+                Object.entries(patch).filter(([field]) => {
+                  if (field === "suggestion" || field === "analysisFailures") return true;
+                  if (isConfirmed) return false;
+                  if (field === "reviewStatus") return true;
+                  return !item.protectedFields?.includes(field as any);
+                }),
+              ) as Partial<Shot>);
           return updateShotTags(item, { ...safePatch, protectedFields });
         }),
       };
@@ -1031,86 +1246,55 @@ export default function App() {
   };
   return (
     <div className="app">
-      <header>
-        <a className="brand" href="#" onClick={(e) => e.preventDefault()}>
-          <span className="brand-mark">▥</span>EDITMAP
-        </a>
-        <span className="header-divider" />
-        {project && (
-          <div className="header-project">
-            <input
-              aria-label="Project name"
-              value={project.name}
-              onChange={(e) => update({ name: e.target.value })}
-            />
-            <span>{dirty ? "Unsaved changes" : "Local project"}</span>
-          </div>
-        )}
-        <button
-          onClick={() => {
-            if (
-              !dirty ||
-              confirm("Discard unsaved changes and create a project?")
+      <ProjectHeader
+        project={project}
+        dirty={dirty}
+        saveState={saveState}
+        historyState={historyState}
+        workspaceMode={workspaceMode}
+        onModeChange={setWorkspaceMode}
+        onNew={() => {
+          if (
+            !dirty ||
+            confirm("Discard unsaved changes and create a project?")
+          )
+            replace(newProject());
+        }}
+        onOpen={() => void open()}
+        onSave={() => void save()}
+        onUndo={() => restoreHistory("undo")}
+        onRedo={() => restoreHistory("redo")}
+        onImportVideo={openVideoPicker}
+        onImportEdl={() => edlInput.current?.click()}
+        onImportProject={() => backupInput.current?.click()}
+        onExportProject={exportProject}
+        onExportPDF={() => setReportModalOpen(true)}
+        onAnalyze={() => {
+          if (!project || !url) return;
+          if (
+            !project.shots.length ||
+            confirm(
+              `Re-analyze film? This will replace the existing ${project.shots.length} shots.`,
             )
-              replace(newProject());
-          }}
-        >
-          New
-        </button>
-        <button onClick={() => void open()}>Open</button>
-        <button disabled={!project} onClick={() => void save()}>
-          Save{dirty ? " •" : ""}
-        </button>
-        <button disabled={!project} onClick={() => restoreHistory("undo")} title="Undo (Ctrl/Cmd+Z)">
-          Undo{historyState.undo ? ` (${historyState.undo})` : ""}
-        </button>
-        <button disabled={!project || !historyState.redo} onClick={() => restoreHistory("redo")} title="Redo (Ctrl/Cmd+Shift+Z)">Redo</button>
-        <button disabled={!project} onClick={exportProject}>Export project</button>
-        <button disabled={!project} onClick={() => setReportModalOpen(true)}>Export PDF Report</button>
-        <button disabled={!project} onClick={() => backupInput.current?.click()}>Import project</button>
-        <div className="header-spacer" />
-        {project ? (
-          <label className="file-picker-button">
-            <span>Import video</span>
-            <input
-              ref={videoInput}
-              type="file"
-              accept="video/*,.mkv,.mov"
-              aria-label="Import video"
-              onChange={(e) => {
-                void loadVideo(e.target.files?.[0]);
-                e.target.value = "";
-              }}
-            />
-          </label>
-        ) : (
-          <button disabled>Import video</button>
-        )}
-        <button
-          disabled={!project || !url || Boolean(analysisProgress)}
-          onClick={() => {
-            if (!project) return;
-            if (
-              !project.shots.length ||
-              confirm(
-                `Re-analyze film? This will replace the existing ${project.shots.length} shots.`,
-              )
-            ) {
-              void startUnifiedAnalysis(url, true);
-            }
-          }}
-          title={
-            url
-              ? "Analyze entire film: Scene Cuts, Framing & Character Discovery"
-              : "Link a video first"
+          ) {
+            void startUnifiedAnalysis(url, true);
           }
-        >
-          {analysisProgress ? "Analyzing film…" : "Analyze film"}
-        </button>
-        <button disabled={!project} onClick={() => edlInput.current?.click()}>
-          Import EDL
-        </button>
-      </header>
+        }}
+        isAnalyzing={Boolean(analysisProgress)}
+        hasVideo={Boolean(url)}
+        onProjectNameChange={(name) => update({ name })}
+      />
+      <input
+        hidden
+        ref={videoInput}
+        type="file"
+        accept="video/*,.mkv,.mov"
+        aria-label="Import video"
+        onChange={(e) => {
+          void loadVideo(e.target.files?.[0]);
+          e.target.value = "";
+        }}
+      />
       <input hidden ref={backupInput} type="file" accept="application/json,.json,.editmap.json" onChange={(e) => { void importBackup(e.target.files?.[0]); e.target.value = ""; }} />
       <input
         hidden
@@ -1137,34 +1321,50 @@ export default function App() {
         }}
       />
       {saved && (
-        <div className="open-panel panel">
-          <div className="section-head">
-            <b>Saved projects</b>
-            <button onClick={() => setSaved(null)}>Close</button>
+        <div
+          className="modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="saved-projects-heading"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSaved(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setSaved(null);
+          }}
+        >
+          <div className="open-panel panel modal-dialog-panel">
+            <div className="section-head">
+              <h2 id="saved-projects-heading" className="modal-title">Saved projects</h2>
+              <button type="button" onClick={() => setSaved(null)} aria-label="Close saved projects dialog">Close</button>
+            </div>
+            <div className="modal-body">
+              {!saved.length ? (
+                <p>No saved projects in this browser yet.</p>
+              ) : (
+                saved.map((p) => (
+                  <button
+                    type="button"
+                    className="saved-project"
+                    key={p.id}
+                    onClick={() => {
+                      if (
+                        !dirty ||
+                        confirm("Discard unsaved changes and open this project?")
+                      )
+                        replace(p);
+                    }}
+                  >
+                    <b>{p.name}</b>
+                    <span>
+                      {p.shots.length} shots ·{" "}
+                      {new Date(p.updatedAt).toLocaleString()}
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
           </div>
-          {!saved.length ? (
-            <p>No saved projects in this browser yet.</p>
-          ) : (
-            saved.map((p) => (
-              <button
-                className="saved-project"
-                key={p.id}
-                onClick={() => {
-                  if (
-                    !dirty ||
-                    confirm("Discard unsaved changes and open this project?")
-                  )
-                    replace(p);
-                }}
-              >
-                <b>{p.name}</b>
-                <span>
-                  {p.shots.length} shots ·{" "}
-                  {new Date(p.updatedAt).toLocaleString()}
-                </span>
-              </button>
-            ))
-          )}
         </div>
       )}
       {error && (
@@ -1184,18 +1384,14 @@ export default function App() {
           <small>Film → Automatic Scene Detection & Editing Map</small>
         </main>
       ) : (
-        <main className="workspace studio-workbench">
-          <div className="project-title">
-            <span className="mono muted">
-              {project.frameRate} FPS <span className="slash">/</span>{" "}
-              {project.shots.length} SHOTS <span className="slash">/</span>{" "}
-              {formatTimecode(
-                project.duration,
-                project.frameRate,
-                project.dropFrame,
-              )}
-            </span>
-          </div>
+        <main
+          ref={workspaceRef}
+          className={`workspace mode-${workspaceMode}`}
+          style={{
+            "--left-panel-width": leftCollapsed ? "0px" : `${leftWidth}px`,
+            "--right-panel-width": rightCollapsed ? "0px" : `${rightWidth}px`,
+          } as React.CSSProperties}
+        >
           {project.shots.length === 0 && url && !analysisProgress && (
             <section className="import-panel panel scene-detect-prompt">
               <div>
@@ -1262,376 +1458,222 @@ export default function App() {
             </section>
           )}
 
-          {/* TOP STAGE: Analytical Scopes & Deck (LEFT) + Program Film Monitor (RIGHT) */}
-          <div className="top-stage">
-            
-            {/* LEFT: Analytical Deck */}
-            <div className="analytical-deck panel">
-              <div className="deck-tabs" role="tablist" aria-label="Studio analytical tools">
-                <button
-                  role="tab"
-                  aria-selected={deckTab === "rhythm"}
-                  className={deckTab === "rhythm" ? "active" : ""}
-                  onClick={() => setDeckTab("rhythm")}
-                >
-                  Rhythm & Pacing
-                </button>
-                <button
-                  role="tab"
-                  aria-selected={deckTab === "sequence"}
-                  className={deckTab === "sequence" ? "active" : ""}
-                  onClick={() => setDeckTab("sequence")}
-                >
-                  Sequence Reading
-                </button>
-                <button
-                  role="tab"
-                  aria-selected={deckTab === "inspector"}
-                  className={deckTab === "inspector" ? "active" : ""}
-                  onClick={() => setDeckTab("inspector")}
-                >
-                  Shot Inspector
-                </button>
-                <button
-                  role="tab"
-                  aria-selected={deckTab === "cuts"}
-                  className={deckTab === "cuts" ? "active" : ""}
-                  onClick={() => setDeckTab("cuts")}
-                >
-                  Cut Reading
-                </button>
-                <button
-                  role="tab"
-                  aria-selected={deckTab === "cast"}
-                  className={deckTab === "cast" ? "active" : ""}
-                  onClick={() => setDeckTab("cast")}
-                >
-                  Cast & AI
-                </button>
-                <button
-                  role="tab"
-                  aria-selected={deckTab === "color"}
-                  className={deckTab === "color" ? "active" : ""}
-                  onClick={() => setDeckTab("color")}
-                >
-                  Color Reading
-                </button>
-              </div>
-
-              <div className="deck-pane">
-                <div hidden={deckTab !== "rhythm"}>
-                  <EditingRhythm
-                    project={project}
-                    time={time}
-                    waveform={waveform}
-                    selected={selected}
-                    onSelect={selectShot}
-                    onSeek={seek}
-                  />
+          {/* TOP STAGE: Studio (Deck + Monitor + Inspector), Map Focus (Monitor + Overview + Summary), Review Desk (Queue + Monitor + Inspector) */}
+          <div
+            className={`top-stage ${leftCollapsed ? "left-is-collapsed" : ""} ${rightCollapsed ? "right-is-collapsed" : ""}`}
+            style={{
+              height: `calc(${topHeightRatio * 100}% - 6px)`,
+            }}
+          >
+            {/* COLUMN 1 in Studio: Analytical Deck (kept mounted across mode switches to preserve analysis) */}
+            <div
+              className="analytical-deck panel"
+              hidden={workspaceMode !== "studio" || leftCollapsed}
+              style={workspaceMode !== "studio" || leftCollapsed ? { display: "none" } : undefined}
+            >
+                <div className="deck-tabs" role="tablist" aria-label="Studio analytical tools">
+                  <button
+                    role="tab"
+                    aria-selected={deckTab === "rhythm"}
+                    className={deckTab === "rhythm" ? "active" : ""}
+                    onClick={() => setDeckTab("rhythm")}
+                  >
+                    Rhythm & Pacing
+                  </button>
+                  <button
+                    role="tab"
+                    aria-selected={deckTab === "sequence"}
+                    className={deckTab === "sequence" ? "active" : ""}
+                    onClick={() => setDeckTab("sequence")}
+                  >
+                    Sequence Reading
+                  </button>
+                  <button
+                    role="tab"
+                    aria-selected={deckTab === "cuts"}
+                    className={deckTab === "cuts" ? "active" : ""}
+                    onClick={() => setDeckTab("cuts")}
+                  >
+                    Cut Reading
+                  </button>
+                  <button
+                    role="tab"
+                    aria-selected={deckTab === "cast"}
+                    className={deckTab === "cast" ? "active" : ""}
+                    onClick={() => setDeckTab("cast")}
+                  >
+                    Cast & AI
+                  </button>
+                  <button
+                    role="tab"
+                    aria-selected={deckTab === "color"}
+                    className={deckTab === "color" ? "active" : ""}
+                    onClick={() => setDeckTab("color")}
+                  >
+                    Color Reading
+                  </button>
                 </div>
 
-                <div hidden={deckTab !== "sequence"}>
-                  <SequenceReading
-                    project={project}
-                    range={selectedRange}
-                    onRangeChange={setSelectedRange}
-                    onSeek={seek}
-                    onUpdate={(sequences) => update({ sequences })}
-                  />
-                </div>
-
-                <div hidden={deckTab !== "inspector"}>
-                  <aside className="inspector panel-inner">
-                    <div className="section-head">
-                      <span className="eyebrow">SHOT INSPECTOR</span>
-                      <span
-                        className={`review-status ${shot?.reviewStatus === "Confirmed" ? "confirmed" : ""}`}
-                      >
-                        {shot
-                          ? shot.reviewStatus === "Confirmed"
-                            ? "CONFIRMED"
-                            : "NEEDS REVIEW"
-                          : "—"}
-                      </span>
-                    </div>
-                    {shot ? (
-                      <>
-                        <div className="shot-title">
-                          <h2>Shot {String(shot.index).padStart(3, "0")}</h2>
-                          <span>
-                            {shot.sourceReel} / {shot.transition}
-                          </span>
-                        </div>
-                        <dl>
-                          <div>
-                            <dt>Record in</dt>
-                            <dd>{shot.startTimecode}</dd>
-                          </div>
-                          <div>
-                            <dt>Record out</dt>
-                            <dd>{shot.endTimecode}</dd>
-                          </div>
-                          <div>
-                            <dt>Duration</dt>
-                            <dd>{shot.duration.toFixed(3)} sec</dd>
-                          </div>
-                        </dl>
-                        {shot.colorProfile && (
-                          <div className="shot-color-profile">
-                            <div className="color-badge">
-                              <span className="mood-tag">{shot.colorProfile.mood}</span>
-                              <span className="luma-tag">{Math.round(shot.colorProfile.luminance * 100)}% Luma</span>
-                            </div>
-                            <div className="color-swatches" aria-label="Dominant color palette">
-                              {shot.colorProfile.palette.map((hex, idx) => (
-                                <button
-                                  key={idx}
-                                  className="color-swatch-chip"
-                                  style={{ backgroundColor: hex }}
-                                  title={`Click to copy ${hex}`}
-                                  onClick={() => {
-                                    navigator.clipboard.writeText(hex);
-                                    setMessage(`Copied ${hex} to clipboard`);
-                                  }}
-                                >
-                                  <span className="swatch-hex">{hex}</span>
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                        <label>
-                          Shot size
-                          <select
-                            aria-label="Shot size"
-                            title={shotSizeDescriptions[shot.shotSize]}
-                            disabled={shot.content === "Text / title card"}
-                            value={shot.shotSize}
-                            onChange={(e) =>
-                              editShot({
-                                shotSize: e.target.value as Shot["shotSize"],
-                              })
-                            }
-                          >
-                            {[
-                              ...selectableShotSizes,
-                              "Not applicable",
-                              ...(["FS", "AS"].includes(shot.shotSize)
-                                ? [shot.shotSize]
-                                : []),
-                            ].map((s) => (
-                              <option
-                                key={s}
-                                value={s}
-                                title={shotSizeDescriptions[s as Shot["shotSize"]]}
-                              >
-                                {s === "Unknown" || s === "Not applicable"
-                                  ? s
-                                  : `${s} — ${shotSizeLabels[s as Shot["shotSize"]]}`}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <div className="tag-fields">
-                          <label>
-                            People in frame
-                            <select
-                              aria-label="People in frame"
-                              title="Count featured people; ignore incidental background figures."
-                              value={shot.composition ?? "Unknown"}
-                              onChange={(e) =>
-                                editShot({
-                                  composition: e.target.value as Shot["composition"],
-                                })
-                              }
-                            >
-                              {Object.entries(peopleLabels).map(([value, label]) => (
-                                <option key={value} value={value}>
-                                  {label}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <label>
-                            Main subject
-                            <select
-                              aria-label="Main subject"
-                              title="What is primarily shown? Text / graphics means a title or graphic fills the image, not subtitles over footage."
-                              value={shot.content ?? "Unknown"}
-                              onChange={(e) =>
-                                editShot({
-                                  content: e.target.value as Shot["content"],
-                                })
-                              }
-                            >
-                              {Object.entries(subjectLabels).map(([value, label]) => (
-                                <option key={value} value={value}>
-                                  {label}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        </div>
-                        <label className="uncertain-field">
-                          <input
-                            type="checkbox"
-                            checked={shot.uncertain ?? false}
-                            onChange={(e) =>
-                              editShot({ uncertain: e.target.checked })
-                            }
-                          />{" "}
-                          Shot size uncertain
-                        </label>
-                        {shot.content === "Text / title card" && (
-                          <p className="tag-help">
-                            Full-frame text / graphics have no shot size. Changing the
-                            main subject resets size to Unknown.
-                          </p>
-                        )}
-                        <fieldset className="character-review">
-                          <legend>Characters</legend>
-                          {!project.cast?.length ? <p className="tag-help">Add characters in the cast gallery to review this shot manually.</p> : <>
-                            <div className="character-checks">
-                              {project.cast.map((member) => {
-                                const selectedIds = shot.characterAnalysis?.manualMemberIds ?? [...new Set(shot.characterAnalysis?.intervals.map((interval) => interval.memberId) ?? [])];
-                                return <label key={member.id}><input type="checkbox" checked={selectedIds.includes(member.id)} onChange={(event) => reviewCharactersInShot(shot.id, event.target.checked ? [...selectedIds, member.id] : selectedIds.filter((id) => id !== member.id))} /> {member.name}</label>;
-                              })}
-                            </div>
-                            <p className="tag-help">{shot.characterAnalysis?.manualReviewStatus === "Confirmed" ? (shot.characterAnalysis.manualMemberIds?.length ? "Confirmed manual shot assignment. It does not create screen-time boundaries." : "Confirmed: no characters in this shot.") : "Suggestions remain editable. Checking a name confirms a shot-level assignment; clear every name to confirm no characters."}</p>
-                          </>}
-                        </fieldset>
-                        {["FS", "AS"].includes(shot.shotSize) && (
-                          <p className="tag-help">
-                            Legacy tag preserved. Choose an active framing size
-                            independently of the main subject or people in frame.
-                          </p>
-                        )}
-                        <label>
-                          Notes
-                          <textarea
-                            placeholder="Add an editing note…"
-                            value={shot.notes}
-                            onChange={(e) => editShot({ notes: e.target.value })}
-                          />
-                        </label>
-                        <ShotAnalysis
-                          key={`${project.id}-${shot.id}-${url}`}
-                          shot={shot}
-                          url={url}
-                          disabled={scanningAll}
-                          onBusyChange={setScanningShot}
-                          onPreview={previewAnalysis}
-                          onUpdate={(patch) => applyShotPatch(project.id, shot.id, patch)}
-                          onFailure={(failure) => applyShotPatch(project.id, shot.id, { analysisFailures: { framing: { message: failure, createdAt: new Date().toISOString() } } })}
-                          onNext={() => {
-                            const next = nextReviewShot(shot.id, reviewFilter === "all" ? project.shots.filter((s) => s.reviewStatus !== "Confirmed" && s.id !== shot.id) : reviewMatches.filter((s) => s.id !== shot.id));
-                            if (next) selectShot(next);
-                            else setMessage(reviewFilter === "all" ? "No other unreviewed shots." : "No other matching shots.");
-                          }}
-                        />
-                      </>
-                    ) : (
-                      <div className="inspector-empty">
-                        Select a shot on the map
-                        <br />
-                        to inspect and annotate it.
-                      </div>
-                    )}
-                  </aside>
-                </div>
-
-                <div hidden={deckTab !== "cuts"}>
-                  <CutReading
-                    project={project}
-                    incomingId={selectedCut}
-                    url={url}
-                    onSeek={seek}
-                    onPlay={playCut}
-                    onUpdate={(cutAnnotations) => update({ cutAnnotations })}
-                  />
-                </div>
-
-                <div hidden={deckTab !== "cast"}>
-                  <AllShotsAnalysis
-                    key={`${project.id}-${url}-${edlRevision}`}
-                    shots={project.shots}
-                    url={url}
-                    disabled={scanningShot}
-                    onBusyChange={setScanningAll}
-                    onPreview={previewAnalysis}
-                    cast={project.cast}
-                    onResult={(id, tags) => applyShotPatch(project.id, id, {
-                      ...tags,
-                      analysisFailures: undefined,
-                      suggestion: { ...tags, model: "qwen3-vl:4b", createdAt: new Date().toISOString() },
-                      reviewStatus: "Needs review",
-                    })}
-                    onFramingFailure={(id, failure) => applyShotPatch(project.id, id, { analysisFailures: { framing: { message: failure, createdAt: new Date().toISOString() } } })}
-                    onCharacterResult={(id, characterAnalysis) => {
-                      revision.current++;
-                      setProject((p) => p && p.id === project.id ? {
-                        ...p, updatedAt: new Date().toISOString(),
-                        shots: p.shots.map((s) => s.id === id ? s.characterAnalysis?.reviewStatus === "Confirmed" || s.characterAnalysis?.manualReviewStatus === "Confirmed" ? s : { ...s, characterAnalysis } : s),
-                      } : p);
-                      setDirty(true);
-                      setSaveState("");
-                    }}
-                    onAutoDiscoverComplete={(newCast, shotAnalyses) => {
-                      recordHistory(project);
-                      revision.current++;
-                      setProject((p) => p && p.id === project.id ? {
-                        ...p,
-                        updatedAt: new Date().toISOString(),
-                        cast: newCast,
-                        shots: p.shots.map((s) => {
-                          const analysis = shotAnalyses.get(s.id);
-                          if (analysis) {
-                            return s.characterAnalysis?.reviewStatus === "Confirmed" || s.characterAnalysis?.manualReviewStatus === "Confirmed"
-                              ? s
-                              : { ...s, characterAnalysis: analysis };
-                          }
-                          return s;
-                        }),
-                      } : p);
-                      setDirty(true);
-                      setSaveState("");
-                    }}
-                    onComplete={restoreLivePreview}
-                  />
-                  <CastGallery
-                    cast={project.cast ?? []}
-                    shot={shot}
-                    disabled={scanningAll || scanningShot || !url}
-                    onAdd={addCastMember}
-                    onReference={addCastReference}
-                    onRemove={removeCastMember}
-                    onRename={renameCastMember}
-                    onMerge={mergeCastMembers}
-                  />
-                  <CharacterSummary project={project} range={selectedRange} selectedMember={selectedCharacter} onSelect={setSelectedCharacter} onInspect={selectShot} onConfirmShot={confirmCharacterShot} onRemoveAppearance={removeCharacterAppearance} onRangeChange={setSelectedRange} onPlayRange={(range) => playRange(range, false)} onSeek={seek} />
-                </div>
-
-                <div hidden={deckTab !== "color"}>
-                  {project && (
-                    <ColorReading
+                <div className="deck-pane">
+                  <div hidden={deckTab !== "rhythm"}>
+                    <EditingRhythm
                       project={project}
-                      thumbnails={thumbnails}
+                      time={time}
+                      waveform={waveform}
                       selected={selected}
-                      onSelect={(id) => {
-                        const targetShot = project.shots.find((s) => s.id === id);
-                        if (targetShot) selectShot(targetShot);
-                      }}
+                      url={url}
+                      onSelect={selectShot}
                       onSeek={seek}
+                      onUpdateShots={(shots) => update({ shots })}
                     />
-                  )}
+                  </div>
+
+                  <div hidden={deckTab !== "sequence"}>
+                    <SequenceReading
+                      project={project}
+                      range={selectedRange}
+                      onRangeChange={setSelectedRange}
+                      onSeek={seek}
+                      onUpdate={(sequences) => update({ sequences })}
+                    />
+                    <SoundReading
+                      project={project}
+                      range={selectedRange}
+                      onRangeChange={setSelectedRange}
+                      onPlay={playRange}
+                      onUpdate={(soundSpans) => update({ soundSpans })}
+                    />
+                  </div>
+
+                  <div hidden={deckTab !== "cuts"}>
+                    <CutReading
+                      project={project}
+                      incomingId={selectedCut}
+                      url={url}
+                      onSeek={seek}
+                      onPlay={playCut}
+                      onUpdate={(cutAnnotations) => update({ cutAnnotations })}
+                      onDeleteCut={handleMergeShots}
+                      onNudgeCut={handleNudgeCut}
+                    />
+                  </div>
+
+                  <div hidden={deckTab !== "cast"}>
+                    <AllShotsAnalysis
+                      key={`${project.id}-${url}-${edlRevision}`}
+                      shots={project.shots}
+                      url={url}
+                      disabled={scanningShot}
+                      onBusyChange={setScanningAll}
+                      onPreview={previewAnalysis}
+                      cast={project.cast}
+                      onResult={(id, tags) => applyShotPatch(project.id, id, {
+                        ...tags,
+                        analysisFailures: undefined,
+                        suggestion: { ...tags, model: "qwen3-vl:4b", createdAt: new Date().toISOString() },
+                        reviewStatus: "Needs review",
+                      })}
+                      onFramingFailure={(id, failure) => applyShotPatch(project.id, id, { analysisFailures: { framing: { message: failure, createdAt: new Date().toISOString() } } })}
+                      onCharacterResult={(id, characterAnalysis) => {
+                        revision.current++;
+                        setProject((p) => p && p.id === project.id ? {
+                          ...p, updatedAt: new Date().toISOString(),
+                          shots: p.shots.map((s) => s.id === id ? s.characterAnalysis?.reviewStatus === "Confirmed" || s.characterAnalysis?.manualReviewStatus === "Confirmed" ? s : { ...s, characterAnalysis } : s),
+                        } : p);
+                        setDirty(true);
+                        setSaveState("");
+                      }}
+                      onAutoDiscoverComplete={(newCast, shotAnalyses) => {
+                        recordHistory(project);
+                        revision.current++;
+                        setProject((p) => p && p.id === project.id ? {
+                          ...p,
+                          updatedAt: new Date().toISOString(),
+                          cast: newCast,
+                          shots: p.shots.map((s) => {
+                            const analysis = shotAnalyses.get(s.id);
+                            if (analysis) {
+                              return s.characterAnalysis?.reviewStatus === "Confirmed" || s.characterAnalysis?.manualReviewStatus === "Confirmed"
+                                ? s
+                                : { ...s, characterAnalysis: analysis };
+                            }
+                            return s;
+                          }),
+                        } : p);
+                        setDirty(true);
+                        setSaveState("");
+                      }}
+                      onComplete={restoreLivePreview}
+                    />
+                    <CastGallery
+                      cast={project.cast ?? []}
+                      shot={shot}
+                      disabled={scanningAll || scanningShot || !url}
+                      onAdd={addCastMember}
+                      onReference={addCastReference}
+                      onRemove={removeCastMember}
+                      onRename={renameCastMember}
+                      onMerge={mergeCastMembers}
+                    />
+                    <CharacterSummary project={project} range={selectedRange} selectedMember={selectedCharacter} onSelect={setSelectedCharacter} onInspect={selectShot} onConfirmShot={confirmCharacterShot} onRemoveAppearance={removeCharacterAppearance} onRangeChange={setSelectedRange} onPlayRange={(range) => playRange(range, false)} onSeek={seek} />
+                  </div>
+
+                  <div hidden={deckTab !== "color"}>
+                    {project && (
+                      <ColorReading
+                        project={project}
+                        thumbnails={thumbnails}
+                        selected={selected}
+                        onSelect={(id) => {
+                          const targetShot = project.shots.find((s) => s.id === id);
+                          if (targetShot) selectShot(targetShot);
+                        }}
+                        onSeek={seek}
+                      />
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* RIGHT: Film Monitor */}
-            <section className="monitor panel">
+            {/* COLUMN 1 in Review Desk: Review Queue */}
+            {workspaceMode === "review" && !leftCollapsed && (
+              <ReviewQueue
+                project={project}
+                selectedShotId={selected}
+                thumbnails={thumbnails}
+                activeFilter={reviewFilter}
+                onFilterChange={setReviewFilter}
+                onSelectShot={selectShot}
+                searchQuery={reviewSearchQuery}
+                onSearchChange={setReviewSearchQuery}
+                autoAdvance={autoAdvance}
+                onAutoAdvanceChange={setAutoAdvance}
+              />
+            )}
+
+            {/* COLUMN SPLITTER 1: Left Panel ↔ Center Panel */}
+            <ResizeHandle
+              direction="col"
+              className="resize-handle-left"
+              collapseIcon="left"
+              isCollapsed={leftCollapsed}
+              onToggleCollapse={toggleLeftCollapse}
+              onDrag={resizeLeft}
+              onReset={resetLeftWidth}
+              label="Resize left panel"
+            />
+
+            {/* FILM MONITOR (PERSISTENT - ALWAYS MOUNTED IN ALL 3 MODES) */}
+            <section
+              className={`monitor panel ${workspaceMode === "map" ? "compact-monitor" : workspaceMode === "review" ? "large-monitor" : ""}`}
+              style={workspaceMode === "map" && leftCollapsed ? { display: "none" } : undefined}
+            >
               <div className="section-head">
-                <span className="eyebrow">PROGRAM FILM PREVIEW</span>
+                <span className="eyebrow">
+                  {workspaceMode === "review" && shot
+                    ? `SHOT ${String(shot.index).padStart(3, "0")} / ${String(project.shots.length).padStart(3, "0")}`
+                    : "PROGRAM FILM PREVIEW"}
+                </span>
                 <span className="muted">
                   {playing ? "PLAYING" : "PAUSED"} ·{" "}
                   {current
@@ -1791,16 +1833,158 @@ export default function App() {
                 />
               </div>
               <div className="video-meta">
-                {project.videoMetadata
-                  ? `${project.videoMetadata.filename} · ${project.videoMetadata.width} × ${project.videoMetadata.height} · ${project.videoMetadata.duration.toFixed(2)}s`
-                  : "No video connected"}
-                <span>SPACE TO PLAY / PAUSE</span>
+                <span>
+                  {project.videoMetadata
+                    ? `${project.videoMetadata.filename} · ${project.videoMetadata.width} × ${project.videoMetadata.height} · ${project.videoMetadata.duration.toFixed(2)}s`
+                    : "No video connected"}
+                </span>
+                <span className="keyboard-hint">SPACE TO PLAY / PAUSE</span>
+                {workspaceMode === "studio" && (
+                  <button
+                    type="button"
+                    className="studio-inspect-trigger-btn"
+                    onClick={() => setInspectorDrawerOpen(true)}
+                    title="Open Shot Inspector drawer"
+                  >
+                    Inspect Shot ↗
+                  </button>
+                )}
               </div>
+
+              {/* Review Desk 3-Shot Context Filmstrip */}
+              {workspaceMode === "review" && (
+                <ReviewContextFilmstrip
+                  project={project}
+                  currentShot={shot}
+                  thumbnails={thumbnails}
+                  onSelectShot={selectShot}
+                />
+              )}
             </section>
+
+            {/* COLUMN 2 in Map Focus: Sequence Overview */}
+            {workspaceMode === "map" && (
+              <MapSequenceOverview
+                project={project}
+                selectedShot={shot}
+                time={time}
+                onSelectShot={selectShot}
+                onSeek={seek}
+              />
+            )}
+
+            {/* COLUMN SPLITTER 2: Center Panel ↔ Right Panel */}
+            <ResizeHandle
+              direction="col"
+              className="resize-handle-right"
+              collapseIcon="right"
+              isCollapsed={rightCollapsed}
+              onToggleCollapse={toggleRightCollapse}
+              onDrag={resizeRight}
+              onReset={resetRightWidth}
+              label="Resize right panel"
+            />
+
+            {/* COLUMN 3: Shot Inspector (Studio), Readings / Summary (Map Focus), or Grid Inspector (Review Desk) */}
+            {!rightCollapsed && workspaceMode === "studio" && (
+              <ShotInspector
+                shot={shot}
+                project={project}
+                url={url}
+                thumbnail={shot ? thumbnails[shot.id] : undefined}
+                scanningAll={scanningAll}
+                scanningShot={scanningShot}
+                onBusyChange={setScanningShot}
+                onPreview={previewAnalysis}
+                onEditShot={editShot}
+                onModelResult={(pId, sId, patch) => applyShotPatch(pId, sId, patch, false)}
+                onNext={goToNextShot}
+                onPrevious={goToPrevShot}
+                onConfirmAndNext={confirmAndNext}
+                onMarkUncertain={markUncertainAndNext}
+                onReviewCharacters={reviewCharactersInShot}
+                autoAdvance={autoAdvance}
+              />
+            )}
+
+            {!rightCollapsed && workspaceMode === "map" && (
+              selectedCut ? (
+                <CutReading
+                  project={project}
+                  incomingId={selectedCut}
+                  url={url}
+                  onSeek={seek}
+                  onPlay={playCut}
+                  onUpdate={(cutAnnotations) => update({ cutAnnotations })}
+                  onClose={() => setSelectedCut(undefined)}
+                  onDeleteCut={handleMergeShots}
+                  onNudgeCut={handleNudgeCut}
+                />
+              ) : selectedRange ? (
+                <SequenceReading
+                  project={project}
+                  range={selectedRange}
+                  onRangeChange={setSelectedRange}
+                  onSeek={seek}
+                  onUpdate={(sequences) => update({ sequences })}
+                  onClose={() => setSelectedRange(undefined)}
+                />
+              ) : (
+                <MapShotSummary
+                  shot={shot}
+                  project={project}
+                  thumbnail={shot ? thumbnails[shot.id] : undefined}
+                  onOpenInspector={() => setInspectorDrawerOpen(true)}
+                  onPrevious={goToPrevShot}
+                  onNext={goToNextShot}
+                />
+              )
+            )}
+
+            {!rightCollapsed && workspaceMode === "review" && (
+              <ShotInspector
+                shot={shot}
+                project={project}
+                url={url}
+                thumbnail={shot ? thumbnails[shot.id] : undefined}
+                scanningAll={scanningAll}
+                scanningShot={scanningShot}
+                onBusyChange={setScanningShot}
+                onPreview={previewAnalysis}
+                onEditShot={editShot}
+                onModelResult={(pId, sId, patch) => applyShotPatch(pId, sId, patch, false)}
+                onNext={goToNextShot}
+                onPrevious={goToPrevShot}
+                onConfirmAndNext={confirmAndNext}
+                onMarkUncertain={markUncertainAndNext}
+                onReviewCharacters={reviewCharactersInShot}
+                useGridSizes={true}
+                autoAdvance={autoAdvance}
+              />
+            )}
           </div>
 
+          {/* VERTICAL SPLITTER: Top Stage ↔ Bottom Timeline */}
+          <ResizeHandle
+            direction="row"
+            className="resize-handle-middle"
+            onDrag={(delta) => {
+              const workspaceHeight = workspaceRef.current?.clientHeight || 800;
+              resizeTopPixels(delta, workspaceHeight);
+            }}
+            onReset={resetTopHeightRatio}
+            label="Resize timeline vs upper panels"
+          />
+
           {/* BOTTOM STAGE: Integrated Timeline */}
-          <div className="bottom-stage">
+          <div
+            className="bottom-stage"
+            style={{
+              flex: "1 1 0",
+              minHeight: "130px",
+              height: `calc(${(1 - topHeightRatio) * 100}% - 6px)`,
+            }}
+          >
             <EditingMap
               project={project}
               thumbnails={thumbnails}
@@ -1813,6 +1997,12 @@ export default function App() {
               onPlayShot={playShot}
               selectedCut={selectedCut}
               onCut={(incoming) => { video.current?.pause(); setSelectedCut(incoming.id); setSelected(incoming.id); seek(incoming.startSeconds); setDeckTab("cuts"); }}
+              onSplitShot={handleSplitShot}
+              onDeleteCut={handleMergeShots}
+              onRollCut={handleRollCut}
+              snapToCuts={snapToCuts}
+              onToggleSnap={handleToggleSnap}
+              onNudgeCut={handleNudgeCut}
               range={selectedRange}
               onRangeChange={(r) => { setSelectedRange(r); if (r) setDeckTab("sequence"); }}
               waveform={waveform}
@@ -1823,7 +2013,12 @@ export default function App() {
               isDmeSeparating={isDmeSeparating}
               dmeSeparationStatus={dmeSeparationStatus}
               hasVideo={Boolean(pendingFile.current || project.videoMetadata)}
-              tagBar={
+              workspaceMode={workspaceMode}
+              showLayersControl={workspaceMode === "map"}
+              showMinimap={workspaceMode !== "review"}
+              reviewFilter={reviewFilter}
+              onClearReviewFilter={() => setReviewFilter("all")}
+              tagBar={workspaceMode === "studio" ? (
                 <div className="timeline-action-bar">
                   <div className="tag-toolbar-inline">
                     <span className="eyebrow">TAG SHOT</span>
@@ -1860,9 +2055,44 @@ export default function App() {
                     onNext={() => navigateReviewMatches(1)}
                   />
                 </div>
-              }
+              ) : undefined}
             />
           </div>
+
+          {/* Drawer Overlay for narrow screens or Map Focus */}
+          {inspectorDrawerOpen && (
+            <div
+              className="inspector-drawer-backdrop open"
+              onClick={() => setInspectorDrawerOpen(false)}
+            >
+              <div
+                className="inspector-drawer-inner"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <ShotInspector
+                  shot={shot}
+                  project={project}
+                  url={url}
+                  thumbnail={shot ? thumbnails[shot.id] : undefined}
+                  scanningAll={scanningAll}
+                  scanningShot={scanningShot}
+                  onBusyChange={setScanningShot}
+                  onPreview={previewAnalysis}
+                  onEditShot={editShot}
+                  onModelResult={(pId, sId, patch) => applyShotPatch(pId, sId, patch, false)}
+                  onNext={goToNextShot}
+                  onPrevious={goToPrevShot}
+                  onConfirmAndNext={confirmAndNext}
+                  onMarkUncertain={markUncertainAndNext}
+                  onReviewCharacters={reviewCharactersInShot}
+                  onCloseDrawer={() => setInspectorDrawerOpen(false)}
+                  isDrawer={true}
+                  useGridSizes={workspaceMode === "review"}
+                  autoAdvance={autoAdvance}
+                />
+              </div>
+            </div>
+          )}
 
           {project.videoMetadata &&
             project.shots.some(

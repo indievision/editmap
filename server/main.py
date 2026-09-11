@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException, status, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from cv_engine import ShotClassifier, CharacterRecognizer, ColorAnalyzer, decode_base64_image
+from cv_engine import ShotClassifier, CharacterRecognizer, ColorAnalyzer, decode_base64_image, EyeTraceAnalyzer, MotionAnalyzer
 from audio_engine import DmeSeparator
 
 logging.basicConfig(
@@ -34,6 +34,8 @@ shot_classifier = ShotClassifier()
 character_recognizer = CharacterRecognizer()
 color_analyzer = ColorAnalyzer()
 dme_separator = DmeSeparator()
+eye_trace_analyzer = EyeTraceAnalyzer(character_recognizer=character_recognizer, shot_classifier=shot_classifier)
+motion_analyzer = MotionAnalyzer()
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +160,40 @@ class DmeResponse(BaseModel):
     sampleRate: int
 
 
+class FocalPointResponse(BaseModel):
+    x: float
+    y: float
+    type: str
+    confidence: float
+
+
+class AnalyzeEyeTraceRequest(BaseModel):
+    outgoingImage: str = Field(..., description="Base64 encoded outgoing video frame")
+    incomingImage: str = Field(..., description="Base64 encoded incoming video frame")
+
+
+class AnalyzeEyeTraceResponse(BaseModel):
+    outgoingFocalPoint: FocalPointResponse
+    incomingFocalPoint: FocalPointResponse
+    jumpDistance: float
+    jumpDistancePercent: int
+    rating: str
+    screenDirection: str
+
+
+class AnalyzeMotionRequest(BaseModel):
+    frameA: str = Field(..., description="Base64 encoded frame A")
+    frameB: str = Field(..., description="Base64 encoded frame B")
+
+
+class AnalyzeMotionResponse(BaseModel):
+    cameraMovement: str
+    cameraEnergy: int
+    subjectEnergy: int
+    totalKineticEnergy: int
+    confidence: float
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -276,6 +312,52 @@ def analyze_color(req: AnalyzeColorRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Color analysis failed: {str(e)}"
+        )
+
+
+@app.post("/api/analyze-eye-trace", response_model=AnalyzeEyeTraceResponse)
+def analyze_eye_trace(req: AnalyzeEyeTraceRequest):
+    try:
+        outgoing_img = decode_base64_image(req.outgoingImage)
+        incoming_img = decode_base64_image(req.incomingImage)
+    except Exception as e:
+        logger.error("Failed to decode images for eye-trace analysis: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid base64 image data: {str(e)}"
+        )
+
+    try:
+        result = eye_trace_analyzer.analyze_cut(outgoing_img, incoming_img)
+        return AnalyzeEyeTraceResponse(**result)
+    except Exception as e:
+        logger.error("Error analyzing eye-trace: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Eye-trace analysis failed: {str(e)}"
+        )
+
+
+@app.post("/api/analyze-motion", response_model=AnalyzeMotionResponse)
+def analyze_motion(req: AnalyzeMotionRequest):
+    try:
+        img_a = decode_base64_image(req.frameA)
+        img_b = decode_base64_image(req.frameB)
+    except Exception as e:
+        logger.error("Failed to decode frames for motion analysis: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid base64 frame data: {str(e)}"
+        )
+
+    try:
+        result = motion_analyzer.analyze_motion(img_a, img_b)
+        return AnalyzeMotionResponse(**result)
+    except Exception as e:
+        logger.error("Error analyzing motion: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Motion analysis failed: {str(e)}"
         )
 
 

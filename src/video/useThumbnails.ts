@@ -6,15 +6,59 @@ import { extractColorProfile } from "../analysis/colorExtraction";
 export function useThumbnails(url: string, shots: Shot[], playing: boolean) {
   const [frames, setFrames] = useState<Record<string, string>>({});
   const [colorProfiles, setColorProfiles] = useState<Record<string, ColorProfile>>({});
+  
+  // Persistent caches across edits to avoid flashing/refreshing existing thumbnails
+  const framesCache = useRef<Record<string, string>>({});
+  const profilesCache = useRef<Record<string, ColorProfile>>({});
+  const sampledMidpointCache = useRef<Record<string, number>>({});
+  const currentUrlRef = useRef<string>("");
+
   const paused = useRef(playing);
   paused.current = playing;
+
   const boundaries = JSON.stringify(
     shots.map((s) => [s.id, s.startSeconds, s.endSeconds]),
   );
+
   useEffect(() => {
-    setFrames({});
-    setColorProfiles({});
-    if (!url) return;
+    // If the video URL changed, completely reset all caches
+    if (currentUrlRef.current !== url) {
+      currentUrlRef.current = url;
+      framesCache.current = {};
+      profilesCache.current = {};
+      sampledMidpointCache.current = {};
+      setFrames({});
+      setColorProfiles({});
+    }
+
+    if (!url || shots.length === 0) return;
+
+    // Prune cache entries for shots that no longer exist (e.g. after a merge)
+    const validShotIds = new Set(shots.map((s) => s.id));
+    for (const cachedId of Object.keys(framesCache.current)) {
+      if (!validShotIds.has(cachedId)) {
+        delete framesCache.current[cachedId];
+        delete profilesCache.current[cachedId];
+        delete sampledMidpointCache.current[cachedId];
+      }
+    }
+
+    // Determine which shots actually need extraction:
+    // 1) Shot does not have a frame yet
+    // 2) Shot's midpoint changed significantly (> 0.25s) from what was previously sampled
+    const items = JSON.parse(boundaries) as [string, number, number][];
+    const neededItems = items.filter(([id, start, end]) => {
+      const target = (start + end) / 2;
+      const cached = framesCache.current[id];
+      const prevMid = sampledMidpointCache.current[id];
+      if (!cached) return true;
+      if (prevMid === undefined || Math.abs(prevMid - target) > 0.25) return true;
+      return false;
+    });
+
+    // If all shots are already cached and unchanged, nothing to decode!
+    if (neededItems.length === 0) return;
+
     const controller = new AbortController();
     const { signal } = controller;
     const decoder = document.createElement("video");
@@ -24,6 +68,7 @@ export function useThumbnails(url: string, shots: Shot[], playing: boolean) {
     canvas.width = 160;
     canvas.height = 90;
     const context = canvas.getContext("2d");
+
     const wait = (event: string) =>
       new Promise<void>((resolve, reject) => {
         const cleanup = () => {
@@ -45,16 +90,19 @@ export function useThumbnails(url: string, shots: Shot[], playing: boolean) {
         decoder.addEventListener("error", failure, { once: true });
         signal.addEventListener("abort", failure, { once: true });
       });
+
     const run = async () => {
       const ready = wait("loadeddata");
       decoder.src = url;
       await ready;
-      const items = JSON.parse(boundaries) as [string, number, number][];
-      const BATCH_SIZE = 15;
+
+      const BATCH_SIZE = 10;
       let pendingBatch: Record<string, string> = {};
       let pendingProfilesBatch: Record<string, ColorProfile> = {};
       let countInBatch = 0;
-      for (const [id, start, end] of items) {
+
+      for (let i = 0; i < neededItems.length; i++) {
+        const [id, start, end] = neededItems[i];
         while (paused.current && !signal.aborted)
           await new Promise((r) => setTimeout(r, 250));
         if (signal.aborted) return;
@@ -77,11 +125,16 @@ export function useThumbnails(url: string, shots: Shot[], playing: boolean) {
         context.drawImage(decoder, dx, dy, w, h);
         const frame = canvas.toDataURL("image/jpeg", 0.65);
         const profile = extractColorProfile(context, dx, dy, w, h);
+
+        framesCache.current[id] = frame;
+        profilesCache.current[id] = profile;
+        sampledMidpointCache.current[id] = target;
+
         pendingBatch[id] = frame;
         pendingProfilesBatch[id] = profile;
         countInBatch++;
 
-        const isLast = id === items[items.length - 1][0];
+        const isLast = i === neededItems.length - 1;
         if (countInBatch >= BATCH_SIZE || isLast) {
           const toFlushFrames = { ...pendingBatch };
           const toFlushProfiles = { ...pendingProfilesBatch };
@@ -104,19 +157,23 @@ export function useThumbnails(url: string, shots: Shot[], playing: boolean) {
           await new Promise((r) => setTimeout(r, 16));
         }
       }
+
       if (countInBatch > 0) {
         setFrames((previous) => ({ ...previous, ...pendingBatch }));
         setColorProfiles((previous) => ({ ...previous, ...pendingProfilesBatch }));
       }
     };
+
     void run().catch(() => {
       /* Unsupported decoding leaves the analytical color block intact. */
     });
+
     return () => {
       controller.abort();
       decoder.removeAttribute("src");
       decoder.load();
     };
   }, [url, boundaries]);
+
   return { frames, colorProfiles };
 }

@@ -78,6 +78,31 @@ export interface ColorProfile {
   };
 }
 
+export const cameraMovementTypes = [
+  "Static",
+  "Pan",
+  "Tilt",
+  "Dolly / Track",
+  "Handheld",
+  "Dynamic / Action",
+  "Zoom",
+  "Unknown",
+] as const;
+export type CameraMovementType = (typeof cameraMovementTypes)[number];
+
+export interface MotionProfile {
+  /** Dominant camera movement classification */
+  cameraMovement: CameraMovementType;
+  /** Global camera motion energy 0 to 100 */
+  cameraEnergy: number;
+  /** Internal subject motion energy 0 to 100 */
+  subjectEnergy: number;
+  /** Combined visual kinetic energy 0 to 100 */
+  totalKineticEnergy: number;
+  /** Confidence of estimation 0.0 to 1.0 */
+  confidence: number;
+}
+
 export interface Shot {
   id: string;
   index: number;
@@ -94,11 +119,12 @@ export interface Shot {
   notes: string;
   reviewStatus?: "Needs review" | "Confirmed";
   /** Fields changed by a person. Model passes must leave them intact. */
-  protectedFields?: Array<"shotSize" | "composition" | "content" | "uncertain" | "notes">;
+  protectedFields?: Array<"shotSize" | "composition" | "content" | "uncertain" | "notes" | "cameraMovement">;
   suggestion?: {
     shotSize: ShotSize;
     composition?: Shot["composition"];
     content?: Shot["content"];
+    cameraMovement?: CameraMovementType;
     uncertain?: boolean;
     model: string;
     createdAt: string;
@@ -106,6 +132,7 @@ export interface Shot {
   };
   composition?: keyof typeof peopleLabels;
   content?: keyof typeof subjectLabels;
+  cameraMovement?: CameraMovementType;
   uncertain?: boolean;
   /** Retained operational failures, distinct from an unresolved editorial or cast judgement. */
   analysisFailures?: {
@@ -115,6 +142,8 @@ export interface Shot {
   characterAnalysis?: CharacterAnalysis;
   /** Extracted chromatic & lighting profile */
   colorProfile?: ColorProfile;
+  /** Extracted camera movement and kinetic energy profile */
+  motionProfile?: MotionProfile;
 }
 export interface CastReference {
   id: string;
@@ -171,12 +200,38 @@ export const cutInterpretations = [
   "Continuation",
 ] as const;
 export type CutInterpretation = (typeof cutInterpretations)[number];
+
+export interface FocalPoint {
+  /** Normalized x position 0.0 (left) to 1.0 (right) */
+  x: number;
+  /** Normalized y position 0.0 (top) to 1.0 (bottom) */
+  y: number;
+  /** Method of focal detection */
+  type: "eyes" | "face" | "saliency" | "center";
+  /** Detection confidence score 0.0 to 1.0 */
+  confidence: number;
+}
+
+export interface EyeTraceCutReading {
+  outgoingFocalPoint: FocalPoint;
+  incomingFocalPoint: FocalPoint;
+  /** Euclidean distance in normalized coordinate space (0.0 to ~1.41) */
+  jumpDistance: number;
+  /** Jump distance as a percentage of screen diagonal (0 to 100) */
+  jumpDistancePercent: number;
+  /** Walter Murch saccadic threshold classification */
+  rating: "smooth" | "natural" | "jarring";
+  /** Horizontal gaze/flow across cut */
+  screenDirection?: "left-to-right" | "right-to-left" | "neutral";
+}
+
 /** A manual reading of one ordered pair; it never changes the shot tags. */
 export interface CutAnnotation {
   outgoingId: string;
   incomingId: string;
   interpretation: CutInterpretation;
   notes: string;
+  eyeTrace?: EyeTraceCutReading;
 }
 export const soundKinds = ["Dialogue", "Music", "Ambience", "Silence"] as const;
 export type SoundKind = (typeof soundKinds)[number];

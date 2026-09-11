@@ -50,8 +50,8 @@ export function extractColorProfile(
   const hueBins = new Array(24).fill(0);
   let coloredPixelCount = 0;
 
-  // Binning map for palette quantization: key -> { count, rSum, gSum, bSum }
-  const bins = new Map<string, { count: number; rSum: number; gSum: number; bSum: number }>();
+  // Binning map for palette quantization: numeric key -> { count, rSum, gSum, bSum }
+  const bins = new Map<number, { count: number; rSum: number; gSum: number; bSum: number }>();
 
   // Process pixels with step (stepping RGBA 4 bytes * step)
   const byteStep = Math.max(1, step) * 4;
@@ -104,20 +104,20 @@ export function extractColorProfile(
       coloredPixelCount++;
     }
 
-    // Quantize into 32-level bins (8 levels per channel: 0..7)
-    const qR = Math.floor(r / 32);
-    const qG = Math.floor(g / 32);
-    const qB = Math.floor(b / 32);
-    const key = `${qR}-${qG}-${qB}`;
+    // Quantize into 32-level bins (8 levels per channel: 0..7) using fast integer bitmask
+    const qR = r >> 5;
+    const qG = g >> 5;
+    const qB = b >> 5;
+    const key = (qR << 6) | (qG << 3) | qB;
 
-    const existing = bins.get(key);
+    const existing = bins.get(key as any);
     if (existing) {
       existing.count++;
       existing.rSum += r;
       existing.gSum += g;
       existing.bSum += b;
     } else {
-      bins.set(key, { count: 1, rSum: r, gSum: g, bSum: b });
+      bins.set(key as any, { count: 1, rSum: r, gSum: g, bSum: b });
     }
   }
 

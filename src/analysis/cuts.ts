@@ -1,5 +1,5 @@
 import { framingRank } from "./framing";
-import type { CutAnnotation, CutInterpretation, Shot } from "../models/project";
+import type { CutAnnotation, CutInterpretation, EyeTraceCutReading, FocalPoint, Shot } from "../models/project";
 
 export type CutPair = {
   outgoing: Shot;
@@ -104,4 +104,204 @@ export function calculateCutVisualDelta(outgoing: Shot, incoming: Shot): CutVisu
     deltaV: Number(deltaV.toFixed(3)),
     shockScore,
   };
+}
+
+/**
+ * Calculates Eye-Trace Euclidean jump distance and Walter Murch saccadic classification.
+ */
+export function calculateEyeTrace(
+  outgoingPoint: FocalPoint,
+  incomingPoint: FocalPoint
+): EyeTraceCutReading {
+  const dx = incomingPoint.x - outgoingPoint.x;
+  const dy = incomingPoint.y - outgoingPoint.y;
+  const jumpDistance = Math.sqrt(dx * dx + dy * dy);
+  const jumpDistancePercent = Math.min(100, Math.round(jumpDistance * 100));
+
+  let rating: "smooth" | "natural" | "jarring";
+  if (jumpDistancePercent <= 18) {
+    rating = "smooth";
+  } else if (jumpDistancePercent <= 38) {
+    rating = "natural";
+  } else {
+    rating = "jarring";
+  }
+
+  let screenDirection: "left-to-right" | "right-to-left" | "neutral" = "neutral";
+  if (dx > 0.12) {
+    screenDirection = "left-to-right";
+  } else if (dx < -0.12) {
+    screenDirection = "right-to-left";
+  }
+
+  return {
+    outgoingFocalPoint: outgoingPoint,
+    incomingFocalPoint: incomingPoint,
+    jumpDistance: Number(jumpDistance.toFixed(3)),
+    jumpDistancePercent,
+    rating,
+    screenDirection,
+  };
+}
+
+/**
+ * Client-side visual saliency and human focal point detection using HTML5 Canvas.
+ * Combines Sobel edge energy, YCbCr skin tone probability, and cinematic center-rule Gaussian bias.
+ */
+export async function extractClientFocalPoint(imageSrc: string): Promise<FocalPoint> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      try {
+        const w = 160;
+        const h = 90;
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (!ctx) {
+          resolve({ x: 0.5, y: 0.45, type: "center", confidence: 0.5 });
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, w, h);
+        const imgData = ctx.getImageData(0, 0, w, h);
+        const data = imgData.data;
+
+        // Grayscale & Luminance buffer
+        const luma = new Float32Array(w * h);
+        const skin = new Float32Array(w * h);
+        let skinCount = 0;
+
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+          const idx = i >> 2;
+
+          // Rec. 709 Luma
+          luma[idx] = 0.299 * r + 0.587 * g + 0.114 * b;
+
+          // YCbCr skin detection
+          const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
+          const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
+
+          // Standard skin cluster range
+          if (cr >= 133 && cr <= 173 && cb >= 77 && cb <= 127) {
+            skin[idx] = 1.0;
+            skinCount++;
+          }
+        }
+
+        const isSkinDominant = skinCount > 40; // clustered human presence
+
+        // Saliency map
+        let totalWeight = 0;
+        let weightedX = 0;
+        let weightedY = 0;
+
+        for (let y = 1; y < h - 1; y++) {
+          const ny = y / h;
+          for (let x = 1; x < w - 1; x++) {
+            const nx = x / w;
+            const idx = y * w + x;
+
+            // Sobel horizontal and vertical gradients
+            const gx =
+              luma[idx + 1] -
+              luma[idx - 1] +
+              0.5 * (luma[idx + 1 - w] - luma[idx - 1 - w]) +
+              0.5 * (luma[idx + 1 + w] - luma[idx - 1 + w]);
+            const gy =
+              luma[idx + w] -
+              luma[idx - w] +
+              0.5 * (luma[idx + w - 1] - luma[idx - w - 1]) +
+              0.5 * (luma[idx + w + 1] - luma[idx - w + 1]);
+            const gradient = Math.sqrt(gx * gx + gy * gy);
+
+            // Center / Rule-of-thirds Gaussian bias (center slightly high at 0.45)
+            const cdx = nx - 0.5;
+            const cdy = ny - 0.45;
+            const centerBias = Math.exp(-(cdx * cdx + cdy * cdy) / 0.28);
+
+            // Saliency score
+            let score = gradient * centerBias;
+            if (skin[idx] > 0) {
+              score += 120 * centerBias; // Faces draw focal priority
+            }
+
+            if (score > 10) {
+              totalWeight += score;
+              weightedX += nx * score;
+              weightedY += ny * score;
+            }
+          }
+        }
+
+        if (totalWeight <= 0) {
+          resolve({ x: 0.5, y: 0.45, type: "center", confidence: 0.5 });
+          return;
+        }
+
+        const focalX = Math.max(0.05, Math.min(0.95, weightedX / totalWeight));
+        const focalY = Math.max(0.05, Math.min(0.95, weightedY / totalWeight));
+        const focalType = isSkinDominant ? "face" : "saliency";
+
+        resolve({
+          x: Number(focalX.toFixed(3)),
+          y: Number(focalY.toFixed(3)),
+          type: focalType,
+          confidence: isSkinDominant ? 0.88 : 0.72,
+        });
+      } catch {
+        resolve({ x: 0.5, y: 0.45, type: "center", confidence: 0.5 });
+      }
+    };
+    img.onerror = () => {
+      resolve({ x: 0.5, y: 0.45, type: "center", confidence: 0.5 });
+    };
+    img.src = imageSrc;
+  });
+}
+
+/**
+ * Analyzes eye trace across cut boundary frames.
+ * Uses local Python CV service if available; automatically falls back to client canvas saliency.
+ */
+export async function analyzeCutEyeTrace(
+  outgoingFrame: string,
+  incomingFrame: string
+): Promise<EyeTraceCutReading> {
+  // Attempt local CV server first
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2000);
+    const response = await fetch("/api/analyze-eye-trace", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        outgoingImage: outgoingFrame,
+        incomingImage: incomingFrame,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (response.ok) {
+      const data = (await response.json()) as EyeTraceCutReading;
+      if (data && data.outgoingFocalPoint && data.incomingFocalPoint) {
+        return data;
+      }
+    }
+  } catch {
+    // Local server unavailable or timed out; fall back to client-side extraction seamlessly
+  }
+
+  const [outgoingPoint, incomingPoint] = await Promise.all([
+    extractClientFocalPoint(outgoingFrame),
+    extractClientFocalPoint(incomingFrame),
+  ]);
+
+  return calculateEyeTrace(outgoingPoint, incomingPoint);
 }

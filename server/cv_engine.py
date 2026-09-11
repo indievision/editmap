@@ -897,3 +897,262 @@ class ColorAnalyzer:
                 "dominantHue": 210,
             },
         }
+
+
+# ---------------------------------------------------------------------------
+# Step 4: Eyeline & Eye-Trace Analysis (Walter Murch's Saccadic Cut Flow)
+# ---------------------------------------------------------------------------
+
+class EyeTraceAnalyzer:
+    def __init__(self, character_recognizer: Optional[CharacterRecognizer] = None, shot_classifier: Optional[ShotClassifier] = None):
+        self.character_recognizer = character_recognizer
+        self.shot_classifier = shot_classifier
+
+    def extract_focal_point(self, img: Image.Image) -> Dict[str, Any]:
+        """
+        Extracts the primary visual focal point (normalized x, y in [0.0, 1.0]),
+        prioritizing eyes/face, then person silhouette, then edge saliency with center-bias.
+        """
+        w, h = img.size
+
+        # Priority 1: Face / Eyes detection via CharacterRecognizer
+        if self.character_recognizer:
+            try:
+                faces = self.character_recognizer.extract_faces_with_crops(img)
+                if faces:
+                    # Pick largest face
+                    faces.sort(key=lambda f: f.get("area", 0), reverse=True)
+                    best_face = faces[0]
+                    bbox = best_face.get("bbox", [])
+                    if len(bbox) == 4:
+                        x1, y1, x2, y2 = bbox
+                        cx = (x1 + x2) / 2.0
+                        eyeline_y = y1 + 0.35 * (y2 - y1)
+                        return {
+                            "x": round(max(0.02, min(0.98, cx / w)), 3),
+                            "y": round(max(0.02, min(0.98, eyeline_y / h)), 3),
+                            "type": "eyes",
+                            "confidence": round(float(best_face.get("score", 0.9)), 2),
+                        }
+            except Exception as e:
+                logger.warning("Face detection in EyeTraceAnalyzer failed: %s", e)
+
+        # Priority 2: Person detection via ShotClassifier (YOLO)
+        if self.shot_classifier:
+            try:
+                model = self.shot_classifier._get_model()
+                results = model(img, verbose=False)
+                if results and len(results) > 0:
+                    boxes = results[0].boxes
+                    if boxes is not None and len(boxes) > 0:
+                        people_boxes = []
+                        for box in boxes:
+                            cls_id = int(box.cls[0])
+                            name = results[0].names.get(cls_id, "")
+                            if name == "person":
+                                xyxy = box.xyxy[0].tolist()
+                                area = (xyxy[2] - xyxy[0]) * (xyxy[3] - xyxy[1])
+                                conf = float(box.conf[0])
+                                people_boxes.append((area, xyxy, conf))
+                        if people_boxes:
+                            people_boxes.sort(key=lambda p: p[0], reverse=True)
+                            _, xyxy, conf = people_boxes[0]
+                            cx = (xyxy[0] + xyxy[2]) / 2.0
+                            upper_y = xyxy[1] + 0.20 * (xyxy[3] - xyxy[1])
+                            return {
+                                "x": round(max(0.02, min(0.98, cx / w)), 3),
+                                "y": round(max(0.02, min(0.98, upper_y / h)), 3),
+                                "type": "face",
+                                "confidence": round(conf, 2),
+                            }
+            except Exception as e:
+                logger.warning("YOLO person detection in EyeTraceAnalyzer failed: %s", e)
+
+        # Priority 3: Visual Saliency via Sobel Gradient + Gaussian Center-Bias
+        try:
+            small = img.resize((160, 90)).convert("L")
+            arr = np.array(small, dtype=np.float32)
+            sh, sw = arr.shape
+
+            gx = np.zeros_like(arr)
+            gy = np.zeros_like(arr)
+            gx[:, 1:-1] = arr[:, 2:] - arr[:, :-2]
+            gy[1:-1, :] = arr[2:, :] - arr[:-2, :]
+            grad = np.sqrt(gx * gx + gy * gy)
+
+            y_coords, x_coords = np.mgrid[0:sh, 0:sw]
+            norm_x = x_coords / sw
+            norm_y = y_coords / sh
+            cdx = norm_x - 0.5
+            cdy = norm_y - 0.45
+            center_bias = np.exp(-(cdx * cdx + cdy * cdy) / 0.28)
+
+            saliency = grad * center_bias
+            total_weight = np.sum(saliency)
+
+            if total_weight > 0:
+                focal_x = np.sum(norm_x * saliency) / total_weight
+                focal_y = np.sum(norm_y * saliency) / total_weight
+                return {
+                    "x": round(float(max(0.05, min(0.95, focal_x))), 3),
+                    "y": round(float(max(0.05, min(0.95, focal_y))), 3),
+                    "type": "saliency",
+                    "confidence": 0.70,
+                }
+        except Exception as e:
+            logger.warning("Saliency calculation failed: %s", e)
+
+        return {
+            "x": 0.5,
+            "y": 0.45,
+            "type": "center",
+            "confidence": 0.5,
+        }
+
+    def analyze_cut(self, outgoing_img: Image.Image, incoming_img: Image.Image) -> Dict[str, Any]:
+        p1 = self.extract_focal_point(outgoing_img)
+        p2 = self.extract_focal_point(incoming_img)
+
+        dx = p2["x"] - p1["x"]
+        dy = p2["y"] - p1["y"]
+        jump_distance = float(np.sqrt(dx * dx + dy * dy))
+        jump_distance_percent = min(100, int(round(jump_distance * 100)))
+
+        if jump_distance_percent <= 18:
+            rating = "smooth"
+        elif jump_distance_percent <= 38:
+            rating = "natural"
+        else:
+            rating = "jarring"
+
+        screen_direction = "neutral"
+        if dx > 0.12:
+            screen_direction = "left-to-right"
+        elif dx < -0.12:
+            screen_direction = "right-to-left"
+
+        return {
+            "outgoingFocalPoint": p1,
+            "incomingFocalPoint": p2,
+            "jumpDistance": round(jump_distance, 3),
+            "jumpDistancePercent": jump_distance_percent,
+            "rating": rating,
+            "screenDirection": screen_direction,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Step 5: Camera Motion & Kinetic Energy Analysis (RANSAC Global Affine vs Residuals)
+# ---------------------------------------------------------------------------
+
+class MotionAnalyzer:
+    def __init__(self):
+        pass
+
+    def analyze_motion(self, img_a: Image.Image, img_b: Image.Image) -> Dict[str, Any]:
+        """
+        Analyzes motion between two consecutive/adjacent frames sampled from a shot.
+        Decomposes visual energy into:
+        - Camera Movement (Global Affine Transform via RANSAC inliers)
+        - Subject Movement (Residual Outliers + Local displacement)
+        """
+        import cv2
+
+        # Resize to 160x90 for ultra-fast, sub-millisecond calculation
+        w, h = 160, 90
+        gray_a = np.array(img_a.resize((w, h)).convert("L"))
+        gray_b = np.array(img_b.resize((w, h)).convert("L"))
+
+        pts_a = cv2.goodFeaturesToTrack(gray_a, maxCorners=100, qualityLevel=0.01, minDistance=6)
+
+        fallback = {
+            "cameraMovement": "Static",
+            "cameraEnergy": 0,
+            "subjectEnergy": 0,
+            "totalKineticEnergy": 0,
+            "confidence": 0.5,
+        }
+
+        if pts_a is None or len(pts_a) < 8:
+            diff = np.mean(np.abs(gray_a.astype(np.float32) - gray_b.astype(np.float32)))
+            energy = min(100, int(round(diff * 4)))
+            return {
+                "cameraMovement": "Static" if energy < 10 else "Dynamic / Action",
+                "cameraEnergy": energy if energy >= 10 else 0,
+                "subjectEnergy": 0,
+                "totalKineticEnergy": energy,
+                "confidence": 0.6,
+            }
+
+        pts_b, status, err = cv2.calcOpticalFlowPyrLK(
+            gray_a, gray_b, pts_a, None,
+            winSize=(15, 15), maxLevel=2,
+            criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03)
+        )
+
+        good_a = pts_a[status == 1]
+        good_b = pts_b[status == 1]
+
+        if len(good_a) < 6:
+            return fallback
+
+        matrix, inliers = cv2.estimateAffinePartial2D(
+            good_a, good_b, method=cv2.RANSAC, ransacReprojThreshold=1.5
+        )
+
+        if matrix is None:
+            return fallback
+
+        dx = float(matrix[0, 2])
+        dy = float(matrix[1, 2])
+        scale = float(np.sqrt(matrix[0, 0] ** 2 + matrix[1, 0] ** 2))
+        angle = float(np.arctan2(matrix[1, 0], matrix[0, 0]))
+
+        global_shift = float(np.sqrt(dx * dx + dy * dy))
+        scale_delta = abs(scale - 1.0)
+        angle_delta = abs(angle)
+
+        camera_energy = min(100, int(round(global_shift * 20 + scale_delta * 220 + angle_delta * 45)))
+
+        inlier_mask = inliers.flatten() if inliers is not None else np.ones(len(good_a))
+        outlier_count = int(np.sum(inlier_mask == 0))
+        total_pts = len(good_a)
+
+        outlier_ratio = outlier_count / max(1, total_pts)
+        outlier_motion = 0.0
+        if outlier_count > 0:
+            outlier_pts_a = good_a[inlier_mask == 0]
+            outlier_pts_b = good_b[inlier_mask == 0]
+            for pa, pb in zip(outlier_pts_a, outlier_pts_b):
+                expected_b = matrix @ np.array([pa[0], pa[1], 1.0])
+                residual = np.linalg.norm(pb - expected_b)
+                outlier_motion += residual
+            outlier_motion /= outlier_count
+
+        subject_energy = min(100, int(round(outlier_ratio * 40 + outlier_motion * 18)))
+        total_kinetic_energy = min(100, int(round(camera_energy * 0.55 + subject_energy * 0.45)))
+
+        if camera_energy < 8:
+            camera_movement = "Static"
+        elif scale_delta > 0.035:
+            camera_movement = "Zoom"
+        elif camera_energy > 48:
+            camera_movement = "Dynamic / Action"
+        elif abs(dx) > 1.8 * max(0.4, abs(dy)):
+            camera_movement = "Pan"
+        elif abs(dy) > 1.8 * max(0.4, abs(dx)):
+            camera_movement = "Tilt"
+        elif angle_delta > 0.02 and outlier_ratio > 0.25:
+            camera_movement = "Handheld"
+        else:
+            camera_movement = "Dolly / Track"
+
+        return {
+            "cameraMovement": camera_movement,
+            "cameraEnergy": camera_energy,
+            "subjectEnergy": subject_energy,
+            "totalKineticEnergy": total_kinetic_energy,
+            "confidence": 0.85,
+        }
+
+

@@ -136,7 +136,7 @@ const AudiovisualRhythm = memo(function AudiovisualRhythm({
           : "Dynamic Index";
 
   return (
-    <section className="pacing panel audiovisual-rhythm">
+    <section className="panel audiovisual-rhythm">
       <div className="section-head">
         <span className="eyebrow">05 / AUDIOVISUAL RHYTHM</span>
 
@@ -181,7 +181,7 @@ const AudiovisualRhythm = memo(function AudiovisualRhythm({
           <label>
             Window{" "}
             <select
-              aria-label="Audiovisual pacing window"
+              aria-label="AV window duration"
               value={window}
               onChange={(e) => setWindow(Number(e.target.value))}
             >

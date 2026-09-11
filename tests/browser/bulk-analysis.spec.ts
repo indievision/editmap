@@ -115,6 +115,10 @@ async function importShots(page: Page) {
 async function setup(page: Page) {
   await page.goto("/");
   await page.getByRole("button", { name: "New project", exact: true }).click();
+  const castTab = page.getByRole("tab", { name: "Cast & AI" });
+  if (await castTab.isVisible()) {
+    await castTab.click();
+  }
   await expect(
     page.getByRole("button", { name: "1. Scan framing & people", exact: true }),
   ).toBeDisabled();
@@ -170,6 +174,10 @@ test("scans every shot, protects confirmed edits, and saves direct readings", as
   await page.reload();
   await page.getByRole("button", { name: "Open", exact: true }).click();
   await page.getByRole("button", { name: /Untitled film/ }).click();
+  const castTabAfterReload = page.getByRole("tab", { name: "Cast & AI" });
+  if (await castTabAfterReload.isVisible()) {
+    await castTabAfterReload.click();
+  }
   await expect(
     page.getByRole("button", { name: "1. Scan framing & people", exact: true }),
   ).toBeDisabled();

@@ -510,10 +510,17 @@ export default function AllShotsAnalysis({
           {setupOpen ? "Collapse setup" : isAlreadyAnalyzed ? "Re-scan options" : "Show setup"}
         </button>
       </div>
-      {activeScan && <div className="scan-live-controls"><span role="status">{activeScan === "framing" ? framingStatus : characterStatus}</span><button onClick={() => controller.current?.abort()}>Cancel scan</button></div>}
+      {activeScan && (
+        <div className="scan-live-controls">
+          <span role="status" aria-live="polite" aria-atomic="true">
+            {activeScan === "framing" ? framingStatus : characterStatus}
+          </span>
+          <button onClick={() => controller.current?.abort()}>Cancel scan</button>
+        </div>
+      )}
       {setupOpen && (
         <div className="scan-setup-content">
-          <div className="full-scan-action" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, padding: "10px 14px", background: "#1c2125", border: "1px solid #363e44", borderRadius: 4 }}>
+          <div className="full-scan-action">
             <div>
               <b style={{ color: "#f2dfb3", fontSize: 13 }}>✨ Full Auto Analysis</b>
               <span className="muted" style={{ display: "block", fontSize: 11, marginTop: 2 }}>
@@ -556,7 +563,7 @@ export default function AllShotsAnalysis({
                 ) : null}
               </div>
               {framingStatus && (
-                <div className="scan-progress">
+                <div className="scan-progress" aria-live="polite" aria-atomic="true">
                   <progress
                     aria-label="Framing scan progress"
                     value={framingProgress.completed}
@@ -565,7 +572,11 @@ export default function AllShotsAnalysis({
                   <span role="status">{framingStatus}</span>
                 </div>
               )}
-              {framingError && <p role="alert">{framingError}</p>}
+              {framingError && (
+                <p role="alert" aria-live="assertive" className="scan-error-text">
+                  {framingError}
+                </p>
+              )}
             </div>
 
             {/* Step 2: Character Appearances */}
@@ -631,7 +642,7 @@ export default function AllShotsAnalysis({
                 )}
               </div>
               {characterStatus && (
-                <div className="scan-progress">
+                <div className="scan-progress" aria-live="polite" aria-atomic="true">
                   <progress
                     aria-label="Character scan progress"
                     value={characterProgress.completed}
@@ -640,7 +651,11 @@ export default function AllShotsAnalysis({
                   <span role="status">{characterStatus}</span>
                 </div>
               )}
-              {characterError && <p role="alert">{characterError}</p>}
+              {characterError && (
+                <p role="alert" aria-live="assertive" className="scan-error-text">
+                  {characterError}
+                </p>
+              )}
             </div>
           </div>
 

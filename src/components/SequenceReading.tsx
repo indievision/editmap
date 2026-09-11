@@ -5,12 +5,13 @@ import { formatTimecode } from "../utils/timecode";
 
 export type TimeRange = { start: number; end: number };
 
-export default function SequenceReading({ project, range, onRangeChange, onSeek, onUpdate }: {
+export default function SequenceReading({ project, range, onRangeChange, onSeek, onUpdate, onClose }: {
   project: Project;
   range?: TimeRange;
   onRangeChange: (range?: TimeRange) => void;
   onSeek: (time: number) => void;
   onUpdate: (sequences: SequenceMarker[]) => void;
+  onClose?: () => void;
 }) {
   const [name, setName] = useState("");
   const reading = range && sequenceReading(project.shots, range.start, range.end);
@@ -20,7 +21,7 @@ export default function SequenceReading({ project, range, onRangeChange, onSeek,
     setName("");
   };
   return <section className="sequence-reading panel">
-    <div className="section-head"><div><span className="eyebrow">SEQUENCE READING</span><span className="muted">Evidence first; interpretation stays yours.</span></div>{range && <button onClick={() => onRangeChange(undefined)}>Clear selection</button>}</div>
+    <div className="section-head"><div><span className="eyebrow">SEQUENCE READING</span><span className="muted">Evidence first; interpretation stays yours.</span></div><div className="btn-row">{range && <button onClick={() => { onRangeChange(undefined); onClose?.(); }}>Clear selection</button>}{onClose && <button type="button" className="drawer-close-btn" onClick={onClose} title="Close reading">✕</button>}</div></div>
     {!range ? <p className="sequence-empty">Shift-drag on the editing map to select a passage. Its shot, cut, framing, and rhythm evidence will appear here.</p> : <>
       <div className="sequence-range"><button onClick={() => onSeek(range.start)}>{formatTimecode(range.start, project.frameRate, project.dropFrame)}</button><span>to</span><button onClick={() => onSeek(range.end)}>{formatTimecode(range.end, project.frameRate, project.dropFrame)}</button><span className="muted">{reading!.duration.toFixed(2)} sec</span></div>
       <div className="sequence-stats">
