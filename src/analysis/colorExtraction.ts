@@ -10,7 +10,7 @@ export function extractColorProfile(
   syOrHeight?: number,
   sw?: number,
   sh?: number,
-  step = 4,
+  step = 6,
 ): ColorProfile {
   let imageData: ImageData;
   if ("getImageData" in source) {

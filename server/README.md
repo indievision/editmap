@@ -1,97 +1,44 @@
-# EDITMAP Local CV Microservice
+# EDITMAP local CV service
 
-High-performance local computer vision microservice for film framing taxonomy and cast character recognition.
-Powered by **Ultralytics YOLO** and **InsightFace** / **face_recognition**.
+Python 3.11 is recommended. Install FFmpeg/ffprobe on the host, create `.venv`, then install `requirements.txt`. The backend uses CinemaCLIP for framing, YOLO for people/content evidence, InsightFace (or optional face_recognition), and Demucs. This checkout does not require Ollama.
 
-Runs locally on `http://127.0.0.1:8000`.
-
----
-
-## 1. Prerequisites
-
-- Python 3.10, 3.11, or 3.12 (Python 3.11 recommended on macOS Apple Silicon)
-- Virtual environment tool (`venv`)
-
----
-
-## 2. Installation
-
-1. Navigate to the `server/` directory:
-   ```bash
-   cd server
-   ```
-
-2. Create a virtual environment:
-   ```bash
-   /opt/homebrew/bin/python3.11 -m venv .venv
-   ```
-
-3. Activate the virtual environment:
-   ```bash
-   source .venv/bin/activate
-   ```
-
-4. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
----
-
-## 3. Running the Microservice
-
-Start the FastAPI server:
-```bash
-uvicorn main:app --host 127.0.0.1 --port 8000
+```sh
+cd server
+python3.11 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python provision_cinemaclip.py
+.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-The service will be live on:
-- Health check: `http://127.0.0.1:8000/health`
-- Interactive OpenAPI documentation: `http://127.0.0.1:8000/docs`
+Start Vite from the project root with host-network access. `/api/*` proxies to port 8000. Direct loopback fallback is also supported. Bind both servers to loopback.
 
----
+## Readiness and access
 
-## 4. API Endpoints
+`GET /health` reports service and per-engine readiness without forcing model downloads. `not_loaded` means the engine has not been initialized; `unavailable` means initialization/inference failed. `GET /api/health` exposes the same status through Vite. Models load lazily. Run `provision_cinemaclip.py` before offline use to cache CinemaCLIP framing weights; YOLO and InsightFace may download weights on first use, and Demucs uses `models/97d170e1-dbb4db15.th`. Primary framing-model failures return an explicit 503, never fabricated labels. Each framing suggestion combines three interior shot samples; disagreement or low confidence stays uncertain and requires review.
 
-### `POST /api/analyze-shot`
-Analyzes a single video frame for composition, shot size, and content classification.
-- **Request:**
-  ```json
-  {
-    "image": "<base64_encoded_jpeg_or_png>"
-  }
-  ```
-- **Response:**
-  ```json
-  {
-    "shotSize": "CU",
-    "composition": "Single person",
-    "content": "People",
-    "uncertain": false
-  }
-  ```
+Only localhost/127.0.0.1 browser origins and hostnames are supported. `GET /api/session` returns a process-local token; other `/api/*` requests require `X-Editmap-Token`. The client negotiates this automatically and refreshes after a backend restart. These checks reject unrelated websites; this is not an authentication boundary against other trusted local processes.
 
-### `POST /api/analyze-characters`
-Analyzes a candidate frame against a cast gallery with reference photos.
-- **Request:**
-  ```json
-  {
-    "image": "<base64_encoded_jpeg_or_png>",
-    "cast": [
-      {
-        "id": "char-1",
-        "name": "Anna",
-        "references": [
-          { "id": "ref-1", "image": "<base64_encoded_image>" }
-        ]
-      }
-    ]
-  }
-  ```
-- **Response:**
-  ```json
-  {
-    "appearances": ["char-1"],
-    "unresolved": false
-  }
-  ```
+## Endpoints
+
+- `POST /api/analyze-shot`: `{image, images?}` → five-rung framing tags (`Wide`, `Full`, `Medium`, `Close`, `Extreme close`), uncertainty, model. `images` accepts up to three frames for shot aggregation.
+- `POST /api/analyze-characters`: `{image, cast}` → matched appearances/unresolved state.
+- `POST /api/detect-shot-faces`: `{image, shotId, time}` → embeddings and face crops.
+- `POST /api/cluster-faces`: `{faces, existingCast?, similarityThreshold?, minAppearances?}` → clusters reconciled with existing references. Existing IDs/names survive confident matches; unmatched identities receive UUIDs.
+- `POST /api/detect-shots`: `{video_path, threshold?, min_shot_len_frames?}` → TransNet V2 shot boundary detection intervals.
+- `POST /api/analyze-color`, `/api/analyze-eye-trace`, `/api/analyze-motion`: local visual readings.
+- `GET /api/dme-status`: DME model availability.
+- `POST /api/separate-dme`: multipart `file`, `binCount` (1–10000), optional client-generated UUID `jobId` → HTTP 202 `{jobId}`.
+- `GET /api/dme-jobs/{jobId}`: status/progress and `result` when complete.
+- `DELETE /api/dme-jobs/{jobId}`: request cancellation.
+
+The arbitrary local `filepath` parameter has been removed. One DME job runs at a time; another returns 409. Inference engines are serialized; overlapping CV requests return 429. Upload limit is 8 GB, known media duration must be at most four hours, FFmpeg extraction has a ten-minute deadline, and the worker retains at most eight compact job results. Cancellation is cooperative between audio inference chunks (and during extraction); model loading/current inference is not forcibly killed. Processing uses 30-second interiors with one-second context, bounding audio tensor memory independently of film length. Temporary files are deleted when a job finishes, fails, or is cancelled. Submission is idempotent by jobId; cancellation received before upload completion prevents that job from starting.
+
+Image requests are limited to 8 MB base64 and 16 million pixels. JSON requests are limited to 32 MB; face batches to 10000, cast to 200, and references to 16 per character. Embeddings must have finite values, a nonzero norm, and a consistent 128/512 dimension. Reference embedding cache holds at most 512 entries.
+
+## Verification
+
+```sh
+.venv/bin/python -m unittest discover -s . -p 'test_*.py'
+```
+
+Tests use deterministic inputs and fake slow DME work for lifecycle checks. They do not establish real-world recognition accuracy. The geometry classifier requires representative film evaluation; all estimated tags remain editable and require review.

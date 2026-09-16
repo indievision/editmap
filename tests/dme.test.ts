@@ -72,3 +72,24 @@ test("pacing correlation correctly differentiates between dialogue vs music rhyt
     `Dialogue should inversely correlate with action cuts (got ${dialogueCorr})`,
   );
 });
+
+test("DME sends cancellation for a known job even when upload is aborted", async (t) => {
+  const { separateDmeAudio } = await import("../src/analysis/dme");
+  const controller = new AbortController();
+  let submittedId = "", cancelledId = "";
+  t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
+    if (options.method === "POST") {
+      submittedId = String((options.body as FormData).get("jobId"));
+      controller.abort();
+      throw new DOMException("Cancelled", "AbortError");
+    }
+    if (options.method === "DELETE") {
+      cancelledId = String(url).split("/").at(-1)!;
+      return Response.json({ status: "cancelled" });
+    }
+    throw new Error("Unexpected request");
+  });
+  await assert.rejects(separateDmeAudio(new File(["audio"], "fixture.wav"), 20, undefined, controller.signal), { name: "AbortError" });
+  assert.ok(submittedId);
+  assert.equal(cancelledId, submittedId);
+});

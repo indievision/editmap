@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import type { Project, Shot, HarmonyType } from "../models/project";
 import { formatTimecode } from "../utils/timecode";
+import { getSquintFilter } from "../utils/squint";
 
 export interface ColorReadingProps {
   project: Project;
@@ -8,6 +9,10 @@ export interface ColorReadingProps {
   selected?: string;
   onSelect: (shotId: string) => void;
   onSeek: (seconds: number) => void;
+  squintMode?: boolean;
+  onSquintModeChange?: (active: boolean) => void;
+  squintLevel?: number;
+  onSquintLevelChange?: (level: number) => void;
 }
 
 export default function ColorReading({
@@ -16,12 +21,29 @@ export default function ColorReading({
   selected,
   onSelect,
   onSeek,
+  squintMode: propSquintMode,
+  onSquintModeChange,
+  squintLevel: propSquintLevel,
+  onSquintLevelChange,
 }: ColorReadingProps) {
   const [hoveredShot, setHoveredShot] = useState<Shot | null>(null);
   const [activeMoodFilter, setActiveMoodFilter] = useState<string | null>(null);
   const [activeHarmonyFilter, setActiveHarmonyFilter] = useState<HarmonyType | null>(null);
-  const [squintMode, setSquintMode] = useState(false);
-  const [squintDepth, setSquintDepth] = useState(6);
+  const [internalSquintMode, setInternalSquintMode] = useState(false);
+  const [internalSquintLevel, setInternalSquintLevel] = useState(4);
+
+  const squintMode = propSquintMode !== undefined ? propSquintMode : internalSquintMode;
+  const squintLevel = propSquintLevel !== undefined ? propSquintLevel : internalSquintLevel;
+
+  const setSquintMode = (active: boolean) => {
+    setInternalSquintMode(active);
+    onSquintModeChange?.(active);
+  };
+
+  const setSquintLevel = (lvl: number) => {
+    setInternalSquintLevel(lvl);
+    onSquintLevelChange?.(lvl);
+  };
 
   const duration = Math.max(project.duration, 1);
   const shots = project.shots;
@@ -345,7 +367,7 @@ export default function ColorReading({
           <div>
             <h3>The Squint Test (Tonal Value Strip)</h3>
             <span className="muted">
-              Mimics squinting to eliminate fine surface detail and reveal pure light & dark contrast hierarchy (Chiaroscuro / Notan).
+              Composite optical engine: diffraction blur, rod desaturation, highlight bloom & chiaroscuro value massing (Notan).
             </span>
           </div>
 
@@ -369,14 +391,14 @@ export default function ColorReading({
 
             {squintMode && (
               <label className="squint-depth-slider">
-                <span>Squint Blur: <b>{squintDepth}px</b></span>
+                <span>Squint Depth: <b>Level {squintLevel}</b></span>
                 <input
                   type="range"
-                  min="2"
-                  max="14"
+                  min="1"
+                  max="10"
                   step="1"
-                  value={squintDepth}
-                  onChange={(e) => setSquintDepth(Number(e.target.value))}
+                  value={squintLevel}
+                  onChange={(e) => setSquintLevel(Number(e.target.value))}
                 />
               </label>
             )}
@@ -408,13 +430,19 @@ export default function ColorReading({
                       style={
                         squintMode
                           ? {
-                              filter: `grayscale(100%) contrast(180%) brightness(95%) blur(${squintDepth}px)`,
+                              filter: getSquintFilter(squintLevel),
                             }
                           : undefined
                       }
                     />
                   ) : (
-                    <div className="squint-empty">Shot {s.index}</div>
+                    <div className="squint-empty">
+                      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                        <rect x="2" y="4" width="20" height="16" rx="2" />
+                        <path d="M7 8h10M7 12h10M7 16h10" strokeDasharray="2 2" />
+                      </svg>
+                      <span>Shot {String(s.index).padStart(3, "0")}</span>
+                    </div>
                   )}
                   {luma !== null && (
                     <span className={`squint-luma-badge ${luma < 25 ? "dark" : luma > 70 ? "bright" : "mid"}`}>

@@ -4,6 +4,7 @@ import {
   cameraMovementTypes,
   peopleLabels,
   selectableShotSizes,
+  shotSizes,
   subjectLabels,
 } from "../models/project";
 import { analyzeShotMotion } from "../analysis/motion";
@@ -21,6 +22,11 @@ const cameraMovementIcons: Record<CameraMovementType, string> = {
 };
 
 const shotSizeLabels: Record<Shot["shotSize"], string> = {
+  Wide: "Wide framing",
+  Full: "Full framing",
+  Medium: "Medium framing",
+  Close: "Close framing",
+  "Extreme close": "Extreme close framing",
   EWS: "Extreme wide shot",
   WS: "Wide shot",
   FS: "Full shot",
@@ -38,6 +44,11 @@ const shotSizeLabels: Record<Shot["shotSize"], string> = {
 };
 
 const shotSizeDescriptions: Partial<Record<Shot["shotSize"], string>> = {
+  Wide: "Subject small or surrounded by substantial environment",
+  Full: "Full body or subject with contextual surroundings",
+  Medium: "Subject emphasis with meaningful environment retained",
+  Close: "Face or main subject fills a substantial part of frame",
+  "Extreme close": "An isolated facial, bodily, or prop detail dominates",
   EWS: "Environment dominates; subject tiny or absent",
   WS: "Whole subject with substantial surroundings",
   MWS: "Approximately knees or waist up with surroundings",
@@ -69,8 +80,19 @@ const sizeShortcuts: Record<string, string> = {
 };
 
 const gridShotSizes: Shot["shotSize"][] = [
-  ...selectableShotSizes,
-  "Not applicable",
+  "EWS",
+  "WS",
+  "FS",
+  "MWS",
+  "AS",
+  "MS",
+  "MCU",
+  "CU",
+  "ECU",
+  "Insert",
+  "OTS",
+  "POV",
+  "Unknown",
 ];
 
 export default function ShotInspector({
@@ -93,6 +115,7 @@ export default function ShotInspector({
   isDrawer = false,
   useGridSizes = false,
   autoAdvance = true,
+  isStudio = false,
 }: {
   shot: Shot | undefined;
   project: Project;
@@ -113,9 +136,11 @@ export default function ShotInspector({
   isDrawer?: boolean;
   useGridSizes?: boolean;
   autoAdvance?: boolean;
+  isStudio?: boolean;
 }) {
   const [copiedColor, setCopiedColor] = useState<string | null>(null);
   const [scanningMotion, setScanningMotion] = useState(false);
+  const [showDetailedEvidence, setShowDetailedEvidence] = useState(!isStudio);
 
   if (!shot) {
     return (
@@ -141,6 +166,11 @@ export default function ShotInspector({
   const totalShots = project.shots.length;
   const isConfirmed = shot.reviewStatus === "Confirmed";
   const isUncertain = shot.uncertain === true;
+  const hasDialogue = Boolean(
+    project.speechAnalysis?.regions.some(
+      (r) => r.endSeconds >= shot.startSeconds && r.startSeconds <= shot.endSeconds
+    )
+  );
 
   const handleScanMotion = async () => {
     if (!url || !shot || scanningMotion) return;
@@ -171,11 +201,11 @@ export default function ShotInspector({
   };
 
   return (
-    <aside className={`shot-inspector-panel panel inspector ${isDrawer ? "drawer-mode" : ""}`}>
+    <aside className={`shot-inspector-panel panel inspector ${isDrawer ? "drawer-mode" : ""} ${isStudio ? "mode-studio-inspector" : ""}`}>
       {/* Header */}
       <div className="section-head inspector-head">
         <div className="inspector-head-left">
-          <span className="eyebrow">SHOT INSPECTOR</span>
+          <span className="eyebrow">{isStudio ? `SHOT ${String(shot.index).padStart(2, "0")}` : "SHOT INSPECTOR"}</span>
           <span className="inspector-pagination mono">
             {shotIndex} / {totalShots}
           </span>
@@ -260,7 +290,81 @@ export default function ShotInspector({
           </div>
         </div>
 
-        {/* Color Profile (if present) */}
+        {/* Studio Mode Calm Framing Chip & Concise Evidence Rows */}
+        {isStudio && (
+          <div className="studio-inspector-summary">
+            <div className="studio-shot-size-chip-wrap">
+              <div className="studio-shot-size-chip" title="Click to edit shot size">
+                <span className="chip-size-abbr">{shot.shotSize || "Unknown"}</span>
+                <span className="chip-edit-icon" aria-hidden="true">✎</span>
+                <select
+                  id="shot-size-select"
+                  aria-label="Shot size"
+                  className="studio-chip-select"
+                  disabled={shot.content === "Text / title card"}
+                  value={shot.shotSize}
+                  onChange={(e) =>
+                    onEditShot({
+                      shotSize: e.target.value as Shot["shotSize"],
+                      uncertain: false,
+                    })
+                  }
+                >
+                  {shotSizes.map((s) => (
+                    <option key={s} value={s}>
+                      {s === "Unknown" || s === "Not applicable" ? s : `${s} — ${shotSizeLabels[s as Shot["shotSize"]] || s}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="studio-concise-evidence">
+              <div className="concise-row">
+                <div className="concise-label">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  <span>Duration</span>
+                </div>
+                <span className="concise-value mono">{shot.duration.toFixed(1)}s</span>
+              </div>
+              <div className="concise-row">
+                <div className="concise-label">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>
+                  <span>Cut</span>
+                </div>
+                <span className="concise-value">{shot.transition?.toLowerCase() || "hard"}</span>
+              </div>
+              <div className="concise-row">
+                <div className="concise-label">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                  <span>Dialogue</span>
+                </div>
+                <span className="concise-value">{hasDialogue ? "present" : "none"}</span>
+              </div>
+              <div className="concise-row">
+                <div className="concise-label">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>
+                  <span>Framing</span>
+                </div>
+                <span className={`concise-value status-${isConfirmed ? "confirmed" : isUncertain ? "uncertain" : "review"}`}>
+                  {isConfirmed ? "confirmed" : isUncertain ? "uncertain" : "needs review"}
+                </span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="studio-details-toggle-btn"
+              onClick={() => setShowDetailedEvidence(!showDetailedEvidence)}
+            >
+              <span>{showDetailedEvidence ? "Hide Detailed Evidence ▲" : "Detailed Evidence & AI Tools ▼"}</span>
+            </button>
+          </div>
+        )}
+
+        {showDetailedEvidence && (
+          <div className="inspector-detailed-section">
+            {/* Color Profile (if present) */}
         {shot.colorProfile && (
           <div className="shot-color-section">
             <div className="color-headline">
@@ -340,7 +444,7 @@ export default function ShotInspector({
               {[
                 ...selectableShotSizes,
                 "Not applicable",
-                ...(["FS", "AS"].includes(shot.shotSize) ? [shot.shotSize] : []),
+                ...(!selectableShotSizes.includes(shot.shotSize as typeof selectableShotSizes[number]) && shot.shotSize !== "Not applicable" ? [shot.shotSize] : []),
               ].map((s) => (
                 <option
                   key={s}
@@ -612,6 +716,8 @@ export default function ShotInspector({
           }
           onNext={onNext}
         />
+          </div>
+        )}
       </div>
     </aside>
   );

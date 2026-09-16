@@ -1,3 +1,4 @@
+import { fetchLocalModel } from "./localModel";
 import { framingRank } from "./framing";
 import type { CutAnnotation, CutInterpretation, EyeTraceCutReading, FocalPoint, Shot } from "../models/project";
 
@@ -276,8 +277,8 @@ export async function analyzeCutEyeTrace(
   // Attempt local CV server first
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2000);
-    const response = await fetch("/api/analyze-eye-trace", {
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const response = await fetchLocalModel("/api/analyze-eye-trace", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

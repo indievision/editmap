@@ -8,6 +8,7 @@ import {
   reviewReasonLabel,
   type ReviewFilter,
 } from "../analysis/review";
+import ReviewEvidenceMatrix from "./charts/ReviewEvidenceMatrix";
 
 const filterDisplayNames: Record<ReviewFilter, string> = {
   all: "All shots",
@@ -27,6 +28,8 @@ export default function ReviewQueue({
   onSearchChange,
   autoAdvance = true,
   onAutoAdvanceChange,
+  currentTime,
+  onSeek,
 }: {
   project: Project;
   selectedShotId?: string;
@@ -38,6 +41,8 @@ export default function ReviewQueue({
   onSearchChange: (query: string) => void;
   autoAdvance?: boolean;
   onAutoAdvanceChange?: (auto: boolean) => void;
+  currentTime: number;
+  onSeek: (time: number) => void;
 }) {
   const counts = useMemo(() => reviewFilterCounts(project), [project]);
 
@@ -136,6 +141,14 @@ export default function ReviewQueue({
           </label>
         </div>
       )}
+
+      <div className="review-evidence-panel">
+        <div className="review-evidence-head">
+          <span className="eyebrow">EVIDENCE</span>
+          <span className="muted">Observed review and scan states</span>
+        </div>
+        <ReviewEvidenceMatrix project={project} currentTime={currentTime} onSeek={onSeek} />
+      </div>
 
       {/* Shots List */}
       <div className="queue-list" role="listbox" aria-label="Review queue shots">

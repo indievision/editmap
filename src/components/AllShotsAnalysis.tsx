@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  analyzeFrame,
+  analyzeFrames,
   createFrameSampler,
+  sampleShotFrames,
+  fetchLocalModel,
   type Tags,
 } from "../analysis/localModel";
 import type { CastMember, CharacterAnalysis, Shot } from "../models/project";
 import {
   characterReferenceSignature,
   discoverCharactersAcrossShots,
+  type DiscoveryCheckpoint,
   isEligibleForCharacterScan,
   scanCharactersInShot,
   type CharacterScanMode,
@@ -42,7 +45,7 @@ export default function AllShotsAnalysis({
   const [activeScan, setActiveScan] = useState<"framing" | "characters" | null>(null);
   const isAlreadyAnalyzed =
     shots.length > 0 &&
-    shots.every((s) => s.shotSize && s.shotSize !== "Unknown");
+    shots.every((s) => s.reviewStatus === "Confirmed" || (s.suggestion && !s.analysisFailures?.framing));
   const hasCast = Boolean(cast && cast.length > 0);
   const [setupOpen, setSetupOpen] = useState(!isAlreadyAnalyzed && !hasCast);
 
@@ -59,10 +62,28 @@ export default function AllShotsAnalysis({
   const [characterMode, setCharacterMode] = useState<CharacterScanMode>("fast");
   const remainingCharacters = useRef<string[]>([]);
 
+  const discoveryCheckpoint = useRef<DiscoveryCheckpoint>(new Map());
+  const [discoveryPending, setDiscoveryPending] = useState(false);
   const controller = useRef<AbortController | null>(null);
   const latestShots = useRef(shots);
 
   const isBusy = activeScan !== null;
+  const [serviceStatus, setServiceStatus] = useState("Checking local CV service…");
+  useEffect(() => {
+    const controller = new AbortController();
+    let mounted = true;
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    void fetchLocalModel("/api/health", { method: "GET", signal: controller.signal })
+      .then(async response => {
+        if (!response.ok) throw new Error("offline");
+        const data = await response.json();
+        const framing = data.engines?.framing;
+        const characters = data.engines?.characters;
+        setServiceStatus(`Local CV · framing ${framing?.status ?? "unknown"} · faces ${characters?.status ?? "unknown"}`);
+      }).catch(() => { if (mounted) setServiceStatus("Local CV offline · start the Python service to analyze"); })
+      .finally(() => clearTimeout(timeout));
+    return () => { mounted = false; clearTimeout(timeout); controller.abort(); };
+  }, [isBusy]);
 
   useEffect(() => {
     onBusyChange(isBusy);
@@ -76,7 +97,7 @@ export default function AllShotsAnalysis({
   const peopleShots = shots.filter(isEligibleForCharacterScan);
 
   // Step 1: Scan Shot Sizes & Composition
-  const runFramingScan = async (resume = false) => {
+  const runFramingScan = async (resume = false, discoverAfter = false) => {
     if (controller.current || disabled || !url || !shots.length) return;
     const queue = resume
       ? remainingFraming.current
@@ -84,6 +105,7 @@ export default function AllShotsAnalysis({
 
     if (!queue.length) {
       setFramingStatus("All shots are already confirmed.");
+      if (discoverAfter) await runAutoCharacterDiscovery();
       return;
     }
 
@@ -116,12 +138,13 @@ export default function AllShotsAnalysis({
         try {
           onPreview(shot, prepared.time, prepared.image);
           const nextShot = remainingFraming.current[1];
-          const tags = await analyzeFrame(prepared.image, request.signal);
+          const tags = await analyzeFrames(prepared.images, request.signal);
 
           if (c.signal.aborted) break;
           if (request.signal.aborted) throw new Error("Analysis timed out.");
 
           onResult(shot.id, tags);
+          latestShots.current = latestShots.current.map(s => s.id === shot.id ? { ...s, ...tags } : s);
           await nextPaint();
           if (c.signal.aborted) break;
 
@@ -147,9 +170,10 @@ export default function AllShotsAnalysis({
           }
         } catch (e) {
           if (!c.signal.aborted) {
-            const message = `Shot ${shot.index}: ${request.signal.aborted ? "Analysis timed out." : e instanceof Error ? e.message : "Local analysis failed."} Completed readings are kept. Resume to retry this shot.`;
+            const failedShot = remainingFraming.current[0] ?? shot;
+            const message = `Shot ${failedShot.index}: ${request.signal.aborted ? "Analysis timed out." : e instanceof Error ? e.message : "Local analysis failed."} Completed readings are kept. Resume to retry this shot.`;
             setFramingError(message);
-            onFramingFailure?.(shot.id, message);
+            onFramingFailure?.(failedShot.id, message);
             setSetupOpen(true);
           }
           break;
@@ -164,7 +188,12 @@ export default function AllShotsAnalysis({
           ? `Framing scan complete · ${total} of ${total} shots ready for review`
           : `Framing scan stopped · ${completed} of ${total} complete`,
       );
-      if (completed === total) setSetupOpen(false);
+      if (completed === total) {
+        setSetupOpen(false);
+        if (discoverAfter && !c.signal.aborted) await runAutoCharacterDiscovery(sampler);
+      }
+    } catch (error) {
+      if (!c.signal.aborted) { setFramingError(error instanceof Error ? error.message : "Could not sample video."); setSetupOpen(true); }
     } finally {
       sampler?.dispose();
       console.info("EDITMAP framing scan timing", {
@@ -271,6 +300,7 @@ export default function AllShotsAnalysis({
           if (request.signal.aborted) throw new Error("Character analysis timed out.");
 
           onCharacterResult?.(shot.id, analysis);
+          if (analysis.failedTimes?.length) throw new Error(analysis.lastError ?? "Character samples failed.");
           await nextPaint();
           if (c.signal.aborted) break;
 
@@ -326,6 +356,7 @@ export default function AllShotsAnalysis({
     setActiveScan("characters");
     setCharacterError("");
     setCharacterProgress({ completed: 0, total: peopleEligible.length });
+    setDiscoveryPending(true);
     setCharacterStatus(`Discovering characters across ${peopleEligible.length} shots...`);
 
     let sampler = providedSampler;
@@ -341,7 +372,9 @@ export default function AllShotsAnalysis({
         sampler,
         c.signal,
         {
-          similarityThreshold: 0.50,
+          existingCast: cast,
+          checkpoint: discoveryCheckpoint.current,
+          onCheckpoint: onCharacterResult,
           minAppearances: 1,
           onProgress: (prog) => {
             setCharacterProgress({ completed: prog.completedShots, total: prog.totalShots });
@@ -361,15 +394,13 @@ export default function AllShotsAnalysis({
 
       if (c.signal.aborted) return;
 
-      if (result.cast.length > 0) {
-        onAutoDiscoverComplete?.(result.cast, result.shotAnalyses);
-        setCharacterStatus(
-          `Discovered ${result.cast.length} character${result.cast.length === 1 ? "" : "s"} across ${result.shotAnalyses.size} shot${result.shotAnalyses.size === 1 ? "" : "s"}!`
-        );
-      } else {
-        setCharacterStatus("No clear faces detected across people shots.");
-      }
-      setSetupOpen(false);
+      onAutoDiscoverComplete?.(result.cast, result.shotAnalyses);
+      const failed = [...result.shotAnalyses.values()].filter(a => a.failedTimes?.length).length;
+      setDiscoveryPending(failed > 0);
+      setCharacterStatus(`Character discovery · ${result.shotAnalyses.size - failed} completed · ${failed} failed · ${result.cast.length} cast members`);
+      if (failed) setCharacterError("Some face samples failed. Resume discovery retries failures and keeps completed samples.");
+      else discoveryCheckpoint.current.clear();
+      setSetupOpen(failed > 0);
     } catch (error) {
       if (!c.signal.aborted) {
         setCharacterError(error instanceof Error ? error.message : "Auto-character discovery failed.");
@@ -388,104 +419,8 @@ export default function AllShotsAnalysis({
     }
   };
 
-  // Full Automated Pipeline: Runs Step 1 Framing, then immediately runs Auto-Character Discovery
-  const runFullPipeline = async () => {
-    if (controller.current || disabled || !url || !shots.length) return;
-    const c = new AbortController();
-    controller.current = c;
-    const startedAt = performance.now();
-
-    let sampler: Awaited<ReturnType<typeof createFrameSampler>> | undefined;
-    try {
-      sampler = await createFrameSampler(url, c.signal);
-
-      // Pass 1: Framing on unconfirmed shots
-      const unconfirmed = latestShots.current.filter((s) => s.reviewStatus !== "Confirmed");
-      if (unconfirmed.length > 0) {
-        setActiveScan("framing");
-        setFramingError("");
-        let completed = 0;
-        const total = unconfirmed.length;
-        setFramingProgress({ completed, total });
-
-        let queue = [...unconfirmed];
-        let prepared = await prepareFrame(queue[0], sampler);
-
-        while (queue.length && prepared && !c.signal.aborted) {
-          const shot = prepared.shot;
-          setFramingStatus(`Full Pipeline · Step 1/2 Framing · shot ${shot.index} · ${completed} of ${total}`);
-          const reqCtrl = new AbortController();
-          const abort = () => reqCtrl.abort();
-          c.signal.addEventListener("abort", abort, { once: true });
-          const timeout = setTimeout(abort, 120000);
-
-          try {
-            onPreview(shot, prepared.time, prepared.image);
-            const nextShot = queue[1];
-            const tags = await analyzeFrame(prepared.image, reqCtrl.signal);
-            if (c.signal.aborted) break;
-
-            onResult(shot.id, tags);
-            latestShots.current = latestShots.current.map((s) => s.id === shot.id ? { ...s, ...tags } : s);
-            await nextPaint();
-            if (c.signal.aborted) break;
-
-            const next = nextShot
-              ? prepareFrame(nextShot, sampler).then(
-                  (value) => ({ value }),
-                  (error) => ({ error }),
-                )
-              : undefined;
-
-            queue = queue.slice(1);
-            completed++;
-            setFramingProgress({ completed, total });
-
-            if (next) {
-              const res = await next;
-              if ("error" in res) throw res.error;
-              prepared = res.value;
-            } else {
-              prepared = undefined;
-            }
-          } catch (shotErr) {
-            console.warn(`Full pipeline framing error for shot ${shot.index}:`, shotErr);
-            onFramingFailure?.(shot.id, shotErr instanceof Error ? shotErr.message : "Framing analysis failed");
-            queue = queue.slice(1);
-            completed++;
-            setFramingProgress({ completed, total });
-            prepared = queue.length > 0 ? await prepareFrame(queue[0], sampler) : undefined;
-          } finally {
-            clearTimeout(timeout);
-            c.signal.removeEventListener("abort", abort);
-          }
-        }
-        setFramingStatus(`Step 1 Framing complete · ${total} of ${total} shots tagged`);
-      }
-
-      if (c.signal.aborted) return;
-
-      // Pass 2: Auto-Discover Characters
-      await runAutoCharacterDiscovery(sampler);
-      setSetupOpen(false);
-      setFramingStatus("");
-    } catch (e) {
-      if (!c.signal.aborted) {
-        setFramingError(e instanceof Error ? e.message : "Full analysis failed.");
-      }
-    } finally {
-      sampler?.dispose();
-      console.info("EDITMAP full pipeline timing", {
-        totalMs: performance.now() - startedAt,
-      });
-      controller.current = null;
-      setActiveScan(null);
-      if (!c.signal.aborted) {
-        setSetupOpen(false);
-      }
-      onComplete?.();
-    }
-  };
+  // The full workflow shares the same queue, checkpoints, and failure semantics.
+  const runFullPipeline = () => runFramingScan(false, true);
 
   return (
     <section className={`all-shots-analysis panel ${setupOpen ? "setup-open" : "setup-collapsed"}`} aria-label="Scan workflow">
@@ -497,8 +432,10 @@ export default function AllShotsAnalysis({
               ? activeScan === "framing"
                 ? `Framing ${framingProgress.completed}/${framingProgress.total}`
                 : `Characters ${characterProgress.completed}/${characterProgress.total}`
+              : framingStatus || characterStatus
+              ? framingStatus || characterStatus
               : isAlreadyAnalyzed
-              ? `Analysis complete · ${shots.length} shots analyzed · ${cast?.length ?? 0} characters in cast`
+              ? `Framing ready for review · ${shots.length} shots · ${cast?.length ?? 0} characters in cast`
               : framingStatus || characterStatus || `${shots.filter((shot) => shot.reviewStatus !== "Confirmed").length} framing review · ${shots.reduce((count, shot) => count + (shot.characterAnalysis?.failedTimes?.length ?? 0), 0)} character failures`}
           </span>
         </div>
@@ -553,7 +490,7 @@ export default function AllShotsAnalysis({
                 >
                   1. Scan framing & people
                 </button>
-                {activeScan !== "framing" && remainingFraming.current.length > 0 ? (
+                {!isBusy && remainingFraming.current.length > 0 ? (
                   <button
                     disabled={disabled || !url}
                     onClick={() => void runFramingScan(true)}
@@ -616,7 +553,7 @@ export default function AllShotsAnalysis({
                     </button>
                   </>
                 )}
-                {activeScan === "characters" && remainingCharacters.current.length > 0 ? (
+                {!isBusy && remainingCharacters.current.length > 0 ? (
                   <button
                     disabled={disabled || !url}
                     onClick={() => void runCharacterScan(true)}
@@ -624,6 +561,9 @@ export default function AllShotsAnalysis({
                     Resume scan
                   </button>
                 ) : null}
+                {!isBusy && discoveryPending && (
+                  <button disabled={disabled || !url} onClick={() => void runAutoCharacterDiscovery()}>Resume discovery</button>
+                )}
                 {referencedCast.length > 0 && (
                   <label className="character-pass-toggle">
                     Mode
@@ -665,7 +605,7 @@ export default function AllShotsAnalysis({
           <p className="tag-help">Link a video to scan shots.</p>
         ) : (
           <p className="tag-help">
-            Local Qwen · Runs entirely on this Mac · Breaking into two steps keeps each pass fast and responsive.
+            {serviceStatus} · Runs entirely on this Mac.
           </p>
         )}
         </div>
@@ -679,10 +619,9 @@ async function prepareFrame(
   sampler: Awaited<ReturnType<typeof createFrameSampler>>,
 ) {
   if (!shot) return undefined;
-  const time = (shot.startSeconds + shot.endSeconds) / 2;
   const startedAt = performance.now();
-  const image = await sampler.sample(time);
-  return { shot, time, image, durationMs: performance.now() - startedAt };
+  const samples = await sampleShotFrames(sampler, shot.startSeconds, shot.endSeconds);
+  return { shot, ...samples, image: samples.previewImage, durationMs: performance.now() - startedAt };
 }
 
 function nextPaint() {

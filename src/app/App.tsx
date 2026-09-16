@@ -26,15 +26,24 @@ import type { CutPair } from "../analysis/cuts";
 import { useThumbnails } from "../video/useThumbnails";
 import { analyzeLocalAudio } from "../analysis/audio";
 import { separateDmeAudio } from "../analysis/dme";
+import { isSpeechAnalysisValid, mediaSignature } from "../analysis/speech";
+import { scanSpeechAudio } from "../analysis/speechService";
+import SpeechReading from "../components/SpeechReading";
+import { isLoudnessAnalysisValid } from "../analysis/loudness";
+import { scanLoudnessAudio } from "../analysis/loudnessService";
+import LoudnessReading from "../components/LoudnessReading";
 import CharacterSummary, { CastGallery } from "../components/CharacterSummary";
-import { sampleFrame, createFrameSampler, analyzeFrame } from "../analysis/localModel";
-import { discoverCharactersAcrossShots, isEligibleForCharacterScan } from "../analysis/characters";
+import CastDrawer from "../components/CastDrawer";
+import { sampleFrame, createFrameSampler, analyzeFrames, sampleShotFrames, MODEL } from "../analysis/localModel";
+import { discoverCharactersAcrossShots, isEligibleForCharacterScan, mergeDiscoveredCast } from "../analysis/characters";
 import ReviewFilters from "../components/ReviewFilters";
 import { matchesReviewFilter, reviewReasons, reviewReasonLabel, type ReviewFilter } from "../analysis/review";
 import ColorReading from "../components/ColorReading";
+import ColorDrawer from "../components/ColorDrawer";
 import ReportExportModal, { type ReportExportConfig } from "../components/ReportExportModal";
 import PrintableReport from "../components/PrintableReport";
 import { detectVideoShots, type ScanProgress } from "../analysis/videoScanner";
+import { analyzeShotMotion } from "../analysis/motion";
 import { splitShotAtTime, mergeShotsAtCut, rollCutBoundary, nudgeCutBoundary } from "../timeline/timelineOps";
 import ProjectHeader, { type WorkspaceMode } from "../components/ProjectHeader";
 import ShotInspector from "../components/ShotInspector";
@@ -44,8 +53,18 @@ import MapSequenceOverview from "../components/MapSequenceOverview";
 import MapShotSummary from "../components/MapShotSummary";
 import ResizeHandle from "../components/ResizeHandle";
 import { useWorkspaceLayout } from "../hooks/useWorkspaceLayout";
+import { getSquintFilter } from "../utils/squint";
+import WelcomeScreen from "../components/WelcomeScreen";
+import { StudioToolRail } from "../components/StudioToolRail";
+import { StudioRhythmRibbon } from "../components/StudioRhythmRibbon";
+
 
 const shotSizeLabels: Record<Shot["shotSize"], string> = {
+  Wide: "Wide framing",
+  Full: "Full framing",
+  Medium: "Medium framing",
+  Close: "Close framing",
+  "Extreme close": "Extreme close framing",
   EWS: "Extreme wide shot",
   WS: "Wide shot",
   FS: "Full shot",
@@ -63,6 +82,11 @@ const shotSizeLabels: Record<Shot["shotSize"], string> = {
 };
 
 const shotSizeDescriptions: Partial<Record<Shot["shotSize"], string>> = {
+  Wide: "Subject small or surrounded by substantial environment",
+  Full: "Full body or subject with contextual surroundings",
+  Medium: "Subject emphasis with meaningful environment retained",
+  Close: "Face or main subject fills a substantial part of frame",
+  "Extreme close": "An isolated facial, bodily, or prop detail dominates",
   EWS: "Environment dominates; subject tiny or absent",
   WS: "Whole subject with substantial surroundings",
   MWS: "Approximately knees or waist up with surroundings",
@@ -78,20 +102,45 @@ const shotSizeDescriptions: Partial<Record<Shot["shotSize"], string>> = {
 };
 
 const sizeShortcuts: Record<string, string> = {
-  EWS: "1",
-  WS: "2",
-  MWS: "3",
-  MS: "4",
-  MCU: "5",
-  CU: "6",
-  ECU: "7",
-  Insert: "8",
-  OTS: "9",
-  POV: "0",
+  Wide: "1",
+  Full: "2",
+  Medium: "3",
+  Close: "4",
+  "Extreme close": "5",
   Unknown: "U",
 };
 
-export type AnalysisStage = "cuts" | "framing" | "characters" | "done";
+export interface ScanOptions {
+  cuts: boolean;
+  framing: boolean;
+  cast: boolean;
+  dialogue: boolean;
+  loudness: boolean;
+  motion: boolean;
+  stems: boolean;
+}
+
+export const QUICK_ANALYSIS_PRESET: ScanOptions = {
+  cuts: true,
+  framing: true,
+  cast: true,
+  dialogue: true,
+  loudness: true,
+  motion: false,
+  stems: false,
+};
+
+export const FULL_ANALYSIS_PRESET: ScanOptions = {
+  cuts: true,
+  framing: true,
+  cast: true,
+  dialogue: true,
+  loudness: true,
+  motion: true,
+  stems: true,
+};
+
+export type AnalysisStage = "cuts" | "framing" | "characters" | "dialogue" | "loudness" | "motion" | "stems" | "done";
 
 export interface UnifiedAnalysisProgress {
   stage: AnalysisStage;
@@ -106,6 +155,14 @@ export interface UnifiedAnalysisProgress {
   previewDescription?: string;
   statusText: string;
   fullPipeline: boolean;
+  options: ScanOptions;
+}
+
+export interface BgScanStatus {
+  motionActive: boolean;
+  motionProgress: number;
+  stemsActive: boolean;
+  stemsStatusText: string;
 }
 
 export default function App() {
@@ -152,12 +209,30 @@ export default function App() {
     resetTopHeightRatio,
   } = useWorkspaceLayout(workspaceMode);
   const [inspectorDrawerOpen, setInspectorDrawerOpen] = useState(false);
+  const [studioDrawerOpen, setStudioDrawerOpen] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
   const [deckTab, setDeckTab] = useState<"rhythm" | "sequence" | "cuts" | "cast" | "color">("rhythm");
+  const [mapDeckTab, setMapDeckTab] = useState<"overview" | "rhythm" | "sequence" | "cuts" | "cast" | "color">("overview");
   const [edlRevision, setEdlRevision] = useState(0);
   const [analysisProgress, setAnalysisProgress] = useState<UnifiedAnalysisProgress | null>(null);
+  const [scanOptions, setScanOptions] = useState<ScanOptions>(QUICK_ANALYSIS_PRESET);
+  const [bgScanStatus, setBgScanStatus] = useState<BgScanStatus | null>(null);
+  const [showScanConfigModal, setShowScanConfigModal] = useState(false);
+  const dmeAbortRef = useRef<AbortController | null>(null);
+  const speechAbortRef = useRef<AbortController | null>(null);
+  const loudnessAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => { dmeAbortRef.current?.abort(); speechAbortRef.current?.abort(); loudnessAbortRef.current?.abort(); }, []);
   const [isDmeSeparating, setIsDmeSeparating] = useState(false);
   const [dmeSeparationStatus, setDmeSeparationStatus] = useState("");
+  const [isSpeechScanning, setIsSpeechScanning] = useState(false);
+  const [speechStatus, setSpeechStatus] = useState("");
+  const [showSpeechOverlay, setShowSpeechOverlay] = useState(true);
+  const [isLoudnessScanning, setIsLoudnessScanning] = useState(false);
+  const [loudnessStatus, setLoudnessStatus] = useState("");
+  const [linkedMediaSignature, setLinkedMediaSignature] = useState<string>();
   const [snapToCuts, setSnapToCuts] = useState(true);
+  const [squintMode, setSquintMode] = useState(false);
+  const [squintLevel, setSquintLevel] = useState(4);
   const detectAbortRef = useRef<AbortController | null>(null);
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [reportConfig, setReportConfig] = useState<ReportExportConfig>({
@@ -334,6 +409,8 @@ export default function App() {
     const target = from.pop();
     if (!target || !project) return;
     to.push(project);
+    dmeAbortRef.current?.abort(); speechAbortRef.current?.abort(); loudnessAbortRef.current?.abort();
+    detectAbortRef.current?.abort();
     mediaGeneration.current++;
     video.current?.pause();
     revision.current++;
@@ -475,6 +552,11 @@ export default function App() {
       if (e.ctrlKey || e.metaKey) return;
 
       if (e.key === "Escape") {
+        if (workspaceMode === "studio" && studioDrawerOpen) {
+          e.preventDefault();
+          setStudioDrawerOpen(false);
+          return;
+        }
         if (inspectorDrawerOpen) {
           e.preventDefault();
           setInspectorDrawerOpen(false);
@@ -510,16 +592,11 @@ export default function App() {
 
       const size = (
         {
-          "1": "EWS",
-          "2": "WS",
-          "3": "MWS",
-          "4": "MS",
-          "5": "MCU",
-          "6": "CU",
-          "7": "ECU",
-          "8": "Insert",
-          "9": "OTS",
-          "0": "POV",
+          "1": "Wide",
+          "2": "Full",
+          "3": "Medium",
+          "4": "Close",
+          "5": "Extreme close",
           u: "Unknown",
         } as Record<string, Shot["shotSize"]>
       )[e.key.toLowerCase()];
@@ -712,6 +789,10 @@ export default function App() {
     void v.play().catch((e) => setError(e.message));
   };
   const replace = (p: Project) => {
+    pendingFile.current = null;
+    setLinkedMediaSignature(undefined);
+    dmeAbortRef.current?.abort(); speechAbortRef.current?.abort(); loudnessAbortRef.current?.abort();
+    detectAbortRef.current?.abort();
     mediaGeneration.current++;
     scrubTarget.current = null;
     setAnalyzedFrame(null);
@@ -805,11 +886,14 @@ export default function App() {
     const expected = project?.videoMetadata;
     const mismatch = expected && (Math.abs(expected.duration - candidate.duration) > 1 / actualRate(project.frameRate) || expected.width !== candidate.width || expected.height !== candidate.height || expected.size !== file.size);
     if (mismatch && !confirm(`This file differs from the expected video.\nExpected: ${expected.filename}, ${expected.width}×${expected.height}, ${expected.duration.toFixed(2)}s, ${expected.size} bytes\nCandidate: ${file.name}, ${candidate.width}×${candidate.height}, ${candidate.duration.toFixed(2)}s, ${file.size} bytes\n\nUse this video anyway?`)) return;
+    dmeAbortRef.current?.abort(); speechAbortRef.current?.abort(); loudnessAbortRef.current?.abort();
+    detectAbortRef.current?.abort();
     mediaGeneration.current++;
     const oldUrl = url;
     scrubTarget.current = null;
     setAnalyzedFrame(null);
     pendingFile.current = file;
+    setLinkedMediaSignature(undefined);
     video.current?.pause();
     setTime(0);
     stopAt.current = null;
@@ -817,6 +901,7 @@ export default function App() {
     if (oldUrl) URL.revokeObjectURL(oldUrl);
     setWaveform([]);
     const generation = mediaGeneration.current;
+    void mediaSignature(file).then((signature) => { if (generation === mediaGeneration.current) setLinkedMediaSignature(signature); }).catch(() => undefined);
     void analyzeLocalAudio(file).then((next) => { if (generation === mediaGeneration.current) setWaveform(next); }).catch(() => {
       setMessage("Video connected. Waveform could not be decoded in this browser; manual sound spans remain available.");
     });
@@ -829,20 +914,85 @@ export default function App() {
       setError("Please connect a video file first to separate DME stems.");
       return;
     }
+    if (!project || dmeAbortRef.current) return;
+    const owner = project.id, generation = mediaGeneration.current;
+    const controller = new AbortController();
+    dmeAbortRef.current = controller;
     setIsDmeSeparating(true);
-    setDmeSeparationStatus("Starting local Demucs engine...");
+    setDmeSeparationStatus("Starting local DME engine...");
     try {
-      const dme = await separateDmeAudio(file, 1400, (msg) => {
-        setDmeSeparationStatus(msg);
-      });
-      update({ dmeWaveforms: dme });
-      setMessage("DME separation complete! Dialogue, Music, and Effects stems loaded.");
+      const dme = await separateDmeAudio(file, 1400, setDmeSeparationStatus, controller.signal);
+      if (controller.signal.aborted || generation !== mediaGeneration.current || projectRef.current?.id !== owner) return;
+      revision.current++;
+      setProject(p => p?.id === owner ? { ...p, dmeWaveforms: dme, updatedAt: new Date().toISOString() } : p);
+      setDirty(true);
+      setMessage("DME separation complete. Dialogue, Music, and Effects loaded.");
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(`DME separation error: ${msg}`);
+      if (!controller.signal.aborted && generation === mediaGeneration.current && projectRef.current?.id === owner) setError(`DME separation error: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
-      setIsDmeSeparating(false);
-      setDmeSeparationStatus("");
+      if (dmeAbortRef.current === controller) {
+        dmeAbortRef.current = null;
+        setIsDmeSeparating(false);
+        setDmeSeparationStatus("");
+      }
+    }
+  };
+
+  const handleScanSpeech = async () => {
+    const file = pendingFile.current;
+    if (!file || !project || speechAbortRef.current) { if (!file) setError("Please connect the original video file first to scan speech."); return; }
+    const owner = project.id, generation = mediaGeneration.current, controller = new AbortController();
+    speechAbortRef.current = controller; setIsSpeechScanning(true); setSpeechStatus("Preparing local speech scan…");
+    try {
+      const signature = await mediaSignature(file);
+      setLinkedMediaSignature(signature);
+      const result = await scanSpeechAudio(file, signature, (job) => {
+        const progress = Number.isFinite(job.progress) ? ` · ${Math.round((job.progress ?? 0) * 100)}%` : "";
+        const elapsed = Number.isFinite(job.elapsedSeconds) ? ` · ${(job.elapsedSeconds ?? 0).toFixed(0)}s elapsed` : "";
+        const eta = Number.isFinite(job.etaSeconds) ? ` · ~${(job.etaSeconds ?? 0).toFixed(0)}s remaining` : "";
+        setSpeechStatus(`${job.phase === "provisioning" ? "Setting up Silero VAD" : "Detecting speech activity"}${progress}${elapsed}${eta}`);
+      }, controller.signal);
+      if (controller.signal.aborted || generation !== mediaGeneration.current || projectRef.current?.id !== owner) return;
+      revision.current++; setProject((current) => current?.id === owner ? { ...current, speechAnalysis: result, updatedAt: new Date().toISOString() } : current); setDirty(true); setMessage(result.regions.length ? "Speech and pause evidence is ready." : "Speech scan complete: no speech detected.");
+    } catch (cause) {
+      if (!controller.signal.aborted && generation === mediaGeneration.current && projectRef.current?.id === owner) setError(`Speech scan error: ${cause instanceof Error ? cause.message : String(cause)}`);
+    } finally { if (speechAbortRef.current === controller) { speechAbortRef.current = null; setIsSpeechScanning(false); setSpeechStatus(""); } }
+  };
+
+  const handleScanLoudness = async () => {
+    const file = pendingFile.current;
+    if (!file || !project || loudnessAbortRef.current) {
+      if (!file) setError("Please connect the original video file first to scan loudness.");
+      return;
+    }
+    const owner = project.id, generation = mediaGeneration.current, controller = new AbortController();
+    loudnessAbortRef.current = controller;
+    setIsLoudnessScanning(true);
+    setLoudnessStatus("Preparing EBU R128 loudness scan…");
+    try {
+      const signature = linkedMediaSignature || (await mediaSignature(file));
+      setLinkedMediaSignature(signature);
+      const result = await scanLoudnessAudio(file, signature, (job) => {
+        const progress = Number.isFinite(job.progress) ? ` · ${Math.round((job.progress ?? 0) * 100)}%` : "";
+        const elapsed = Number.isFinite(job.elapsedSeconds) ? ` · ${(job.elapsedSeconds ?? 0).toFixed(0)}s elapsed` : "";
+        const eta = Number.isFinite(job.etaSeconds) ? ` · ~${(job.etaSeconds ?? 0).toFixed(0)}s remaining` : "";
+        setLoudnessStatus(`Measuring EBU R128 loudness${progress}${elapsed}${eta}`);
+      }, controller.signal);
+      if (controller.signal.aborted || generation !== mediaGeneration.current || projectRef.current?.id !== owner) return;
+      revision.current++;
+      setProject((current) => current?.id === owner ? { ...current, loudnessAnalysis: result, updatedAt: new Date().toISOString() } : current);
+      setDirty(true);
+      setMessage(`EBU R128 loudness analysis ready: I = ${result.integratedLoudness.toFixed(1)} LUFS, LRA = ${result.loudnessRange.toFixed(1)} LU.`);
+    } catch (cause) {
+      if (!controller.signal.aborted && generation === mediaGeneration.current && projectRef.current?.id === owner) {
+        setError(`Loudness scan error: ${cause instanceof Error ? cause.message : String(cause)}`);
+      }
+    } finally {
+      if (loudnessAbortRef.current === controller) {
+        loudnessAbortRef.current = null;
+        setIsLoudnessScanning(false);
+        setLoudnessStatus("");
+      }
     }
   };
 
@@ -852,6 +1002,7 @@ export default function App() {
       const result = parseEDL(edl.text, fps, origin || undefined);
       const replacing = project.shots.length > 0;
       if (replacing && !confirm(`Replace the current ${project.shots.length}-shot timeline with ${result.shots.length} shots? This is undoable. Only annotations on exact source/timing matches are retained.`)) return;
+      detectAbortRef.current?.abort();
       const oldByIdentity = new Map(project.shots.map((s) => [`${s.sourceReel}|${s.sourceIn}|${s.sourceOut}|${s.startTimecode}|${s.endTimecode}`, s]));
       const oldToNew = new Map<string, string>();
       const matchedShots = result.shots.map((candidate) => {
@@ -893,63 +1044,107 @@ export default function App() {
       setError((e as Error).message);
     }
   };
-  const startUnifiedAnalysis = async (videoUrl = url, fullPipeline = true) => {
-    if (!project || !videoUrl) return;
+  const startUnifiedAnalysis = async (videoUrl = url, options: ScanOptions = scanOptions) => {
+    if (!project || !videoUrl || detectAbortRef.current) return;
     const abort = new AbortController();
+    const owner = project.id;
+    let sampler: Awaited<ReturnType<typeof createFrameSampler>> | undefined;
     detectAbortRef.current = abort;
 
     const totalDur = project.duration || video.current?.duration || 1;
+    let workingShots: Shot[] = [...project.shots];
+
+    // Identify active foreground stages for smooth progress calculation
+    const activeForegroundStages: AnalysisStage[] = [
+      options.cuts ? "cuts" : null,
+      options.framing ? "framing" : null,
+      options.cast ? "characters" : null,
+      options.dialogue ? "dialogue" : null,
+      options.loudness ? "loudness" : null,
+    ].filter(Boolean) as AnalysisStage[];
+
+    const stageWeights: Record<AnalysisStage, number> = {
+      cuts: 20,
+      framing: 35,
+      characters: 25,
+      dialogue: 10,
+      loudness: 10,
+      motion: 0,
+      stems: 0,
+      done: 0,
+    };
+
+    const calcOverallProgress = (stage: AnalysisStage, subPercent: number) => {
+      let totalW = 0;
+      for (const s of activeForegroundStages) totalW += stageWeights[s];
+      if (totalW === 0) return 100;
+
+      let doneW = 0;
+      for (const s of activeForegroundStages) {
+        if (s === stage) {
+          doneW += (stageWeights[s] * Math.min(100, Math.max(0, subPercent))) / 100;
+          break;
+        }
+        doneW += stageWeights[s];
+      }
+      return Math.round((doneW / totalW) * 100);
+    };
+
+    const initialStage = activeForegroundStages[0] || "done";
+
     setAnalysisProgress({
-      stage: "cuts",
+      stage: initialStage,
       overallPercent: 0,
-      cutsFound: 0,
+      cutsFound: workingShots.length,
       currentTime: 0,
       totalDuration: totalDur,
       framingDone: 0,
-      framingTotal: 0,
+      framingTotal: workingShots.length,
       facesFound: 0,
-      statusText: "Detecting scene cuts...",
-      fullPipeline,
+      statusText: options.cuts ? "Detecting scene cuts..." : "Preparing unified analysis...",
+      fullPipeline: true,
+      options,
     });
 
     try {
       // -------------------------------------------------------------
       // STAGE 1: CUT DETECTION
       // -------------------------------------------------------------
-      const detectedShots = await detectVideoShots(videoUrl, {
-        fps: project.frameRate || 24,
-        dropFrame: project.dropFrame,
-        signal: abort.signal,
-        onProgress: (p) => {
-          setAnalysisProgress((prev) => prev ? {
-            ...prev,
-            cutsFound: p.shotsCount,
-            currentTime: p.currentTime,
-            overallPercent: fullPipeline ? Math.round(p.percent * 0.3) : Math.round(p.percent),
-            statusText: `Scanning cuts · ${p.shotsCount} shots found (${Math.round(p.percent)}%)`,
-          } : prev);
-        },
-      });
+      if (options.cuts) {
+        const detectedShots = await detectVideoShots(videoUrl, {
+          fps: project.frameRate || 24,
+          dropFrame: project.dropFrame,
+          signal: abort.signal,
+          onProgress: (p) => {
+            setAnalysisProgress((prev) => prev ? {
+              ...prev,
+              cutsFound: p.shotsCount,
+              currentTime: p.currentTime,
+              overallPercent: calcOverallProgress("cuts", p.percent),
+              statusText: `Scanning cuts · ${p.shotsCount} shots found (${Math.round(p.percent)}%)`,
+            } : prev);
+          },
+        });
 
-      if (abort.signal.aborted) return;
-      if (detectedShots.length === 0) {
-        setMessage("No cuts detected. Ensure the video plays properly.");
-        return;
-      }
+        if (abort.signal.aborted) return;
+        if (detectedShots.length === 0) {
+          setMessage("No cuts detected. Ensure the video plays properly.");
+          return;
+        }
 
-      const maxDur = Math.max(
-        ...detectedShots.map((s) => s.endSeconds),
-        project.duration,
-        project.videoMetadata?.duration || 0,
-      );
+        workingShots = detectedShots;
+        const maxDur = Math.max(
+          ...workingShots.map((s) => s.endSeconds),
+          project.duration,
+          project.videoMetadata?.duration || 0,
+        );
 
-      // If user chose ONLY cut detection, finish here
-      if (!fullPipeline) {
+        // Immediate progressive render on timeline!
         recordHistory(project);
         revision.current++;
-        setProject((curr) => curr ? {
+        setProject((curr) => curr?.id === owner ? {
           ...curr,
-          shots: detectedShots,
+          shots: workingShots,
           duration: maxDur,
           updatedAt: new Date().toISOString(),
         } : curr);
@@ -958,157 +1153,286 @@ export default function App() {
         setSelected(undefined);
         setSelectedCut(undefined);
         setSelectedRange(undefined);
-        seek(0);
-        setError("");
-        setMessage(`Auto-detected ${detectedShots.length} shots across the film.`);
+      }
+
+      if (workingShots.length === 0) {
+        setError("No shots available to analyze. Please run cut detection or import an EDL first.");
         return;
       }
 
       // -------------------------------------------------------------
-      // STAGE 2: FRAMING & PEOPLE SCAN
+      // STAGE 2: FRAMING & SHOT SIZES
       // -------------------------------------------------------------
-      setAnalysisProgress((prev) => prev ? {
-        ...prev,
-        stage: "framing",
-        cutsFound: detectedShots.length,
-        framingDone: 0,
-        framingTotal: detectedShots.length,
-        overallPercent: 30,
-        statusText: `Analyzing framing across ${detectedShots.length} shots...`,
-      } : prev);
+      if (options.framing && !abort.signal.aborted) {
+        setAnalysisProgress((prev) => prev ? {
+          ...prev,
+          stage: "framing",
+          cutsFound: workingShots.length,
+          framingDone: 0,
+          framingTotal: workingShots.length,
+          overallPercent: calcOverallProgress("framing", 0),
+          statusText: `Analyzing framing across ${workingShots.length} shots...`,
+        } : prev);
 
-      const sampler = await createFrameSampler(videoUrl, abort.signal);
-      let updatedShots = [...detectedShots];
+        sampler = await createFrameSampler(videoUrl, abort.signal);
+        let updatedShots = [...workingShots];
 
-      for (let i = 0; i < detectedShots.length; i++) {
-        if (abort.signal.aborted) break;
-        const currentShot = detectedShots[i];
-        const midpointTime = (currentShot.startSeconds + currentShot.endSeconds) / 2;
-
-        try {
-          const image = await sampler.sample(midpointTime);
+        for (let i = 0; i < workingShots.length; i++) {
           if (abort.signal.aborted) break;
+          const currentShot = workingShots[i];
+          try {
+            const samples = await sampleShotFrames(sampler, currentShot.startSeconds, currentShot.endSeconds);
+            if (abort.signal.aborted) break;
 
-          const tags = await analyzeFrame(image, abort.signal);
-          if (abort.signal.aborted) break;
+            const tags = await analyzeFrames(samples.images, AbortSignal.any([abort.signal, AbortSignal.timeout(120000)]));
+            if (abort.signal.aborted) break;
 
-          updatedShots[i] = {
-            ...currentShot,
-            ...tags,
-            reviewStatus: "Needs review",
-          };
+            updatedShots[i] = {
+              ...currentShot,
+              ...tags,
+              reviewStatus: "Needs review",
+            };
 
-          const framingPercent = Math.round(((i + 1) / detectedShots.length) * 100);
-          const overallP = 30 + Math.round((framingPercent * 0.35));
+            applyShotPatch(owner, currentShot.id, { ...tags, reviewStatus: "Needs review", suggestion: { ...tags, model: tags.model ?? MODEL, createdAt: new Date().toISOString() }, analysisFailures: undefined });
+            const framingPercent = Math.round(((i + 1) / workingShots.length) * 100);
 
-          setAnalysisProgress((prev) => prev ? {
-            ...prev,
-            framingDone: i + 1,
-            overallPercent: overallP,
-            previewImage: image,
-            previewDescription: `Shot ${i + 1}: ${tags.shotSize} · ${tags.composition}`,
-            statusText: `Analyzing framing · ${i + 1} of ${detectedShots.length} shots (${framingPercent}%)`,
-          } : prev);
-        } catch (e) {
-          if (abort.signal.aborted) break;
-          console.warn(`Framing scan failed for shot ${i + 1}:`, e);
+            setAnalysisProgress((prev) => prev ? {
+              ...prev,
+              framingDone: i + 1,
+              overallPercent: calcOverallProgress("framing", framingPercent),
+              previewImage: samples.previewImage,
+              previewDescription: `Shot ${i + 1}: ${tags.shotSize} · ${tags.composition}`,
+              statusText: `Analyzing framing · ${i + 1} of ${workingShots.length} shots (${framingPercent}%)`,
+            } : prev);
+          } catch (e) {
+            if (abort.signal.aborted) break;
+            const failure = { framing: { message: e instanceof Error ? e.message : "Framing failed", createdAt: new Date().toISOString() } };
+            updatedShots[i] = { ...currentShot, analysisFailures: failure };
+            applyShotPatch(owner, currentShot.id, { analysisFailures: failure });
+          }
         }
+        workingShots = updatedShots;
       }
 
       if (abort.signal.aborted) {
-        sampler.dispose();
+        sampler?.dispose();
         return;
       }
 
       // -------------------------------------------------------------
       // STAGE 3: CHARACTER DISCOVERY & CLUSTERING
       // -------------------------------------------------------------
-      const peopleShots = updatedShots.filter(isEligibleForCharacterScan);
-      setAnalysisProgress((prev) => prev ? {
-        ...prev,
-        stage: "characters",
-        overallPercent: 65,
-        statusText: `Discovering characters across ${peopleShots.length} shots with people...`,
-      } : prev);
-
       let newCast: CastMember[] = [];
       let newAnalyses = new Map<string, CharacterAnalysis>();
 
-      if (peopleShots.length > 0) {
-        const autoResult = await discoverCharactersAcrossShots(
-          updatedShots,
-          sampler,
-          abort.signal,
-          {
-            similarityThreshold: 0.50,
-            minAppearances: 1,
-            onProgress: (p) => {
-              const charPercent = Math.round((p.completedShots / p.totalShots) * 100);
-              const overallP = 65 + Math.round((charPercent * 0.35));
-              setAnalysisProgress((prev) => prev ? {
-                ...prev,
-                overallPercent: Math.min(99, overallP),
-                facesFound: p.facesFound,
-                statusText: p.stage === "sampling"
-                  ? `Scanning faces · ${p.completedShots}/${p.totalShots} shots (${p.facesFound} faces found)`
-                  : `Clustering ${p.facesFound} faces into characters...`,
-              } : prev);
-            },
-            onFrame: (shot, time, img) => {
-              setAnalysisProgress((prev) => prev ? {
-                ...prev,
-                previewImage: img,
-                previewDescription: `Shot ${shot.index} (${formatTimecode(time, project.frameRate, project.dropFrame)}): detecting cast`,
-              } : prev);
-            },
+      if (options.cast && !abort.signal.aborted) {
+        if (!sampler) sampler = await createFrameSampler(videoUrl, abort.signal);
+        const peopleShots = workingShots.filter(isEligibleForCharacterScan);
+        setAnalysisProgress((prev) => prev ? {
+          ...prev,
+          stage: "characters",
+          overallPercent: calcOverallProgress("characters", 0),
+          statusText: `Discovering characters across ${peopleShots.length} shots with people...`,
+        } : prev);
+
+        if (peopleShots.length > 0) {
+          try {
+            const autoResult = await discoverCharactersAcrossShots(
+              workingShots,
+              sampler,
+              abort.signal,
+              {
+                existingCast: projectRef.current?.cast ?? [],
+                onCheckpoint: (id, analysis) => applyShotPatch(owner, id, { characterAnalysis: analysis }),
+                minAppearances: 1,
+                onProgress: (p) => {
+                  const charPercent = Math.round((p.completedShots / p.totalShots) * 100);
+                  setAnalysisProgress((prev) => prev ? {
+                    ...prev,
+                    overallPercent: calcOverallProgress("characters", charPercent),
+                    facesFound: p.facesFound,
+                    statusText: p.stage === "sampling"
+                      ? `Scanning faces · ${p.completedShots}/${p.totalShots} shots (${p.facesFound} faces found)`
+                      : `Clustering ${p.facesFound} faces into characters...`,
+                  } : prev);
+                },
+                onFrame: (shot, time, img) => {
+                  setAnalysisProgress((prev) => prev ? {
+                    ...prev,
+                    previewImage: img,
+                    previewDescription: `Shot ${shot.index} (${formatTimecode(time, project.frameRate, project.dropFrame)}): detecting cast`,
+                  } : prev);
+                },
+              }
+            );
+
+            if (!abort.signal.aborted) {
+              newCast = autoResult.cast;
+              newAnalyses = autoResult.shotAnalyses;
+              revision.current++;
+              setProject((curr) => curr?.id === owner ? {
+                ...curr,
+                shots: curr.shots.map(s => {
+                  const analysis = newAnalyses.get(s.id);
+                  return !analysis || s.characterAnalysis?.reviewStatus === "Confirmed" || s.characterAnalysis?.manualReviewStatus === "Confirmed" ? s : { ...s, characterAnalysis: analysis };
+                }),
+                cast: mergeDiscoveredCast(curr.cast ?? [], newCast),
+                updatedAt: new Date().toISOString(),
+              } : curr);
+            }
+          } catch (e) {
+            if (!abort.signal.aborted) console.warn("Character scan error:", e);
           }
-        );
-
-        if (abort.signal.aborted) {
-          sampler.dispose();
-          return;
         }
-
-        newCast = autoResult.cast;
-        newAnalyses = autoResult.shotAnalyses;
       }
 
-      sampler.dispose();
+      sampler?.dispose();
+      sampler = undefined;
 
-      // Final Assembly & Commit
-      const finalShots = updatedShots.map((s) => {
-        const charAnalysis = newAnalyses.get(s.id);
-        return charAnalysis ? { ...s, characterAnalysis: charAnalysis } : s;
-      });
+      // -------------------------------------------------------------
+      // STAGE 4: DIALOGUE SPEECH SCAN
+      // -------------------------------------------------------------
+      const file = pendingFile.current;
+      if (options.dialogue && file && !abort.signal.aborted) {
+        setAnalysisProgress((prev) => prev ? {
+          ...prev,
+          stage: "dialogue",
+          overallPercent: calcOverallProgress("dialogue", 0),
+          statusText: "Preparing speech VAD scan...",
+        } : prev);
 
-      recordHistory(project);
-      revision.current++;
-      setProject((curr) => curr ? {
-        ...curr,
-        shots: finalShots,
-        cast: newCast.length > 0 ? newCast : curr.cast,
-        duration: maxDur,
-        updatedAt: new Date().toISOString(),
-      } : curr);
+        try {
+          const signature = linkedMediaSignature || (await mediaSignature(file));
+          setLinkedMediaSignature(signature);
+
+          const speechResult = await scanSpeechAudio(file, signature, (job) => {
+            const progress = Number.isFinite(job.progress) ? Math.round((job.progress ?? 0) * 100) : 0;
+            setAnalysisProgress((prev) => prev ? {
+              ...prev,
+              overallPercent: calcOverallProgress("dialogue", progress),
+              statusText: `Scanning speech VAD · ${progress}%`,
+            } : prev);
+          }, abort.signal);
+
+          if (!abort.signal.aborted && projectRef.current?.id === owner) {
+            revision.current++;
+            setProject((curr) => curr?.id === owner ? { ...curr, speechAnalysis: speechResult, updatedAt: new Date().toISOString() } : curr);
+          }
+        } catch (err) {
+          if (!abort.signal.aborted) console.warn("Speech scan skipped or failed:", err);
+        }
+      }
+
+      // -------------------------------------------------------------
+      // STAGE 5: LOUDNESS SCAN
+      // -------------------------------------------------------------
+      if (options.loudness && file && !abort.signal.aborted) {
+        setAnalysisProgress((prev) => prev ? {
+          ...prev,
+          stage: "loudness",
+          overallPercent: calcOverallProgress("loudness", 0),
+          statusText: "Preparing EBU R128 loudness scan...",
+        } : prev);
+
+        try {
+          const signature = linkedMediaSignature || (await mediaSignature(file));
+          setLinkedMediaSignature(signature);
+
+          const loudnessResult = await scanLoudnessAudio(file, signature, (job) => {
+            const progress = Number.isFinite(job.progress) ? Math.round((job.progress ?? 0) * 100) : 0;
+            setAnalysisProgress((prev) => prev ? {
+              ...prev,
+              overallPercent: calcOverallProgress("loudness", progress),
+              statusText: `Measuring EBU R128 loudness · ${progress}%`,
+            } : prev);
+          }, abort.signal);
+
+          if (!abort.signal.aborted && projectRef.current?.id === owner) {
+            revision.current++;
+            setProject((curr) => curr?.id === owner ? { ...curr, loudnessAnalysis: loudnessResult, updatedAt: new Date().toISOString() } : curr);
+          }
+        } catch (err) {
+          if (!abort.signal.aborted) console.warn("Loudness scan skipped or failed:", err);
+        }
+      }
+
+      // Complete foreground modal overlay
+      setAnalysisProgress(null);
+
+      // -------------------------------------------------------------
+      // STAGE 6 & 7: ASYNCHRONOUS BACKGROUND SCANS (MOTION & STEMS)
+      // -------------------------------------------------------------
+      if ((options.motion || options.stems) && !abort.signal.aborted) {
+        setBgScanStatus({
+          motionActive: options.motion,
+          motionProgress: 0,
+          stemsActive: options.stems,
+          stemsStatusText: options.stems ? "Preparing DME stem separation..." : "",
+        });
+
+        void (async () => {
+          // Stage 6: Motion energy scanning in background
+          if (options.motion && !abort.signal.aborted) {
+            try {
+              const shotsToScan = projectRef.current?.shots || workingShots;
+              let currentShots = [...shotsToScan];
+              for (let i = 0; i < currentShots.length; i++) {
+                if (abort.signal.aborted) break;
+                const shot = currentShots[i];
+                if (!shot.motionProfile) {
+                  try {
+                    const profile = await analyzeShotMotion(videoUrl, shot, abort.signal);
+                    if (abort.signal.aborted) break;
+                    currentShots[i] = {
+                      ...shot,
+                      motionProfile: profile,
+                      cameraMovement: shot.cameraMovement ?? profile.cameraMovement,
+                    };
+                    applyShotPatch(owner, shot.id, {
+                      motionProfile: profile,
+                      cameraMovement: shot.cameraMovement ?? profile.cameraMovement,
+                    });
+                  } catch {
+                    // Continue to next shot
+                  }
+                }
+                const p = Math.round(((i + 1) / currentShots.length) * 100);
+                setBgScanStatus((prev) => prev ? { ...prev, motionProgress: p } : null);
+              }
+            } catch (e) {
+              console.warn("Background motion scan error:", e);
+            }
+            setBgScanStatus((prev) => prev ? { ...prev, motionActive: false } : null);
+          }
+
+          // Stage 7: DME Stems separation in background
+          if (options.stems && file && !abort.signal.aborted) {
+            try {
+              const dme = await separateDmeAudio(
+                file,
+                1400,
+                (statusStr) => setBgScanStatus((prev) => prev ? { ...prev, stemsStatusText: statusStr } : null),
+                abort.signal
+              );
+              if (!abort.signal.aborted && projectRef.current?.id === owner) {
+                revision.current++;
+                setProject((p) => p?.id === owner ? { ...p, dmeWaveforms: dme, updatedAt: new Date().toISOString() } : p);
+                setDirty(true);
+              }
+            } catch (e) {
+              console.warn("Background DME separation error:", e);
+            }
+            setBgScanStatus((prev) => prev ? { ...prev, stemsActive: false } : null);
+          }
+
+          setBgScanStatus(null);
+        })();
+      }
 
       setEdlRevision((rev) => rev + 1);
       setDirty(true);
-      setSelected(undefined);
-      setSelectedCut(undefined);
-      setSelectedRange(undefined);
-      setDeckTab("cast"); // Automatically open Cast gallery
-      seek(0);
-      setError("");
-
-      setAnalysisProgress((prev) => prev ? {
-        ...prev,
-        stage: "done",
-        overallPercent: 100,
-        statusText: `Complete! ${finalShots.length} shots analyzed, ${newCast.length} characters discovered.`,
-      } : prev);
-
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-      setMessage(`Analysis complete: ${finalShots.length} shots tagged, ${newCast.length} characters ready for renaming in the Cast Gallery.`);
+      if (options.cast) setDeckTab("cast");
+      setMessage("Multi-scan analysis sequence completed.");
 
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
@@ -1117,11 +1441,16 @@ export default function App() {
         setError(err instanceof Error ? err.message : "Analysis failed.");
       }
     } finally {
-      setAnalysisProgress(null);
-      detectAbortRef.current = null;
+      sampler?.dispose();
+      if (detectAbortRef.current === abort) {
+        setAnalysisProgress(null);
+        detectAbortRef.current = null;
+      }
     }
   };
-  const startSceneDetection = (videoUrl = url) => startUnifiedAnalysis(videoUrl, false);
+
+  const startSceneDetection = (videoUrl = url) =>
+    startUnifiedAnalysis(videoUrl, { ...QUICK_ANALYSIS_PRESET, framing: false, cast: false, dialogue: false, loudness: false });
   const applyShotPatch = (projectId: string, shotId: string, patch: Partial<Shot>, human = false) => {
     if (human) recordHistory(project);
     revision.current++;
@@ -1133,7 +1462,7 @@ export default function App() {
         shots: currentProject.shots.map((item) => {
           if (item.id !== shotId) return item;
           const protectedFields = human
-            ? [...new Set([...(item.protectedFields ?? []), ...(["shotSize", "composition", "content", "uncertain", "notes"] as const).filter((field) => field in patch)])]
+            ? [...new Set([...(item.protectedFields ?? []), ...(["shotSize", "composition", "content", "uncertain", "notes", "cameraMovement"] as const).filter((field) => field in patch)])]
             : item.protectedFields;
           const isConfirmed = item.reviewStatus === "Confirmed";
           const safePatch = human
@@ -1161,17 +1490,18 @@ export default function App() {
     update({ cast: [...(project.cast ?? []), { id: crypto.randomUUID(), name, references: [] }] });
   };
   const addCastReference = async (memberId: string) => {
-    if (!project || !shot || !url) return;
+    const targetShot = shot ?? current;
+    if (!project || !targetShot || !url) return;
     try {
-      const time = (shot.startSeconds + shot.endSeconds) / 2;
+      const time = (targetShot.startSeconds + targetShot.endSeconds) / 2;
       const image = await sampleFrame(url, time, new AbortController().signal);
       recordHistory(project);
       setProject((currentProject) => currentProject && currentProject.id === project.id ? {
         ...currentProject, updatedAt: new Date().toISOString(),
-        cast: (currentProject.cast ?? []).map((member) => member.id === memberId ? { ...member, references: [...member.references, { id: crypto.randomUUID(), image, shotId: shot.id, time }] } : member),
+        cast: (currentProject.cast ?? []).map((member) => member.id === memberId ? { ...member, references: [...member.references, { id: crypto.randomUUID(), image, shotId: targetShot.id, time }] } : member),
       } : currentProject);
       setDirty(true);
-      previewAnalysis(shot, time, image);
+      previewAnalysis(targetShot, time, image);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not save this reference frame.");
     }
@@ -1231,7 +1561,25 @@ export default function App() {
   };
   const removeCharacterAppearance = (shotId: string, memberId: string) => {
     if (!project) return;
-    update({ shots: project.shots.map((item) => item.id === shotId && item.characterAnalysis ? { ...item, characterAnalysis: { ...item.characterAnalysis, reviewStatus: "Confirmed", intervals: item.characterAnalysis.intervals.filter((interval) => interval.memberId !== memberId) } } : item) });
+    update({
+      shots: project.shots.map((item) =>
+        item.id === shotId && item.characterAnalysis
+          ? {
+              ...item,
+              characterAnalysis: {
+                ...item.characterAnalysis,
+                reviewStatus: "Confirmed",
+                intervals: item.characterAnalysis.intervals.filter(
+                  (interval) => interval.memberId !== memberId
+                ),
+                manualMemberIds: item.characterAnalysis.manualMemberIds?.filter(
+                  (id) => id !== memberId
+                ),
+              },
+            }
+          : item
+      ),
+    });
   };
   const reviewCharactersInShot = (shotId: string, memberIds: string[]) => {
     if (!project) return;
@@ -1246,44 +1594,47 @@ export default function App() {
   };
   return (
     <div className="app">
-      <ProjectHeader
-        project={project}
-        dirty={dirty}
-        saveState={saveState}
-        historyState={historyState}
-        workspaceMode={workspaceMode}
-        onModeChange={setWorkspaceMode}
-        onNew={() => {
-          if (
-            !dirty ||
-            confirm("Discard unsaved changes and create a project?")
-          )
-            replace(newProject());
-        }}
-        onOpen={() => void open()}
-        onSave={() => void save()}
-        onUndo={() => restoreHistory("undo")}
-        onRedo={() => restoreHistory("redo")}
-        onImportVideo={openVideoPicker}
-        onImportEdl={() => edlInput.current?.click()}
-        onImportProject={() => backupInput.current?.click()}
-        onExportProject={exportProject}
-        onExportPDF={() => setReportModalOpen(true)}
-        onAnalyze={() => {
-          if (!project || !url) return;
-          if (
-            !project.shots.length ||
-            confirm(
-              `Re-analyze film? This will replace the existing ${project.shots.length} shots.`,
+      {project && (
+        <ProjectHeader
+          project={project}
+          dirty={dirty}
+          saveState={saveState}
+          historyState={historyState}
+          workspaceMode={workspaceMode}
+          onModeChange={setWorkspaceMode}
+          onHome={() => {
+            if (!dirty || confirm("Return to home screen? Unsaved changes will be lost.")) {
+              setProject(null);
+            }
+          }}
+          onNew={() => {
+            if (
+              !dirty ||
+              confirm("Discard unsaved changes and create a project?")
             )
-          ) {
-            void startUnifiedAnalysis(url, true);
-          }
-        }}
-        isAnalyzing={Boolean(analysisProgress)}
-        hasVideo={Boolean(url)}
-        onProjectNameChange={(name) => update({ name })}
-      />
+              replace(newProject());
+          }}
+          onOpen={() => void open()}
+          onSave={() => void save()}
+          onUndo={() => restoreHistory("undo")}
+          onRedo={() => restoreHistory("redo")}
+          onImportVideo={openVideoPicker}
+          onImportEdl={() => edlInput.current?.click()}
+          onImportProject={() => backupInput.current?.click()}
+          onExportProject={exportProject}
+          onExportPDF={() => setReportModalOpen(true)}
+          onAnalyze={() => {
+            if (!project || !url) return;
+            if (project.shots.length > 0) {
+              setScanOptions(prev => ({ ...prev, cuts: false }));
+            }
+            setShowScanConfigModal(true);
+          }}
+          isAnalyzing={Boolean(analysisProgress)}
+          hasVideo={Boolean(url)}
+          onProjectNameChange={(name) => update({ name })}
+        />
+      )}
       <input
         hidden
         ref={videoInput}
@@ -1374,15 +1725,21 @@ export default function App() {
         </div>
       )}
       {!project ? (
-        <main className="start">
-          <div className="start-mark">▥</div>
-          <h1>EDITMAP</h1>
-          <p>SEE THE STRUCTURE OF EDITING.</p>
-          <button className="primary" onClick={() => replace(newProject())}>
-            New project
-          </button>
-          <small>Film → Automatic Scene Detection & Editing Map</small>
-        </main>
+        <WelcomeScreen
+          onNewProject={() => {
+            if (!dirty || confirm("Discard unsaved changes and create a project?")) {
+              replace(newProject());
+            }
+          }}
+          onOpenProject={() => {
+            backupInput.current?.click();
+          }}
+          onSelectProject={(p) => {
+            if (!dirty || confirm("Discard unsaved changes and open this project?")) {
+              replace(p);
+            }
+          }}
+        />
       ) : (
         <main
           ref={workspaceRef}
@@ -1393,126 +1750,226 @@ export default function App() {
           } as React.CSSProperties}
         >
           {project.shots.length === 0 && url && !analysisProgress && (
-            <section className="import-panel panel scene-detect-prompt">
-              <div>
-                <b>Film connected: {project.videoMetadata?.filename || "Video ready"}</b>
-                <small>
-                  Timeline has no shots yet. Analyze the film automatically (Cuts → Framing → Character Discovery), or import an EDL file.
-                </small>
-              </div>
-              <div className="import-actions">
-                <button className="primary primary-hero" onClick={() => void startUnifiedAnalysis(url, true)}>
-                  ✨ Analyze Film (Cuts + Framing + Cast)
-                </button>
-                <button onClick={() => void startUnifiedAnalysis(url, false)}>
-                  Only detect cuts
-                </button>
-                <button onClick={() => edlInput.current?.click()}>
-                  Import EDL
-                </button>
-              </div>
-            </section>
+            <div className="scene-detect-modal unified-analysis-modal">
+              <section className="modal panel scene-detect-prompt unified-scan-panel" style={{ width: 660, maxWidth: "94vw" }}>
+                <div className="unified-scan-header">
+                  <b>Film connected: {project.videoMetadata?.filename || "Video ready"}</b>
+                  <small>Select an analysis preset or customize individual scan steps for this film.</small>
+                </div>
+
+                <div className="preset-selector-row">
+                  <button
+                    type="button"
+                    className={`preset-btn ${
+                      scanOptions.cuts && scanOptions.framing && scanOptions.cast && scanOptions.dialogue && scanOptions.loudness && !scanOptions.motion && !scanOptions.stems
+                        ? "active"
+                        : ""
+                    }`}
+                    onClick={() => setScanOptions(QUICK_ANALYSIS_PRESET)}
+                  >
+                    ⚡ Quick Analysis (Recommended)
+                    <small>Cuts + Framing + Cast + Dialogue + Loudness (~1-2 min)</small>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`preset-btn ${
+                      scanOptions.cuts && scanOptions.framing && scanOptions.cast && scanOptions.dialogue && scanOptions.loudness && scanOptions.motion && scanOptions.stems
+                        ? "active"
+                        : ""
+                    }`}
+                    onClick={() => setScanOptions(FULL_ANALYSIS_PRESET)}
+                  >
+                    🔬 Full Deep Analysis
+                    <small>Adds Motion Energy Arc + DME Stems Separation</small>
+                  </button>
+                </div>
+
+                <div className="custom-toggle-grid">
+                  <label className="toggle-item">
+                    <input
+                      type="checkbox"
+                      checked={scanOptions.cuts}
+                      disabled={project.shots.length > 0}
+                      onChange={(e) => setScanOptions((prev) => ({ ...prev, cuts: e.target.checked }))}
+                    />
+                    <div className="toggle-item-info">
+                      <span>Cuts</span>
+                      <small>Scene cut detection</small>
+                    </div>
+                  </label>
+                  <label className="toggle-item">
+                    <input
+                      type="checkbox"
+                      checked={scanOptions.framing}
+                      onChange={(e) => setScanOptions((prev) => ({ ...prev, framing: e.target.checked }))}
+                    />
+                    <div className="toggle-item-info">
+                      <span>Framing</span>
+                      <small>Shot sizes & composition</small>
+                    </div>
+                  </label>
+                  <label className="toggle-item">
+                    <input
+                      type="checkbox"
+                      checked={scanOptions.cast}
+                      onChange={(e) => setScanOptions((prev) => ({ ...prev, cast: e.target.checked }))}
+                    />
+                    <div className="toggle-item-info">
+                      <span>Cast</span>
+                      <small>Face clustering & characters</small>
+                    </div>
+                  </label>
+                  <label className="toggle-item">
+                    <input
+                      type="checkbox"
+                      checked={scanOptions.dialogue}
+                      onChange={(e) => setScanOptions((prev) => ({ ...prev, dialogue: e.target.checked }))}
+                    />
+                    <div className="toggle-item-info">
+                      <span>Dialogue</span>
+                      <small>Speech & pause detection</small>
+                    </div>
+                  </label>
+                  <label className="toggle-item">
+                    <input
+                      type="checkbox"
+                      checked={scanOptions.loudness}
+                      onChange={(e) => setScanOptions((prev) => ({ ...prev, loudness: e.target.checked }))}
+                    />
+                    <div className="toggle-item-info">
+                      <span>Loudness</span>
+                      <small>EBU R128 dynamics</small>
+                    </div>
+                  </label>
+                  <label className="toggle-item">
+                    <input
+                      type="checkbox"
+                      checked={scanOptions.motion}
+                      onChange={(e) => setScanOptions((prev) => ({ ...prev, motion: e.target.checked }))}
+                    />
+                    <div className="toggle-item-info">
+                      <span>Motion</span>
+                      <small>Camera & actor movement</small>
+                    </div>
+                  </label>
+                  <label className="toggle-item">
+                    <input
+                      type="checkbox"
+                      checked={scanOptions.stems}
+                      onChange={(e) => setScanOptions((prev) => ({ ...prev, stems: e.target.checked }))}
+                    />
+                    <div className="toggle-item-info">
+                      <span>Stems</span>
+                      <small>Dialogue/Music/Effects</small>
+                    </div>
+                  </label>
+                </div>
+
+                <div className="import-actions">
+                  <button
+                    className="primary primary-hero"
+                    onClick={() => void startUnifiedAnalysis(url, scanOptions)}
+                    disabled={!Object.values(scanOptions).some(Boolean)}
+                  >
+                    ✨ Start Analysis
+                  </button>
+                  <button onClick={() => edlInput.current?.click()}>
+                    Import EDL
+                  </button>
+                </div>
+              </section>
+            </div>
           )}
           {edl && (
-            <section className="import-panel panel">
-              <div>
-                <b>{edl.name}</b>
-                <small>
-                  Confirm timebase before importing. Video events use record
-                  in/out.
-                </small>
-                {project.shots.length > 0 && <small>Replacing {project.shots.length} existing shots. Exact source/timing matches retain their annotations; other timeline-bound annotations are removed.</small>}
-              </div>
-              <label>
-                Frame rate
-                <select
-                  value={fps}
-                  onChange={(e) => setFps(Number(e.target.value))}
-                >
-                  {rates.map((r) => (
-                    <option key={r}>{r}</option>
-                  ))}
-                </select>
-              </label>
-              <details className="import-advanced">
-                <summary>Advanced</summary>
+            <div className="scene-detect-modal">
+              <section className="modal panel import-panel" style={{ width: 500, maxWidth: "92vw" }}>
+                <div>
+                  <b>{edl.name}</b>
+                  <small>
+                    Confirm timebase before importing. Video events use record
+                    in/out.
+                  </small>
+                  {project.shots.length > 0 && <small>Replacing {project.shots.length} existing shots. Exact source/timing matches retain their annotations; other timeline-bound annotations are removed.</small>}
+                </div>
                 <label>
-                  Timeline start timecode
-                  <input
-                    placeholder="Leave blank to use first record-in"
-                    value={origin}
-                    onChange={(e) => setOrigin(e.target.value)}
-                  />
+                  Frame rate
+                  <select
+                    value={fps}
+                    onChange={(e) => setFps(Number(e.target.value))}
+                  >
+                    {rates.map((r) => (
+                      <option key={r}>{r}</option>
+                    ))}
+                  </select>
                 </label>
-                <small>
-                  Use only when the film starts later than the first EDL
-                  record-in.
-                </small>
-              </details>
-              <div className="import-actions">
-                <button className="primary" onClick={importEDL}>
-                  Import
-                </button>
-                <button onClick={() => setEdl(null)}>Cancel</button>
-              </div>
-            </section>
+                <details className="import-advanced">
+                  <summary>Advanced</summary>
+                  <label>
+                    Timeline start timecode
+                    <input
+                      placeholder="Leave blank to use first record-in"
+                      value={origin}
+                      onChange={(e) => setOrigin(e.target.value)}
+                    />
+                  </label>
+                  <small>
+                    Use only when the film starts later than the first EDL
+                    record-in.
+                  </small>
+                </details>
+                <div className="import-actions">
+                  <button className="primary" onClick={importEDL}>
+                    Import
+                  </button>
+                  <button onClick={() => setEdl(null)}>Cancel</button>
+                </div>
+              </section>
+            </div>
           )}
 
-          {/* TOP STAGE: Studio (Deck + Monitor + Inspector), Map Focus (Monitor + Overview + Summary), Review Desk (Queue + Monitor + Inspector) */}
+          {/* TOP STAGE: Studio (Rail + Drawer + Monitor + Inspector), Map Focus (Monitor + Overview + Summary), Review Desk (Queue + Monitor + Inspector) */}
           <div
-            className={`top-stage ${leftCollapsed ? "left-is-collapsed" : ""} ${rightCollapsed ? "right-is-collapsed" : ""}`}
+            className={`top-stage ${leftCollapsed ? "left-is-collapsed" : ""} ${rightCollapsed || focusMode ? "right-is-collapsed" : ""}`}
             style={{
               height: `calc(${topHeightRatio * 100}% - 6px)`,
             }}
           >
-            {/* COLUMN 1 in Studio: Analytical Deck (kept mounted across mode switches to preserve analysis) */}
+            {/* Studio Mode Slim Vertical Tool Rail */}
+            {workspaceMode === "studio" && (
+              <StudioToolRail
+                activeTab={deckTab}
+                drawerOpen={studioDrawerOpen}
+                onSelectTab={(tab) => {
+                  setDeckTab(tab);
+                  setStudioDrawerOpen(true);
+                }}
+                onToggleDrawer={() => setStudioDrawerOpen(!studioDrawerOpen)}
+              />
+            )}
+
+            {/* COLUMN 1 in Studio: Contextual Detail Drawer (kept mounted across mode switches to preserve analysis) */}
             <div
-              className="analytical-deck panel"
-              hidden={workspaceMode !== "studio" || leftCollapsed}
-              style={workspaceMode !== "studio" || leftCollapsed ? { display: "none" } : undefined}
+              className={`analytical-deck studio-detail-drawer panel ${studioDrawerOpen ? "drawer-open" : "drawer-closed"}`}
+              hidden={workspaceMode !== "studio" || !studioDrawerOpen}
+              style={workspaceMode !== "studio" || !studioDrawerOpen ? { display: "none" } : undefined}
             >
-                <div className="deck-tabs" role="tablist" aria-label="Studio analytical tools">
+              {deckTab !== "rhythm" && deckTab !== "sequence" && deckTab !== "cuts" && deckTab !== "cast" && deckTab !== "color" && (
+                <div className="section-head drawer-head">
+                  <span className="eyebrow">
+                    {deckTab === "color" && "COLOR READING"}
+                  </span>
                   <button
-                    role="tab"
-                    aria-selected={deckTab === "rhythm"}
-                    className={deckTab === "rhythm" ? "active" : ""}
-                    onClick={() => setDeckTab("rhythm")}
+                    type="button"
+                    className="studio-drawer-close-btn"
+                    onClick={() => setStudioDrawerOpen(false)}
+                    title="Close analytical detail drawer (Esc)"
+                    aria-label="Close analytical detail drawer"
                   >
-                    Rhythm & Pacing
-                  </button>
-                  <button
-                    role="tab"
-                    aria-selected={deckTab === "sequence"}
-                    className={deckTab === "sequence" ? "active" : ""}
-                    onClick={() => setDeckTab("sequence")}
-                  >
-                    Sequence Reading
-                  </button>
-                  <button
-                    role="tab"
-                    aria-selected={deckTab === "cuts"}
-                    className={deckTab === "cuts" ? "active" : ""}
-                    onClick={() => setDeckTab("cuts")}
-                  >
-                    Cut Reading
-                  </button>
-                  <button
-                    role="tab"
-                    aria-selected={deckTab === "cast"}
-                    className={deckTab === "cast" ? "active" : ""}
-                    onClick={() => setDeckTab("cast")}
-                  >
-                    Cast & AI
-                  </button>
-                  <button
-                    role="tab"
-                    aria-selected={deckTab === "color"}
-                    className={deckTab === "color" ? "active" : ""}
-                    onClick={() => setDeckTab("color")}
-                  >
-                    Color Reading
+                    ✕
                   </button>
                 </div>
+              )}
 
                 <div className="deck-pane">
                   <div hidden={deckTab !== "rhythm"}>
@@ -1525,6 +1982,8 @@ export default function App() {
                       onSelect={selectShot}
                       onSeek={seek}
                       onUpdateShots={(shots) => update({ shots })}
+                      onClose={() => setStudioDrawerOpen(false)}
+                      variant="drawer"
                     />
                   </div>
 
@@ -1535,13 +1994,8 @@ export default function App() {
                       onRangeChange={setSelectedRange}
                       onSeek={seek}
                       onUpdate={(sequences) => update({ sequences })}
-                    />
-                    <SoundReading
-                      project={project}
-                      range={selectedRange}
-                      onRangeChange={setSelectedRange}
-                      onPlay={playRange}
-                      onUpdate={(soundSpans) => update({ soundSpans })}
+                      onClose={() => setStudioDrawerOpen(false)}
+                      variant="drawer"
                     />
                   </div>
 
@@ -1555,73 +2009,90 @@ export default function App() {
                       onUpdate={(cutAnnotations) => update({ cutAnnotations })}
                       onDeleteCut={handleMergeShots}
                       onNudgeCut={handleNudgeCut}
+                      onClose={() => setStudioDrawerOpen(false)}
+                      variant="drawer"
                     />
                   </div>
 
                   <div hidden={deckTab !== "cast"}>
-                    <AllShotsAnalysis
-                      key={`${project.id}-${url}-${edlRevision}`}
-                      shots={project.shots}
-                      url={url}
-                      disabled={scanningShot}
-                      onBusyChange={setScanningAll}
-                      onPreview={previewAnalysis}
-                      cast={project.cast}
-                      onResult={(id, tags) => applyShotPatch(project.id, id, {
-                        ...tags,
-                        analysisFailures: undefined,
-                        suggestion: { ...tags, model: "qwen3-vl:4b", createdAt: new Date().toISOString() },
-                        reviewStatus: "Needs review",
-                      })}
-                      onFramingFailure={(id, failure) => applyShotPatch(project.id, id, { analysisFailures: { framing: { message: failure, createdAt: new Date().toISOString() } } })}
-                      onCharacterResult={(id, characterAnalysis) => {
-                        revision.current++;
-                        setProject((p) => p && p.id === project.id ? {
-                          ...p, updatedAt: new Date().toISOString(),
-                          shots: p.shots.map((s) => s.id === id ? s.characterAnalysis?.reviewStatus === "Confirmed" || s.characterAnalysis?.manualReviewStatus === "Confirmed" ? s : { ...s, characterAnalysis } : s),
-                        } : p);
-                        setDirty(true);
-                        setSaveState("");
-                      }}
-                      onAutoDiscoverComplete={(newCast, shotAnalyses) => {
-                        recordHistory(project);
-                        revision.current++;
-                        setProject((p) => p && p.id === project.id ? {
-                          ...p,
-                          updatedAt: new Date().toISOString(),
-                          cast: newCast,
-                          shots: p.shots.map((s) => {
-                            const analysis = shotAnalyses.get(s.id);
-                            if (analysis) {
-                              return s.characterAnalysis?.reviewStatus === "Confirmed" || s.characterAnalysis?.manualReviewStatus === "Confirmed"
-                                ? s
-                                : { ...s, characterAnalysis: analysis };
-                            }
-                            return s;
-                          }),
-                        } : p);
-                        setDirty(true);
-                        setSaveState("");
-                      }}
-                      onComplete={restoreLivePreview}
-                    />
-                    <CastGallery
-                      cast={project.cast ?? []}
-                      shot={shot}
+                    <div style={{ display: scanningAll ? "block" : "none" }}>
+                      <AllShotsAnalysis
+                        key={`${project.id}-${url}-${edlRevision}`}
+                        shots={project.shots}
+                        url={url}
+                        disabled={scanningShot}
+                        onBusyChange={setScanningAll}
+                        onPreview={previewAnalysis}
+                        cast={project.cast}
+                        onResult={(id, tags) => applyShotPatch(project.id, id, {
+                          ...tags,
+                          analysisFailures: undefined,
+                          suggestion: { ...tags, model: tags.model ?? MODEL, createdAt: new Date().toISOString() },
+                          reviewStatus: "Needs review",
+                        })}
+                        onFramingFailure={(id, failure) => applyShotPatch(project.id, id, { analysisFailures: { framing: { message: failure, createdAt: new Date().toISOString() } } })}
+                        onCharacterResult={(id, characterAnalysis) => {
+                          revision.current++;
+                          setProject((p) => p && p.id === project.id ? {
+                            ...p, updatedAt: new Date().toISOString(),
+                            shots: p.shots.map((s) => s.id === id ? s.characterAnalysis?.reviewStatus === "Confirmed" || s.characterAnalysis?.manualReviewStatus === "Confirmed" ? s : { ...s, characterAnalysis } : s),
+                          } : p);
+                          setDirty(true);
+                          setSaveState("");
+                        }}
+                        onAutoDiscoverComplete={(newCast, shotAnalyses) => {
+                          recordHistory(projectRef.current);
+                          revision.current++;
+                          setProject((p) => p && p.id === project.id ? {
+                            ...p,
+                            updatedAt: new Date().toISOString(),
+                            cast: mergeDiscoveredCast(p.cast ?? [], newCast),
+                            shots: p.shots.map((s) => {
+                              const analysis = shotAnalyses.get(s.id);
+                              if (analysis) {
+                                return s.characterAnalysis?.reviewStatus === "Confirmed" || s.characterAnalysis?.manualReviewStatus === "Confirmed"
+                                  ? s
+                                  : { ...s, characterAnalysis: analysis };
+                              }
+                              return s;
+                            }),
+                          } : p);
+                          setDirty(true);
+                          setSaveState("");
+                        }}
+                        onComplete={restoreLivePreview}
+                      />
+                    </div>
+                    <CastDrawer
+                      project={project}
+                      shot={shot ?? current}
+                      time={time}
+                      thumbnails={thumbnails}
+                      range={selectedRange}
+                      selectedMember={selectedCharacter}
                       disabled={scanningAll || scanningShot || !url}
+                      onSelect={setSelectedCharacter}
                       onAdd={addCastMember}
                       onReference={addCastReference}
                       onRemove={removeCastMember}
                       onRename={renameCastMember}
                       onMerge={mergeCastMembers}
+                      onInspect={selectShot}
+                      onConfirmShot={confirmCharacterShot}
+                      onRemoveAppearance={removeCharacterAppearance}
+                      onRangeChange={setSelectedRange}
+                      onPlayRange={(range) => playRange(range, false)}
+                      onSeek={seek}
+                      onClose={() => setStudioDrawerOpen(false)}
                     />
-                    <CharacterSummary project={project} range={selectedRange} selectedMember={selectedCharacter} onSelect={setSelectedCharacter} onInspect={selectShot} onConfirmShot={confirmCharacterShot} onRemoveAppearance={removeCharacterAppearance} onRangeChange={setSelectedRange} onPlayRange={(range) => playRange(range, false)} onSeek={seek} />
                   </div>
 
                   <div hidden={deckTab !== "color"}>
                     {project && (
-                      <ColorReading
+                      <ColorDrawer
                         project={project}
+                        shot={shot ?? current}
+                        time={time}
                         thumbnails={thumbnails}
                         selected={selected}
                         onSelect={(id) => {
@@ -1629,6 +2100,11 @@ export default function App() {
                           if (targetShot) selectShot(targetShot);
                         }}
                         onSeek={seek}
+                        squintMode={squintMode}
+                        onSquintModeChange={setSquintMode}
+                        squintLevel={squintLevel}
+                        onSquintLevelChange={setSquintLevel}
+                        onClose={() => setStudioDrawerOpen(false)}
                       />
                     )}
                   </div>
@@ -1648,20 +2124,24 @@ export default function App() {
                 onSearchChange={setReviewSearchQuery}
                 autoAdvance={autoAdvance}
                 onAutoAdvanceChange={setAutoAdvance}
+                currentTime={time}
+                onSeek={seek}
               />
             )}
 
-            {/* COLUMN SPLITTER 1: Left Panel ↔ Center Panel */}
-            <ResizeHandle
-              direction="col"
-              className="resize-handle-left"
-              collapseIcon="left"
-              isCollapsed={leftCollapsed}
-              onToggleCollapse={toggleLeftCollapse}
-              onDrag={resizeLeft}
-              onReset={resetLeftWidth}
-              label="Resize left panel"
-            />
+            {/* COLUMN SPLITTER 1: Left Panel ↔ Center Panel in Review mode */}
+            {workspaceMode === "review" && (
+              <ResizeHandle
+                direction="col"
+                className="resize-handle-left"
+                collapseIcon="left"
+                isCollapsed={leftCollapsed}
+                onToggleCollapse={toggleLeftCollapse}
+                onDrag={resizeLeft}
+                onReset={resetLeftWidth}
+                label="Resize left panel"
+              />
+            )}
 
             {/* FILM MONITOR (PERSISTENT - ALWAYS MOUNTED IN ALL 3 MODES) */}
             <section
@@ -1673,6 +2153,11 @@ export default function App() {
                   {workspaceMode === "review" && shot
                     ? `SHOT ${String(shot.index).padStart(3, "0")} / ${String(project.shots.length).padStart(3, "0")}`
                     : "PROGRAM FILM PREVIEW"}
+                  {squintMode && (
+                    <span className="monitor-squint-indicator" title={`Squint Mode Active (Depth Level ${squintLevel})`}>
+                      😑 SQUINT L{squintLevel}
+                    </span>
+                  )}
                 </span>
                 <span className="muted">
                   {playing ? "PLAYING" : "PAUSED"} ·{" "}
@@ -1686,6 +2171,7 @@ export default function App() {
                   ref={video}
                   src={url || undefined}
                   playsInline
+                  style={squintMode ? { filter: getSquintFilter(squintLevel) } : undefined}
                   onLoadedMetadata={() => {
                     const v = video.current!,
                       f = pendingFile.current;
@@ -1747,6 +2233,7 @@ export default function App() {
                     <img
                       src={`data:image/jpeg;base64,${analyzedFrame.image}`}
                       alt="Exact frame sent for analysis"
+                      style={squintMode ? { filter: getSquintFilter(squintLevel) } : undefined}
                     />
                     <span>
                       {scanningAll || scanningShot
@@ -1773,65 +2260,150 @@ export default function App() {
                   </div>
                 )}
               </div>
-              <div className="transport">
-                <button
-                  disabled={!url}
-                  aria-label="Previous frame"
-                  onClick={() => {
-                    video.current?.pause();
-                    seek(time - 1 / actualRate(project.frameRate));
-                  }}
-                >
-                  Ⅰ‹
-                </button>
-                <button
-                  disabled={!url}
-                  className="play"
-                  aria-label={playing ? "Pause" : "Play"}
-                  onClick={toggle}
-                >
-                  {playing ? "Ⅱ" : "▶"}
-                </button>
-                <button
-                  disabled={!url}
-                  aria-label="Next frame"
-                  onClick={() => {
-                    video.current?.pause();
-                    seek(time + 1 / actualRate(project.frameRate));
-                  }}
-                >
-                  ›Ⅰ
-                </button>
-                <span className="timecode">
-                  {formatTimecode(time, project.frameRate, project.dropFrame)}
-                </span>
-                <input
-                  className="seek"
-                  aria-label="Seek film"
-                  type="range"
-                  min="0"
-                  max={project.duration || 1}
-                  step={1 / actualRate(project.frameRate)}
-                  value={time}
-                  onChange={(e) => seek(Number(e.target.value))}
-                />
-                <button
-                  aria-label={muted ? "Unmute" : "Mute"}
-                  onClick={() => setMuted(!muted)}
-                >
-                  {muted ? "Muted" : "Sound"}
-                </button>
-                <input
-                  className="volume"
-                  aria-label="Volume"
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={volume}
-                  onChange={(e) => setVolume(Number(e.target.value))}
-                />
-              </div>
+              {workspaceMode === "studio" ? (
+                <div className="transport studio-transport-bar">
+                  <span className="timecode studio-timecode mono">
+                    {formatTimecode(time, project.frameRate, project.dropFrame)}
+                  </span>
+                  <div className="studio-transport-center">
+                    <button
+                      type="button"
+                      className="btn-transport-nav"
+                      disabled={!url}
+                      onClick={() => {
+                        goToPrevShot();
+                      }}
+                      title="Previous shot"
+                      aria-label="Previous shot"
+                    >
+                      ⏮
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!url}
+                      className={`play studio-play-btn ${playing ? "playing" : ""}`}
+                      aria-label={playing ? "Pause" : "Play"}
+                      onClick={toggle}
+                    >
+                      {playing ? "⏸" : "▶"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-transport-nav"
+                      disabled={!url}
+                      onClick={() => {
+                        goToNextShot();
+                      }}
+                      title="Next shot"
+                      aria-label="Next shot"
+                    >
+                      ⏭
+                    </button>
+                  </div>
+                  <div className="studio-transport-actions">
+                    <button
+                      type="button"
+                      className={`studio-focus-btn ${focusMode ? "active" : ""}`}
+                      onClick={() => setFocusMode(!focusMode)}
+                      title="Toggle Focus Mode (hides inspector for full width viewing)"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>
+                      <span>Focus</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="studio-fullscreen-btn"
+                      onClick={() => {
+                        if (document.fullscreenElement) {
+                          document.exitFullscreen();
+                        } else {
+                          video.current?.requestFullscreen?.();
+                        }
+                      }}
+                      title="Fullscreen"
+                      aria-label="Fullscreen"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                    </button>
+                    <button
+                      type="button"
+                      className={`monitor-squint-toggle ${squintMode ? "active" : ""}`}
+                      title={squintMode ? `Squint Mode Active (Level ${squintLevel}) - Click to disable` : "Toggle Squint Mode"}
+                      onClick={() => setSquintMode(!squintMode)}
+                    >
+                      😑
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="transport">
+                  <button
+                    disabled={!url}
+                    aria-label="Previous frame"
+                    onClick={() => {
+                      video.current?.pause();
+                      seek(time - 1 / actualRate(project.frameRate));
+                    }}
+                  >
+                    Ⅰ‹
+                  </button>
+                  <button
+                    disabled={!url}
+                    className="play"
+                    aria-label={playing ? "Pause" : "Play"}
+                    onClick={toggle}
+                  >
+                    {playing ? "Ⅱ" : "▶"}
+                  </button>
+                  <button
+                    disabled={!url}
+                    aria-label="Next frame"
+                    onClick={() => {
+                      video.current?.pause();
+                      seek(time + 1 / actualRate(project.frameRate));
+                    }}
+                  >
+                    ›Ⅰ
+                  </button>
+                  <span className="timecode">
+                    {formatTimecode(time, project.frameRate, project.dropFrame)}
+                  </span>
+                  <input
+                    className="seek"
+                    aria-label="Seek film"
+                    type="range"
+                    min="0"
+                    max={project.duration || 1}
+                    step={1 / actualRate(project.frameRate)}
+                    value={time}
+                    onChange={(e) => seek(Number(e.target.value))}
+                  />
+                  <button
+                    aria-label={muted ? "Unmute" : "Mute"}
+                    onClick={() => setMuted(!muted)}
+                  >
+                    {muted ? "Muted" : "Sound"}
+                  </button>
+                  <button
+                    type="button"
+                    className={`monitor-squint-toggle ${squintMode ? "active" : ""}`}
+                    title={squintMode ? `Squint Mode Active (Level ${squintLevel}) - Click to disable` : "Toggle Squint Mode on preview monitor and timeline"}
+                    onClick={() => setSquintMode(!squintMode)}
+                  >
+                    😑 {squintMode ? `Squint L${squintLevel}` : "Squint"}
+                  </button>
+                  <input
+                    className="volume"
+                    aria-label="Volume"
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={volume}
+                    onChange={(e) => setVolume(Number(e.target.value))}
+                  />
+                </div>
+              )}
               <div className="video-meta">
                 <span>
                   {project.videoMetadata
@@ -1862,15 +2434,229 @@ export default function App() {
               )}
             </section>
 
-            {/* COLUMN 2 in Map Focus: Sequence Overview */}
+            {/* COLUMN 2 in Map Focus: Map Analytical Deck */}
             {workspaceMode === "map" && (
-              <MapSequenceOverview
-                project={project}
-                selectedShot={shot}
-                time={time}
-                onSelectShot={selectShot}
-                onSeek={seek}
-              />
+              <div className="map-analytical-deck panel">
+                <div className="deck-tabs" role="tablist" aria-label="Map Focus analytical tools">
+                  <button
+                    role="tab"
+                    aria-selected={mapDeckTab === "overview"}
+                    className={mapDeckTab === "overview" ? "active" : ""}
+                    onClick={() => setMapDeckTab("overview")}
+                  >
+                    Sequence & Rhythm
+                  </button>
+                  <button
+                    role="tab"
+                    aria-selected={mapDeckTab === "rhythm"}
+                    className={mapDeckTab === "rhythm" ? "active" : ""}
+                    onClick={() => setMapDeckTab("rhythm")}
+                  >
+                    Rhythm & Pacing
+                  </button>
+                  <button
+                    role="tab"
+                    aria-selected={mapDeckTab === "sequence"}
+                    className={mapDeckTab === "sequence" ? "active" : ""}
+                    onClick={() => setMapDeckTab("sequence")}
+                  >
+                    Sequence Reading
+                  </button>
+                  <button
+                    role="tab"
+                    aria-selected={mapDeckTab === "cuts"}
+                    className={mapDeckTab === "cuts" ? "active" : ""}
+                    onClick={() => setMapDeckTab("cuts")}
+                  >
+                    Cut Reading
+                  </button>
+                  <button
+                    role="tab"
+                    aria-selected={mapDeckTab === "cast"}
+                    className={mapDeckTab === "cast" ? "active" : ""}
+                    onClick={() => setMapDeckTab("cast")}
+                  >
+                    Cast & AI
+                  </button>
+                  <button
+                    role="tab"
+                    aria-selected={mapDeckTab === "color"}
+                    className={mapDeckTab === "color" ? "active" : ""}
+                    onClick={() => setMapDeckTab("color")}
+                  >
+                    Color Reading
+                  </button>
+                </div>
+
+                <div className="deck-pane">
+                  <div hidden={mapDeckTab !== "overview"}>
+                    <MapSequenceOverview
+                      project={project}
+                      selectedShot={shot}
+                      time={time}
+                      waveform={waveform}
+                      onSelectShot={selectShot}
+                      onSeek={seek}
+                    />
+                  </div>
+
+                  <div hidden={mapDeckTab !== "rhythm"}>
+                    <EditingRhythm
+                      project={project}
+                      time={time}
+                      waveform={waveform}
+                      selected={selected}
+                      url={url}
+                      onSelect={selectShot}
+                      onSeek={seek}
+                      onUpdateShots={(shots) => update({ shots })}
+                    />
+                  </div>
+
+                  <div hidden={mapDeckTab !== "sequence"}>
+                    <SequenceReading
+                      project={project}
+                      range={selectedRange}
+                      onRangeChange={setSelectedRange}
+                      onSeek={seek}
+                      onUpdate={(sequences) => update({ sequences })}
+                    />
+                    <SoundReading
+                      project={project}
+                      range={selectedRange}
+                      onRangeChange={setSelectedRange}
+                      onPlay={playRange}
+                      onUpdate={(soundSpans) => update({ soundSpans })}
+                    />
+                    <LoudnessReading
+                      project={project}
+                      analysis={isLoudnessAnalysisValid(project.loudnessAnalysis, linkedMediaSignature) ? project.loudnessAnalysis : undefined}
+                      currentTime={time}
+                      selectedShot={current}
+                      isScanning={isLoudnessScanning}
+                      status={loudnessStatus}
+                      onScan={handleScanLoudness}
+                      onCancel={() => loudnessAbortRef.current?.abort()}
+                      onSeek={seek}
+                    />
+                    <SpeechReading
+                      project={project}
+                      analysis={isSpeechAnalysisValid(project.speechAnalysis, linkedMediaSignature) ? project.speechAnalysis : undefined}
+                      range={selectedRange}
+                      selectedShot={current}
+                      isScanning={isSpeechScanning}
+                      status={speechStatus}
+                      onScan={handleScanSpeech}
+                      onCancel={() => speechAbortRef.current?.abort()}
+                      onRetry={handleScanSpeech}
+                      onSeek={seek}
+                      onToggleOverlay={() => setShowSpeechOverlay((show) => !show)}
+                      showOverlay={showSpeechOverlay}
+                    />
+                  </div>
+
+                  <div hidden={mapDeckTab !== "cuts"}>
+                    <CutReading
+                      project={project}
+                      incomingId={selectedCut}
+                      url={url}
+                      onSeek={seek}
+                      onPlay={playCut}
+                      onUpdate={(cutAnnotations) => update({ cutAnnotations })}
+                      onDeleteCut={handleMergeShots}
+                      onNudgeCut={handleNudgeCut}
+                    />
+                  </div>
+
+                  <div hidden={mapDeckTab !== "cast"}>
+                    <AllShotsAnalysis
+                      key={`map-${project.id}-${url}-${edlRevision}`}
+                      shots={project.shots}
+                      url={url}
+                      disabled={scanningShot}
+                      onBusyChange={setScanningAll}
+                      onPreview={previewAnalysis}
+                      cast={project.cast}
+                      onResult={(id, tags) => applyShotPatch(project.id, id, {
+                        ...tags,
+                        analysisFailures: undefined,
+                        suggestion: { ...tags, model: tags.model ?? MODEL, createdAt: new Date().toISOString() },
+                        reviewStatus: "Needs review",
+                      })}
+                      onFramingFailure={(id, failure) => applyShotPatch(project.id, id, { analysisFailures: { framing: { message: failure, createdAt: new Date().toISOString() } } })}
+                      onCharacterResult={(id, characterAnalysis) => {
+                        revision.current++;
+                        setProject((p) => p && p.id === project.id ? {
+                          ...p, updatedAt: new Date().toISOString(),
+                          shots: p.shots.map((s) => s.id === id ? s.characterAnalysis?.reviewStatus === "Confirmed" || s.characterAnalysis?.manualReviewStatus === "Confirmed" ? s : { ...s, characterAnalysis } : s),
+                        } : p);
+                        setDirty(true);
+                        setSaveState("");
+                      }}
+                      onAutoDiscoverComplete={(newCast, shotAnalyses) => {
+                        recordHistory(projectRef.current);
+                        revision.current++;
+                        setProject((p) => p && p.id === project.id ? {
+                          ...p,
+                          updatedAt: new Date().toISOString(),
+                          cast: mergeDiscoveredCast(p.cast ?? [], newCast),
+                          shots: p.shots.map((s) => {
+                            const analysis = shotAnalyses.get(s.id);
+                            if (analysis) {
+                              return s.characterAnalysis?.reviewStatus === "Confirmed" || s.characterAnalysis?.manualReviewStatus === "Confirmed"
+                                ? s
+                                : { ...s, characterAnalysis: analysis };
+                            }
+                            return s;
+                          }),
+                        } : p);
+                        setDirty(true);
+                        setSaveState("");
+                      }}
+                      onComplete={restoreLivePreview}
+                    />
+                    <CastGallery
+                      cast={project.cast ?? []}
+                      shot={shot}
+                      disabled={scanningAll || scanningShot || !url}
+                      onAdd={addCastMember}
+                      onReference={addCastReference}
+                      onRemove={removeCastMember}
+                      onRename={renameCastMember}
+                      onMerge={mergeCastMembers}
+                    />
+                    <CharacterSummary
+                      project={project}
+                      range={selectedRange}
+                      selectedMember={selectedCharacter}
+                      onSelect={setSelectedCharacter}
+                      onInspect={selectShot}
+                      onConfirmShot={confirmCharacterShot}
+                      onRemoveAppearance={removeCharacterAppearance}
+                      onRangeChange={setSelectedRange}
+                      onPlayRange={(range) => playRange(range, false)}
+                      onSeek={seek}
+                    />
+                  </div>
+
+                  <div hidden={mapDeckTab !== "color"}>
+                    <ColorReading
+                      project={project}
+                      thumbnails={thumbnails}
+                      selected={selected}
+                      onSelect={(id) => {
+                        const targetShot = project.shots.find((s) => s.id === id);
+                        if (targetShot) selectShot(targetShot);
+                      }}
+                      onSeek={seek}
+                      squintMode={squintMode}
+                      onSquintModeChange={setSquintMode}
+                      squintLevel={squintLevel}
+                      onSquintLevelChange={setSquintLevel}
+                    />
+                  </div>
+                </div>
+              </div>
             )}
 
             {/* COLUMN SPLITTER 2: Center Panel ↔ Right Panel */}
@@ -1885,8 +2671,8 @@ export default function App() {
               label="Resize right panel"
             />
 
-            {/* COLUMN 3: Shot Inspector (Studio), Readings / Summary (Map Focus), or Grid Inspector (Review Desk) */}
-            {!rightCollapsed && workspaceMode === "studio" && (
+            {/* COLUMN 3: Shot Inspector (Studio), Readings / Inspector (Map Focus), or Grid Inspector (Review Desk) */}
+            {!rightCollapsed && !focusMode && workspaceMode === "studio" && (
               <ShotInspector
                 shot={shot}
                 project={project}
@@ -1904,6 +2690,7 @@ export default function App() {
                 onMarkUncertain={markUncertainAndNext}
                 onReviewCharacters={reviewCharactersInShot}
                 autoAdvance={autoAdvance}
+                isStudio={true}
               />
             )}
 
@@ -1985,6 +2772,33 @@ export default function App() {
               height: `calc(${(1 - topHeightRatio) * 100}% - 6px)`,
             }}
           >
+            {workspaceMode === "studio" && (
+              <StudioRhythmRibbon
+                project={project}
+                time={time}
+                selectedShot={shot}
+                onSelectShot={selectShot}
+                onSeek={seek}
+                range={selectedRange}
+                onRangeChange={(r) => {
+                  setSelectedRange(r);
+                  if (r) {
+                    setDeckTab("sequence");
+                    setStudioDrawerOpen(true);
+                  }
+                }}
+                waveform={waveform}
+                speechAnalysis={showSpeechOverlay && isSpeechAnalysisValid(project.speechAnalysis, linkedMediaSignature) ? project.speechAnalysis : undefined}
+                loudnessAnalysis={isLoudnessAnalysisValid(project.loudnessAnalysis, linkedMediaSignature) ? project.loudnessAnalysis : undefined}
+                thumbnails={thumbnails}
+                onCompareSequence={(r) => {
+                  setSelectedRange(r);
+                  setDeckTab("sequence");
+                  setStudioDrawerOpen(true);
+                }}
+                selectedCut={selectedCut}
+              />
+            )}
             <EditingMap
               project={project}
               thumbnails={thumbnails}
@@ -1996,7 +2810,14 @@ export default function App() {
               onShot={selectShot}
               onPlayShot={playShot}
               selectedCut={selectedCut}
-              onCut={(incoming) => { video.current?.pause(); setSelectedCut(incoming.id); setSelected(incoming.id); seek(incoming.startSeconds); setDeckTab("cuts"); }}
+              onCut={(incoming) => {
+                video.current?.pause();
+                setSelectedCut(incoming.id);
+                setSelected(incoming.id);
+                seek(incoming.startSeconds);
+                setDeckTab("cuts");
+                if (workspaceMode === "studio") setStudioDrawerOpen(true);
+              }}
               onSplitShot={handleSplitShot}
               onDeleteCut={handleMergeShots}
               onRollCut={handleRollCut}
@@ -2004,12 +2825,21 @@ export default function App() {
               onToggleSnap={handleToggleSnap}
               onNudgeCut={handleNudgeCut}
               range={selectedRange}
-              onRangeChange={(r) => { setSelectedRange(r); if (r) setDeckTab("sequence"); }}
+              onRangeChange={(r) => {
+                setSelectedRange(r);
+                if (r) {
+                  setDeckTab("sequence");
+                  if (workspaceMode === "studio") setStudioDrawerOpen(true);
+                }
+              }}
               waveform={waveform}
+              speechAnalysis={showSpeechOverlay && isSpeechAnalysisValid(project.speechAnalysis, linkedMediaSignature) ? project.speechAnalysis : undefined}
+              loudnessAnalysis={isLoudnessAnalysisValid(project.loudnessAnalysis, linkedMediaSignature) ? project.loudnessAnalysis : undefined}
               reviewMatchIds={reviewFilter === "all" ? undefined : reviewMatchIds}
               highlightedShotIds={selectedCharacter ? project.shots.filter((s) => s.characterAnalysis?.manualReviewStatus === "Confirmed" ? s.characterAnalysis.manualMemberIds?.includes(selectedCharacter) : s.characterAnalysis?.intervals.some((interval) => interval.memberId === selectedCharacter)).map((s) => s.id) : undefined}
               onColorModeChange={(colorMode) => update({ colorMode })}
               onSeparateDme={handleSeparateDme}
+              onCancelDme={() => dmeAbortRef.current?.abort()}
               isDmeSeparating={isDmeSeparating}
               dmeSeparationStatus={dmeSeparationStatus}
               hasVideo={Boolean(pendingFile.current || project.videoMetadata)}
@@ -2018,6 +2848,10 @@ export default function App() {
               showMinimap={workspaceMode !== "review"}
               reviewFilter={reviewFilter}
               onClearReviewFilter={() => setReviewFilter("all")}
+              squintMode={squintMode}
+              squintLevel={squintLevel}
+              onToggleSquint={(active) => setSquintMode(active !== undefined ? active : !squintMode)}
+              onSquintLevelChange={setSquintLevel}
               tagBar={workspaceMode === "studio" ? (
                 <div className="timeline-action-bar">
                   <div className="tag-toolbar-inline">
@@ -2136,20 +2970,190 @@ export default function App() {
         </>
       )}
 
+      {showScanConfigModal && project && (
+        <div
+          className="modal-backdrop scene-detect-modal"
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowScanConfigModal(false);
+          }}
+        >
+          <div className="modal panel unified-scan-panel" style={{ width: 520, maxWidth: "92vw" }}>
+            <div className="section-head">
+              <b>Analyze Film Pipeline</b>
+              <button type="button" onClick={() => setShowScanConfigModal(false)}>Close</button>
+            </div>
+
+            <div className="preset-selector-row">
+              <button
+                type="button"
+                className={`preset-btn ${
+                  scanOptions.cuts && scanOptions.framing && scanOptions.cast && scanOptions.dialogue && scanOptions.loudness && !scanOptions.motion && !scanOptions.stems
+                    ? "active"
+                    : ""
+                }`}
+                onClick={() => setScanOptions({ ...QUICK_ANALYSIS_PRESET, cuts: project.shots.length === 0 })}
+              >
+                ⚡ Quick Analysis (Recommended)
+                <small>Framing + Cast + Dialogue + Loudness (~1-2 min)</small>
+              </button>
+
+              <button
+                type="button"
+                className={`preset-btn ${
+                  scanOptions.cuts && scanOptions.framing && scanOptions.cast && scanOptions.dialogue && scanOptions.loudness && scanOptions.motion && scanOptions.stems
+                    ? "active"
+                    : ""
+                }`}
+                onClick={() => setScanOptions({ ...FULL_ANALYSIS_PRESET, cuts: project.shots.length === 0 })}
+              >
+                🔬 Full Deep Analysis
+                <small>Adds Motion Energy Arc + DME Stems Separation</small>
+              </button>
+            </div>
+
+            <div className="custom-toggle-grid">
+              <label className="toggle-item">
+                <input
+                  type="checkbox"
+                  checked={scanOptions.cuts}
+                  disabled={project.shots.length > 0}
+                  onChange={(e) => setScanOptions((prev) => ({ ...prev, cuts: e.target.checked }))}
+                />
+                <div className="toggle-item-info">
+                  <span>Cuts</span>
+                  <small>{project.shots.length > 0 ? "Bypassed (Existing shots present)" : "Scene cut detection"}</small>
+                </div>
+              </label>
+              <label className="toggle-item">
+                <input
+                  type="checkbox"
+                  checked={scanOptions.framing}
+                  onChange={(e) => setScanOptions((prev) => ({ ...prev, framing: e.target.checked }))}
+                />
+                <div className="toggle-item-info">
+                  <span>Framing</span>
+                  <small>Shot sizes & composition</small>
+                </div>
+              </label>
+              <label className="toggle-item">
+                <input
+                  type="checkbox"
+                  checked={scanOptions.cast}
+                  onChange={(e) => setScanOptions((prev) => ({ ...prev, cast: e.target.checked }))}
+                />
+                <div className="toggle-item-info">
+                  <span>Cast</span>
+                  <small>Face clustering & characters</small>
+                </div>
+              </label>
+              <label className="toggle-item">
+                <input
+                  type="checkbox"
+                  checked={scanOptions.dialogue}
+                  onChange={(e) => setScanOptions((prev) => ({ ...prev, dialogue: e.target.checked }))}
+                />
+                <div className="toggle-item-info">
+                  <span>Dialogue</span>
+                  <small>Speech & pause detection</small>
+                </div>
+              </label>
+              <label className="toggle-item">
+                <input
+                  type="checkbox"
+                  checked={scanOptions.loudness}
+                  onChange={(e) => setScanOptions((prev) => ({ ...prev, loudness: e.target.checked }))}
+                />
+                <div className="toggle-item-info">
+                  <span>Loudness</span>
+                  <small>EBU R128 dynamics</small>
+                </div>
+              </label>
+              <label className="toggle-item">
+                <input
+                  type="checkbox"
+                  checked={scanOptions.motion}
+                  onChange={(e) => setScanOptions((prev) => ({ ...prev, motion: e.target.checked }))}
+                />
+                <div className="toggle-item-info">
+                  <span>Motion</span>
+                  <small>Camera & actor movement</small>
+                </div>
+              </label>
+              <label className="toggle-item">
+                <input
+                  type="checkbox"
+                  checked={scanOptions.stems}
+                  onChange={(e) => setScanOptions((prev) => ({ ...prev, stems: e.target.checked }))}
+                />
+                <div className="toggle-item-info">
+                  <span>Stems</span>
+                  <small>Dialogue/Music/Effects</small>
+                </div>
+              </label>
+            </div>
+
+            <div className="modal-actions">
+              <button
+                className="primary"
+                disabled={!url || !Object.values(scanOptions).some(Boolean)}
+                onClick={() => {
+                  setShowScanConfigModal(false);
+                  const opts = project.shots.length > 0 ? { ...scanOptions, cuts: false } : scanOptions;
+                  void startUnifiedAnalysis(url, opts);
+                }}
+              >
+                {project.shots.length > 0 ? "⚡ Analyze Existing Shots" : "✨ Start Analysis"}
+              </button>
+              <button onClick={() => setShowScanConfigModal(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {bgScanStatus && (
+        <div className="bg-scan-bar">
+          <div className="bg-scan-info">
+            <span className="spinner-dot" />
+            <b>Background Analysis Active</b>
+            {bgScanStatus.motionActive && (
+              <span className="bg-scan-chip">
+                Motion: {bgScanStatus.motionProgress}%
+              </span>
+            )}
+            {bgScanStatus.stemsActive && (
+              <span className="bg-scan-chip">
+                Stems: {bgScanStatus.stemsStatusText || "Processing..."}
+              </span>
+            )}
+            <small className="muted" style={{ marginLeft: 8 }}>Timeline and editing remain interactive.</small>
+          </div>
+          <button
+            type="button"
+            className="bg-scan-cancel-btn"
+            onClick={() => {
+              detectAbortRef.current?.abort();
+              setBgScanStatus(null);
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
       {project && analysisProgress && (
         <div className="scene-detect-modal unified-analysis-modal">
           <div className="modal panel">
             <div className="section-head">
-              <b>{analysisProgress.stage === "done" ? "Analysis Complete!" : analysisProgress.fullPipeline ? "Analyzing Film" : "Scanning Scene Cuts"}</b>
+              <b>Analyzing Film Pipeline</b>
               <span className="mono" style={{ color: "#e5a444", fontWeight: "bold" }}>
                 {analysisProgress.overallPercent}%
               </span>
             </div>
 
-            {/* 3-Stage Stepper Checklist */}
-            {analysisProgress.fullPipeline && (
-              <div className="analysis-stepper">
-                {/* Step 1: Cut Detection */}
+            <div className="analysis-stepper">
+              {analysisProgress.options.cuts && (
                 <div className={`analysis-step-row ${
                   analysisProgress.stage === "cuts" ? "active" : "completed"
                 }`}>
@@ -2163,16 +3167,17 @@ export default function App() {
                     {analysisProgress.cutsFound > 0 ? `${analysisProgress.cutsFound} shots found` : "Scanning..."}
                   </span>
                 </div>
+              )}
 
-                {/* Step 2: Framing & People */}
+              {analysisProgress.options.framing && (
                 <div className={`analysis-step-row ${
-                  analysisProgress.stage === "cuts" ? "" :
-                  analysisProgress.stage === "framing" ? "active" : "completed"
+                  analysisProgress.stage === "framing" ? "active" :
+                  ["characters", "dialogue", "loudness", "done"].includes(analysisProgress.stage) ? "completed" : ""
                 }`}>
                   <div className="analysis-step-left">
                     <span className="analysis-step-badge">
-                      {analysisProgress.stage === "cuts" ? "2" :
-                       analysisProgress.stage === "framing" ? "●" : "✓"}
+                      {["characters", "dialogue", "loudness", "done"].includes(analysisProgress.stage) ? "✓" :
+                       analysisProgress.stage === "framing" ? "●" : "2"}
                     </span>
                     <span>2. Framing & Shot Sizes</span>
                   </div>
@@ -2182,29 +3187,76 @@ export default function App() {
                      "Tagged"}
                   </span>
                 </div>
+              )}
 
-                {/* Step 3: Character Discovery */}
+              {analysisProgress.options.cast && (
                 <div className={`analysis-step-row ${
                   analysisProgress.stage === "characters" ? "active" :
-                  analysisProgress.stage === "done" ? "completed" : ""
+                  ["dialogue", "loudness", "done"].includes(analysisProgress.stage) ? "completed" : ""
                 }`}>
                   <div className="analysis-step-left">
                     <span className="analysis-step-badge">
-                      {analysisProgress.stage === "done" ? "✓" :
+                      {["dialogue", "loudness", "done"].includes(analysisProgress.stage) ? "✓" :
                        analysisProgress.stage === "characters" ? "●" : "3"}
                     </span>
                     <span>3. Character Discovery & Cast</span>
                   </div>
                   <span className="analysis-step-meta">
-                    {analysisProgress.stage === "done" ? "Clustered" :
-                     analysisProgress.stage === "characters" ? `${analysisProgress.facesFound} faces` :
+                    {analysisProgress.stage === "characters" ? `${analysisProgress.facesFound} faces` :
+                     ["dialogue", "loudness", "done"].includes(analysisProgress.stage) ? "Clustered" :
                      "Waiting..."}
                   </span>
                 </div>
-              </div>
+              )}
+
+              {analysisProgress.options.dialogue && (
+                <div className={`analysis-step-row ${
+                  analysisProgress.stage === "dialogue" ? "active" :
+                  ["loudness", "done"].includes(analysisProgress.stage) ? "completed" : ""
+                }`}>
+                  <div className="analysis-step-left">
+                    <span className="analysis-step-badge">
+                      {["loudness", "done"].includes(analysisProgress.stage) ? "✓" :
+                       analysisProgress.stage === "dialogue" ? "●" : "4"}
+                    </span>
+                    <span>4. Speech VAD Detection</span>
+                  </div>
+                  <span className="analysis-step-meta">
+                    {analysisProgress.stage === "dialogue" ? "Scanning..." :
+                     ["loudness", "done"].includes(analysisProgress.stage) ? "Complete" :
+                     "Waiting..."}
+                  </span>
+                </div>
+              )}
+
+              {analysisProgress.options.loudness && (
+                <div className={`analysis-step-row ${
+                  analysisProgress.stage === "loudness" ? "active" :
+                  analysisProgress.stage === "done" ? "completed" : ""
+                }`}>
+                  <div className="analysis-step-left">
+                    <span className="analysis-step-badge">
+                      {analysisProgress.stage === "done" ? "✓" :
+                       analysisProgress.stage === "loudness" ? "●" : "5"}
+                    </span>
+                    <span>5. EBU R128 Loudness</span>
+                  </div>
+                  <span className="analysis-step-meta">
+                    {analysisProgress.stage === "loudness" ? "Measuring..." :
+                     analysisProgress.stage === "done" ? "Complete" :
+                     "Waiting..."}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {(analysisProgress.options.motion || analysisProgress.options.stems) && (
+              <small className="muted" style={{ display: "block", marginTop: -4 }}>
+                ⚡ Motion energy & DME stem separation will continue automatically in the background.
+              </small>
             )}
 
-            {/* Overall Progress Bar */}
+            {/* Progress Bar */}
             <div className="scene-progress-bar-container">
               <div
                 className="scene-progress-bar"
@@ -2223,23 +3275,7 @@ export default function App() {
               </div>
             ) : (
               <div className="scene-progress-meta mono">
-                <span>
-                  {formatTimecode(
-                    analysisProgress.currentTime,
-                    project.frameRate,
-                    project.dropFrame,
-                  )}{" "}
-                  /{" "}
-                  {formatTimecode(
-                    analysisProgress.totalDuration,
-                    project.frameRate,
-                    project.dropFrame,
-                  )}
-                </span>
-                <span>
-                  {analysisProgress.cutsFound}{" "}
-                  {analysisProgress.cutsFound === 1 ? "shot" : "shots"} found
-                </span>
+                <span>{analysisProgress.statusText}</span>
               </div>
             )}
 

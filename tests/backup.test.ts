@@ -34,3 +34,22 @@ test("rejects unsupported, malformed, colliding and dangling backups", () => {
   const dangling = structuredClone(valid); dangling.project.cast![0].references[0].shotId = "missing";
   assert.throws(() => parseBackup(JSON.stringify(dangling)), /missing shot/);
 });
+
+test("fully populated analysis survives portable backup restoration", () => {
+  const p = project();
+  const shot = p.shots[0];
+  shot.cameraMovement = "Pan";
+  shot.protectedFields = ["cameraMovement", "shotSize"];
+  shot.colorProfile = { palette: ["#112233"], luminance: .3, temperature: -.4, saturation: .5, mood: "Cool", harmony: { type: "neutral", label: "Neutral", confidence: .5, dominantHue: 120 } };
+  shot.motionProfile = { cameraMovement: "Pan", cameraEnergy: 5, subjectEnergy: 3, totalKineticEnergy: 8, confidence: .7 };
+  shot.suggestion = { shotSize: "MS", composition: "Single person", content: "People", uncertain: true, cameraMovement: "Static", model: "yolo:geometry-v2", createdAt: p.createdAt };
+  shot.analysisFailures = { framing: { message: "Offline", createdAt: p.createdAt } };
+  p.dmeWaveforms = { dialogue: [.1], music: [.2], effects: [.3], binCount: 1, duration: 1, separatedAt: p.createdAt };
+  p.shots.push({ ...shot, id: "s2", index: 2, startSeconds: 1, endSeconds: 2 });
+  p.cutAnnotations = [{ outgoingId: "s1", incomingId: "s2", interpretation: "Unmarked", notes: "", eyeTrace: { outgoingFocalPoint: { x: .2, y: .3, type: "saliency", confidence: .5 }, incomingFocalPoint: { x: .2, y: .3, type: "eyes", confidence: .8 }, jumpDistance: 0, jumpDistancePercent: 0, rating: "smooth", screenDirection: "neutral" } }];
+  assert.deepEqual(parseBackup(JSON.stringify(makeBackup(p))), JSON.parse(JSON.stringify(p)));
+  const bad = makeBackup(p); bad.project.dmeWaveforms!.dialogue = [];
+  assert.throws(() => parseBackup(JSON.stringify(bad)), /length/);
+  const invalid = makeBackup(p); invalid.project.shots[0].motionProfile!.confidence = 9;
+  assert.throws(() => parseBackup(JSON.stringify(invalid)), /range/);
+});

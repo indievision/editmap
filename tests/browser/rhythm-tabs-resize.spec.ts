@@ -25,8 +25,8 @@ test("editing rhythm tabs scrolling, smaller font, and smooth resizing across al
   await page.getByRole("button", { name: "Import", exact: true }).click();
   await expect(page.locator(".shot")).toHaveCount(3);
 
-  // Take screenshot at initial / default width (380px)
-  await page.screenshot({ path: "/Users/indievision/.gemini/antigravity/brain/4341f6bd-881a-4b5d-b84f-524d3af592de/rhythm-tabs-default.png" });
+  // Open the Studio contextual detail drawer to inspect rhythm tabs
+  await page.locator('.studio-rail-btn[aria-label="Rhythm"]').click();
 
   // 2. Check Editing Rhythm Title and font size
   const rhythmTitle = page.locator(".rhythm-tabs h2");

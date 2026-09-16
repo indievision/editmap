@@ -1,6 +1,7 @@
 node_modules/
 dist/
 *.tsbuildinfo
+.DS_Store
 test-results/
 playwright-report/
 tests/browser/*.png
@@ -13,3 +14,9 @@ server/.venv/
 server/**/__pycache__/
 server/*.pt
 server/*.onnx
+
+:memory:.ses
+server/:memory:.ses
+.artifacts/
+output/
+tmp/

@@ -25,6 +25,9 @@ test("resizable connected panels and splitters", async ({ page }) => {
   await page.getByRole("button", { name: "Import", exact: true }).click();
   await expect(page.locator(".shot")).toHaveCount(3);
 
+  // In Studio mode, open the contextual detail drawer to inspect and resize the left analytical deck
+  await page.locator('.studio-rail-btn[aria-label="Rhythm"]').click();
+
   // Check splitters are mounted
   const leftHandle = page.locator(".resize-handle-left");
   const rightHandle = page.locator(".resize-handle-right");

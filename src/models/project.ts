@@ -1,4 +1,13 @@
 export const shotSizes = [
+  // The active scale is deliberately coarse: it is the shared contract between
+  // CinemaCLIP suggestions, manual review, and the framing rhythm readings.
+  "Wide",
+  "Full",
+  "Medium",
+  "Close",
+  "Extreme close",
+  // Retained solely to open existing projects without data loss. New scans and
+  // manual controls use the five values above.
   "EWS",
   "WS",
   "MWS",
@@ -17,18 +26,11 @@ export const shotSizes = [
 ] as const;
 export type ShotSize = (typeof shotSizes)[number];
 export const selectableShotSizes = [
-  "EWS",
-  "WS",
-  "FS",
-  "MWS",
-  "AS",
-  "MS",
-  "MCU",
-  "CU",
-  "ECU",
-  "Insert",
-  "OTS",
-  "POV",
+  "Wide",
+  "Full",
+  "Medium",
+  "Close",
+  "Extreme close",
   "Unknown",
 ] as const satisfies readonly ShotSize[];
 // Keep established stored values so existing projects and suggestions still load.
@@ -207,7 +209,7 @@ export interface FocalPoint {
   /** Normalized y position 0.0 (top) to 1.0 (bottom) */
   y: number;
   /** Method of focal detection */
-  type: "eyes" | "face" | "saliency" | "center";
+  type: "eyes" | "face" | "person" | "saliency" | "center";
   /** Detection confidence score 0.0 to 1.0 */
   confidence: number;
 }
@@ -253,6 +255,56 @@ export interface DmeWaveforms {
   separatedAt: string;
 }
 
+/** Local Silero VAD evidence. It describes detected voice activity, never silence or dialogue quality. */
+export interface SpeechRegion { startSeconds: number; endSeconds: number; }
+export interface SpeechAnalysis {
+  regions: SpeechRegion[];
+  /** A sampled-content signature, not a filename, prevents accidental reuse after relinking. */
+  mediaSignature: string;
+  model: "silero-vad";
+  modelVersion: string;
+  settingsVersion: string;
+  threshold: number;
+  minSpeechMs: number;
+  minSilenceMs: number;
+  duration: number;
+  scannedAt: string;
+  processingSeconds: number;
+}
+
+/** EBU R128 loudness transition marker (quiet-to-loud jump or loud-to-quiet drop). */
+export interface LoudnessTransition {
+  time: number;
+  duration: number;
+  fromLufs: number;
+  toLufs: number;
+  deltaLufs: number;
+  type: "quiet-to-loud" | "loud-to-quiet";
+}
+
+/** Local EBU R128 loudness and dynamic contrast analysis from FFmpeg ebur128. */
+export interface LoudnessAnalysis {
+  integratedLoudness: number; // LUFS (I)
+  loudnessRange: number; // LU (LRA) - dynamic contrast
+  lraLow: number; // LUFS (10th percentile)
+  lraHigh: number; // LUFS (95th percentile)
+  truePeak: number; // dBTP (Peak)
+  maxMomentary: number; // LUFS
+  maxShortTerm: number; // LUFS
+  threshold: number; // LUFS
+  momentary: number[]; // Binned M (LUFS)
+  shortTerm: number[]; // Binned S (LUFS)
+  truePeaks: number[]; // Binned TPK (dBTP)
+  transitions: LoudnessTransition[];
+  binCount: number;
+  duration: number;
+  mediaSignature: string;
+  model: "ffmpeg-ebur128";
+  modelVersion: string;
+  scannedAt: string;
+  processingSeconds: number;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -273,6 +325,8 @@ export interface Project {
   soundSpans?: SoundSpan[];
   cast?: CastMember[];
   dmeWaveforms?: DmeWaveforms;
+  speechAnalysis?: SpeechAnalysis;
+  loudnessAnalysis?: LoudnessAnalysis;
   colorMode: string;
   createdAt: string;
   updatedAt: string;

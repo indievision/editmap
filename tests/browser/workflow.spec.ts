@@ -6,7 +6,7 @@ test("local film, EDL, playback, annotation, zoom and persistence", async ({
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto("/");
-  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await page.locator('button.header-action-btn[aria-label="New project"]').click();
   await page.getByLabel("Project name").fill("Synthetic analysis");
   await page
     .locator("input[type=file]")
@@ -78,7 +78,7 @@ test("local film, EDL, playback, annotation, zoom and persistence", async ({
   await page.getByRole("button", { name: /^Save/ }).click();
   await expect(page.getByRole("status")).toContainText("saved");
   await page.reload();
-  await page.getByRole("button", { name: "Open", exact: true }).click();
+  await page.getByRole("button", { name: "Open project", exact: true }).click();
   await page.getByRole("button", { name: /Synthetic analysis/ }).click();
   await expect(page.getByText("Video needs relinking")).toBeVisible();
   await page.getByRole("button", { name: "Shot 2", exact: true }).click();
@@ -95,7 +95,7 @@ test("local film, EDL, playback, annotation, zoom and persistence", async ({
 
 test("boundary reading compares the cut and keeps a manual interpretation", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await page.locator('button.header-action-btn[aria-label="New project"]').click();
   await page.locator("input[type=file]").first().setInputFiles(path.resolve("fixtures/test-film.mp4"));
   await page.locator('input[accept*=".edl"]').setInputFiles(path.resolve("fixtures/cuts-24.edl"));
   await page.getByRole("button", { name: "Import", exact: true }).click();
@@ -103,7 +103,7 @@ test("boundary reading compares the cut and keeps a manual interpretation", asyn
   await page.getByLabel("Shot size", { exact: true }).selectOption("WS");
   await page.getByRole("button", { name: "Shot 2", exact: true }).click();
   await page.getByLabel("Shot size", { exact: true }).selectOption("CU");
-  await page.getByRole("button", { name: "Cut between Shot 1 and Shot 2" }).click();
+  await page.getByRole("slider", { name: "Cut between Shot 1 and Shot 2" }).click();
   await expect(page.locator(".cut-reading")).toContainText("Tighter");
   await expect(page.locator(".cut-reading")).toContainText("1.00s → 2.50s");
   await page.getByLabel("Cut interpretation").selectOption("Reaction");
@@ -116,16 +116,16 @@ test("boundary reading compares the cut and keeps a manual interpretation", asyn
   await page.locator("header").getByRole("button", { name: /^Save/ }).click();
   await expect(page.getByRole("status")).toContainText("saved");
   await page.reload();
-  await page.getByRole("button", { name: "Open", exact: true }).click();
+  await page.getByRole("button", { name: "Open project", exact: true }).click();
   await page.getByRole("button", { name: /Untitled film/ }).click();
-  await page.getByRole("button", { name: "Cut between Shot 1 and Shot 2" }).click();
+  await page.getByRole("slider", { name: "Cut between Shot 1 and Shot 2" }).click();
   await expect(page.getByLabel("Cut interpretation")).toHaveValue("Reaction");
   await expect(page.getByLabel("Cut note")).toHaveValue("We arrive on the response.");
 });
 
 test("sound spans are manual, editable, and persisted with a selected passage", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await page.locator('button.header-action-btn[aria-label="New project"]').click();
   await page.locator('input[accept*=".edl"]').setInputFiles(path.resolve("fixtures/cuts-24.edl"));
   await page.getByRole("button", { name: "Import", exact: true }).click();
   await page.locator(".map-canvas").dispatchEvent("pointerdown", { clientX: 20, button: 0, shiftKey: true, pointerId: 1 });
@@ -140,7 +140,7 @@ test("sound spans are manual, editable, and persisted with a selected passage", 
   await page.getByLabel("Dialogue out").fill("2.5");
   await page.locator("header").getByRole("button", { name: /^Save/ }).click();
   await page.reload();
-  await page.getByRole("button", { name: "Open", exact: true }).click();
+  await page.getByRole("button", { name: "Open project", exact: true }).click();
   await page.getByRole("button", { name: /Untitled film/ }).click();
   await expect(page.locator(".sound-span.dialogue")).toHaveCount(1);
   await expect(page.locator(".sound-list")).toContainText("One sentence crosses three picture changes.");
@@ -150,7 +150,7 @@ test("thumbnails and keyboard tag-and-advance preserve playback and notes", asyn
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await page.locator('button.header-action-btn[aria-label="New project"]').click();
   await page
     .locator("input[type=file]")
     .first()
@@ -210,7 +210,7 @@ test("rhythm keeps short cuts readable beside a long hold", async ({
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await page.locator('button.header-action-btn[aria-label="New project"]').click();
   const edl =
     "001 AX V C 00:00:00:00 00:00:01:00 00:00:00:00 00:00:01:00\n002 AX V C 00:00:00:00 00:00:02:00 00:00:01:00 00:00:03:00\n003 AX V C 00:00:00:00 00:04:00:00 00:00:03:00 00:04:03:00";
   await page
@@ -246,7 +246,7 @@ test("rhythm keeps short cuts readable beside a long hold", async ({
 
 test("local pacing window and seeking", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await page.locator('button.header-action-btn[aria-label="New project"]').click();
   await page
     .locator('input[accept*=".edl"]')
     .setInputFiles(path.resolve("fixtures/cuts-24.edl"));
@@ -270,7 +270,7 @@ test("separate classification fields persist and text blocks size tagging", asyn
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await page.locator('button.header-action-btn[aria-label="New project"]').click();
   await page
     .locator('input[accept*=".edl"]')
     .setInputFiles(path.resolve("fixtures/cuts-24.edl"));
@@ -294,7 +294,7 @@ test("separate classification fields persist and text blocks size tagging", asyn
   await page.getByRole("button", { name: /^Save/ }).click();
   await expect(page.getByRole("status")).toContainText("saved");
   await page.reload();
-  await page.getByRole("button", { name: "Open", exact: true }).click();
+  await page.getByRole("button", { name: "Open project", exact: true }).click();
   await page.getByRole("button", { name: /Untitled film/ }).click();
   await page.getByRole("button", { name: "Shot 1", exact: true }).click();
   await expect(page.getByLabel("People in frame", { exact: true })).toHaveValue(
@@ -314,7 +314,7 @@ test("clear category labels and expanded subjects survive save and reopen", asyn
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await page.locator('button.header-action-btn[aria-label="New project"]').click();
   await page
     .locator('input[accept*=".edl"]')
     .setInputFiles(path.resolve("fixtures/cuts-24.edl"));
@@ -340,7 +340,7 @@ test("clear category labels and expanded subjects survive save and reopen", asyn
   await page.getByRole("button", { name: /^Save/ }).click();
   await expect(page.getByRole("status")).toContainText("saved");
   await page.reload();
-  await page.getByRole("button", { name: "Open", exact: true }).click();
+  await page.getByRole("button", { name: "Open project", exact: true }).click();
   await page.getByRole("button", { name: /Untitled film/ }).click();
   await page.getByRole("button", { name: "Shot 1", exact: true }).click();
   await expect(page.getByLabel("Main subject")).toHaveValue(

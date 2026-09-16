@@ -39,3 +39,19 @@ export async function listProjects(): Promise<Project[]> {
     db.close();
   }
 }
+
+export async function deleteProject(id: string): Promise<void> {
+  const db = await database();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction("projects", "readwrite");
+      tx.objectStore("projects").delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+

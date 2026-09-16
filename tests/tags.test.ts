@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  analyzeFrames,
   analyzeFrame,
   TAG_SCHEMA,
   validateTags,
@@ -13,7 +14,7 @@ test("accepts expanded subjects independently of featured people", () => {
     "Architecture / interiors",
   ]) {
     for (const composition of ["No people", "Two-shot"]) {
-      const tags = { shotSize: "WS", composition, content, uncertain: false };
+      const tags = { shotSize: "Wide", composition, content, uncertain: false };
       assert.deepEqual(validateTags(tags), tags);
     }
   }
@@ -21,7 +22,7 @@ test("accepts expanded subjects independently of featured people", () => {
 
 test("normalizes the observed annotated person tag without accepting arbitrary categories", () => {
   const tags = {
-    shotSize: "CU",
+    shotSize: "Close",
     composition: "Single person (one)",
     content: "People",
     uncertain: false,
@@ -41,7 +42,7 @@ test("normalizes the observed annotated person tag without accepting arbitrary c
 
 test("sends frame to analysis endpoint and handles responses", async (t) => {
   const tags = {
-    shotSize: "CU",
+    shotSize: "Close",
     composition: "Single person",
     content: "People",
     uncertain: false,
@@ -53,6 +54,7 @@ test("sends frame to analysis endpoint and handles responses", async (t) => {
       assert.match(String(url), /\/api\/analyze-shot/);
       const request = JSON.parse(options.body as string);
       assert.equal(request.image, "test-frame");
+      assert.deepEqual(request.images, ["test-frame"]);
       return new Response(JSON.stringify(tags));
     },
   );
@@ -64,7 +66,7 @@ test("sends frame to analysis endpoint and handles responses", async (t) => {
 
 test("handles nested or thinking-field responses gracefully", async (t) => {
   const tags = {
-    shotSize: "CU",
+    shotSize: "Close",
     composition: "Single person",
     content: "People",
     uncertain: false,
@@ -88,7 +90,7 @@ test("handles nested or thinking-field responses gracefully", async (t) => {
 
 test("preserves established tags and enforces text size", () => {
   const tags = {
-    shotSize: "CU",
+    shotSize: "Close",
     composition: "Single person",
     content: "Object / detail",
     uncertain: false,
@@ -103,7 +105,7 @@ test("preserves established tags and enforces text size", () => {
 });
 
 test("retries a temporary runner failure once with the same frame", async (t) => {
-  const tags = { shotSize: "CU", composition: "Single person", content: "People", uncertain: false };
+  const tags = { shotSize: "Close", composition: "Single person", content: "People", uncertain: false };
   const requests: RequestInit[] = [];
   t.mock.method(globalThis, "fetch", async (_url: unknown, options: RequestInit) => {
     requests.push(options);
@@ -136,21 +138,25 @@ test("does not retry a missing model", async (t) => {
   assert.equal(calls, 1);
 });
 
-test("selectableShotSizes includes standard post-production framing taxonomy in order", async () => {
+test("selectableShotSizes exposes the active five-rung framing taxonomy", async () => {
   const { selectableShotSizes } = await import("../src/models/project");
   assert.deepEqual(selectableShotSizes, [
-    "EWS",
-    "WS",
-    "FS",
-    "MWS",
-    "AS",
-    "MS",
-    "MCU",
-    "CU",
-    "ECU",
-    "Insert",
-    "OTS",
-    "POV",
+    "Wide",
+    "Full",
+    "Medium",
+    "Close",
+    "Extreme close",
     "Unknown",
   ]);
+});
+
+test("sends three interior shot samples in one framing request", async (t) => {
+  const tags = { shotSize: "Medium", composition: "Single person", content: "People", uncertain: false };
+  t.mock.method(globalThis, "fetch", async (_url: unknown, options: RequestInit) => {
+    const request = JSON.parse(options.body as string);
+    assert.deepEqual(request.images, ["a", "b", "c"]);
+    assert.equal(request.image, "a");
+    return new Response(JSON.stringify(tags));
+  });
+  assert.deepEqual(await analyzeFrames(["a", "b", "c"], new AbortController().signal), tags);
 });

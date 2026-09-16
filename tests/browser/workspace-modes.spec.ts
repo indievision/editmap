@@ -8,7 +8,7 @@ test("three workspace modes: studio, map focus, and review desk", async ({ page 
   await page.goto("/");
 
   // 1. Setup new project with fixture video and EDL
-  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await page.locator('button.header-action-btn[aria-label="New project"]').click();
   await page.getByLabel("Project name").fill("Workspace Modes Test");
 
   await page
@@ -32,13 +32,19 @@ test("three workspace modes: studio, map focus, and review desk", async ({ page 
   await expect(studioTab).toHaveClass(/active/);
   await expect(page.locator(".workspace")).toHaveClass(/mode-studio/);
 
-  // Analytical deck visible on left
-  await expect(page.locator(".analytical-deck")).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Rhythm & Pacing" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Sequence Reading" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Cut Reading" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Cast & AI" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Color Reading" })).toBeVisible();
+  // Studio Mode has slim tool rail and Studio Rhythm Ribbon
+  await expect(page.locator(".studio-tool-rail")).toBeVisible();
+  await expect(page.locator(".studio-rhythm-ribbon")).toBeVisible();
+  await expect(page.locator(".ribbon-lane")).toHaveCount(5);
+
+  // Open contextual detail drawer via tool rail tab
+  await page.locator('.studio-rail-btn[aria-label="Rhythm"]').click();
+  await expect(page.locator(".studio-detail-drawer")).toBeVisible();
+  await expect(page.locator(".rhythm-drawer-title")).toHaveText("Editing rhythm");
+  await expect(page.getByRole("tab", { name: "Shot duration" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Local pacing" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Audiovisual" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Motion energy" })).toBeVisible();
 
   // Monitor visible in center
   await expect(page.locator(".monitor")).toBeVisible();

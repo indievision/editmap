@@ -167,6 +167,32 @@ test("discoverCharactersAcrossShots discovers faces and clusters them into Chara
   assert.equal(result.cast[0].references[0].image, "avatar-b64");
   assert.equal(result.shotAnalyses.size, 2); // shot-1 and shot-3 (shot-2 skipped: No people)
   assert.deepEqual(result.shotAnalyses.get("shot-1")?.intervals, [
-    { memberId: "char-1", startSeconds: 0, endSeconds: 5, reviewStatus: "Needs review" },
+    { memberId: "char-1", startSeconds: 2.5, endSeconds: 2.5, reviewStatus: "Needs review" },
   ]);
+});
+
+test("rediscovery preserves named cast and retries failed samples from its checkpoint", async (t) => {
+  const { discoverCharactersAcrossShots, mergeDiscoveredCast } = await import("../src/analysis/characters");
+  const existing = [{ id: "anna", name: "Anna", references: [{ id: "manual", image: "aGVsbG8=", shotId: "s1", time: .5 }] }];
+  assert.deepEqual(mergeDiscoveredCast(existing, [{ ...existing[0], name: "Character 1", references: [] }]), existing);
+  const shots = [0, 1].map(i => ({ id: `s${i+1}`, index: i+1, startSeconds: i, endSeconds: i+1, composition: "Single person", content: "People" } as Shot));
+  const checkpoint = new Map();
+  let fail = true, samples = 0;
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
+    const body = JSON.parse(init.body as string);
+    if (String(url).includes("detect-shot")) {
+      if (body.shotId === "s2" && fail) return new Response("{}", { status: 503 });
+      return Response.json({ faces: [] });
+    }
+    throw new Error("Empty detections must not invoke clustering");
+  });
+  const sampler = { sample: async () => { samples++; return "image"; }, dispose() {} };
+  const first = await discoverCharactersAcrossShots(shots, sampler, new AbortController().signal, { existingCast: existing, checkpoint });
+  assert.deepEqual(first.cast, existing);
+  assert.deepEqual(first.shotAnalyses.get("s2")?.failedTimes, [1.5]);
+  assert.deepEqual(first.shotAnalyses.get("s2")?.sampleTimes, []);
+  fail = false;
+  const resumed = await discoverCharactersAcrossShots(shots, sampler, new AbortController().signal, { existingCast: existing, checkpoint });
+  assert.equal(samples, 3);
+  assert.deepEqual(resumed.shotAnalyses.get("s2")?.failedTimes, []);
 });

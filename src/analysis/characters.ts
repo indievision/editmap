@@ -208,7 +208,7 @@ export async function scanCharactersInShot(
       lastError: [...readings].reverse().find((reading) => reading.failure)?.failure,
       sampleTimes: sampleTimes.slice(0, readings.length),
       reviewStatus: "Needs review",
-      model: MODEL,
+      model: "local-face-recognition",
       createdAt: new Date().toISOString(),
       mode,
       partial,
@@ -303,6 +303,8 @@ export interface AutoDiscoverProgress {
   stage: "sampling" | "clustering";
 }
 
+export type DiscoveryCheckpoint = Map<string, DiscoveredFaceSample[]>;
+
 export interface AutoDiscoverResult {
   cast: CastMember[];
   shotAnalyses: Map<string, CharacterAnalysis>;
@@ -314,6 +316,9 @@ export async function discoverCharactersAcrossShots(
   sampler: FrameSampler,
   signal: AbortSignal,
   options: {
+    existingCast?: CastMember[];
+    checkpoint?: DiscoveryCheckpoint;
+    onCheckpoint?: (shotId: string, analysis: CharacterAnalysis) => void;
     similarityThreshold?: number;
     minAppearances?: number;
     onProgress?: (progress: AutoDiscoverProgress) => void;
@@ -327,6 +332,8 @@ export async function discoverCharactersAcrossShots(
 
   const allFaces: DiscoveredFaceSample[] = [];
   let completedShots = 0;
+  const failures = new Map<string, string>();
+  const checkpoint = options.checkpoint ?? new Map<string, DiscoveredFaceSample[]>();
 
   options.onProgress?.({
     completedShots: 0,
@@ -339,35 +346,42 @@ export async function discoverCharactersAcrossShots(
     if (signal.aborted) break;
 
     const time = (shot.startSeconds + shot.endSeconds) / 2;
+    const request = new AbortController();
+    const abort = () => request.abort();
+    signal.addEventListener("abort", abort, { once: true });
+    const timeout = setTimeout(abort, CHARACTER_SAMPLE_TIMEOUT_MS);
     try {
-      const image = await sampler.sample(time);
-      options.onFrame?.(shot, time, image);
-
-      const resp = await fetchLocalModel("/api/detect-shot-faces", {
-        method: "POST",
-        signal,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image, shotId: shot.id, time }),
-      });
-
-      if (resp.ok) {
+      signal.throwIfAborted();
+      let faces = checkpoint.get(shot.id);
+      if (!faces) {
+        const image = await sampler.sample(time);
+        options.onFrame?.(shot, time, image);
+        const resp = await fetchLocalModel("/api/detect-shot-faces", {
+          method: "POST", signal: request.signal,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image, shotId: shot.id, time }),
+        });
+        if (!resp.ok) throw new Error(`Face detection failed (HTTP ${resp.status}).`);
         const data = await resp.json();
-        if (Array.isArray(data.faces)) {
-          for (const f of data.faces) {
-            allFaces.push({
-              shotId: shot.id,
-              time,
-              embedding: f.embedding,
-              crop: f.crop,
-              score: f.score ?? 1.0,
-              area: f.area ?? 100,
-            });
-          }
-        }
+        if (!Array.isArray(data.faces)) throw new Error("Invalid face detection response.");
+        faces = data.faces.map((f: DiscoveredFaceSample) => {
+          if (!Array.isArray(f.embedding) || !f.embedding.length || !f.embedding.every(Number.isFinite) || typeof f.crop !== "string") throw new Error("Invalid face evidence.");
+          return { shotId: shot.id, time, embedding: f.embedding, crop: f.crop, score: f.score ?? 1, area: f.area ?? 100 };
+        });
+        checkpoint.set(shot.id, faces!);
       }
+      allFaces.push(...faces!);
     } catch (e) {
       if (signal.aborted) throw e;
-      console.warn(`Face detection failed for shot ${shot.index}:`, e);
+      const failure = request.signal.aborted ? "Face detection timed out." : e instanceof Error ? e.message : "Face detection failed.";
+      failures.set(shot.id, failure);
+      options.onCheckpoint?.(shot.id, {
+        intervals: shot.characterAnalysis?.intervals ?? [], unresolvedTimes: [], failedTimes: [time], lastError: failure,
+        sampleTimes: [], reviewStatus: "Needs review", model: "local-face-recognition", createdAt: new Date().toISOString(), mode: "fast", partial: true,
+      });
+    } finally {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", abort);
     }
 
     completedShots++;
@@ -381,36 +395,40 @@ export async function discoverCharactersAcrossShots(
 
   signal.throwIfAborted();
 
-  if (!allFaces.length) {
-    return { cast: [], shotAnalyses: new Map(), totalFaces: 0 };
+  options.onProgress?.({ completedShots: eligibleShots.length, totalShots: eligibleShots.length, facesFound: allFaces.length, stage: "clustering" });
+  type Cluster = { id: string; name: string; avatar: string; shotId: string; time: number; appearances: { shotId: string; time: number }[] };
+  let rawCharacters: Cluster[] = [];
+  if (allFaces.length) {
+    const request = new AbortController();
+    const abort = () => request.abort();
+    signal.addEventListener("abort", abort, { once: true });
+    const timeout = setTimeout(abort, 120_000);
+    try {
+      signal.throwIfAborted();
+      const response = await fetchLocalModel("/api/cluster-faces", {
+        method: "POST", signal: request.signal, headers: { "Content-Type": "application/json" },
+        // Omit the threshold unless a caller has deliberately calibrated one.
+        // The local backend selects a safe default for the active embedding
+        // engine, preventing ArcFace pose changes from becoming duplicate cast.
+        body: JSON.stringify({
+          faces: allFaces,
+          existingCast: options.existingCast ?? [],
+          ...(options.similarityThreshold !== undefined ? { similarityThreshold: options.similarityThreshold } : {}),
+          minAppearances: options.minAppearances ?? 1,
+        }),
+      });
+      if (!response.ok) throw new Error(`Face clustering failed (HTTP ${response.status}). Resume to retry retained samples.`);
+      const data = await response.json();
+      if (!Array.isArray(data.characters) || !data.characters.every((c: Cluster) => typeof c.id === "string" && typeof c.name === "string" && typeof c.avatar === "string" && Array.isArray(c.appearances))) throw new Error("Invalid clustering response.");
+      rawCharacters = data.characters;
+    } finally {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", abort);
+    }
   }
+  signal.throwIfAborted();
 
-  options.onProgress?.({
-    completedShots: eligibleShots.length,
-    totalShots: eligibleShots.length,
-    facesFound: allFaces.length,
-    stage: "clustering",
-  });
-
-  const clusterResp = await fetchLocalModel("/api/cluster-faces", {
-    method: "POST",
-    signal,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      faces: allFaces,
-      similarityThreshold: options.similarityThreshold ?? 0.50,
-      minAppearances: options.minAppearances ?? 1,
-    }),
-  });
-
-  if (!clusterResp.ok) {
-    throw new Error(`Face clustering failed with status ${clusterResp.status}`);
-  }
-
-  const clusterData = await clusterResp.json();
-  const rawCharacters = Array.isArray(clusterData.characters) ? clusterData.characters : [];
-
-  const cast: CastMember[] = rawCharacters.map((c: any) => ({
+  const cast: CastMember[] = rawCharacters.map((c) => ({
     id: c.id,
     name: c.name,
     references: [
@@ -423,7 +441,8 @@ export async function discoverCharactersAcrossShots(
     ],
   }));
 
-  const signature = characterReferenceSignature(cast);
+  const retainedCast = mergeDiscoveredCast(options.existingCast ?? [], cast);
+  const signature = characterReferenceSignature(retainedCast);
   const shotAnalyses = new Map<string, CharacterAnalysis>();
 
   // Map shot appearances for each shot
@@ -437,15 +456,18 @@ export async function discoverCharactersAcrossShots(
 
     const intervals: CharacterInterval[] = presentMemberIds.map((memberId) => ({
       memberId,
-      startSeconds: shot.startSeconds,
-      endSeconds: shot.endSeconds,
+      startSeconds: (shot.startSeconds + shot.endSeconds) / 2,
+      endSeconds: (shot.startSeconds + shot.endSeconds) / 2,
       reviewStatus: "Needs review",
     }));
 
     shotAnalyses.set(shot.id, {
-      intervals,
+      intervals: failures.has(shot.id) ? shot.characterAnalysis?.intervals ?? [] : intervals,
       unresolvedTimes: [],
-      sampleTimes: [(shot.startSeconds + shot.endSeconds) / 2],
+      failedTimes: failures.has(shot.id) ? [(shot.startSeconds + shot.endSeconds) / 2] : [],
+      lastError: failures.get(shot.id),
+      partial: failures.has(shot.id),
+      sampleTimes: failures.has(shot.id) ? [] : [(shot.startSeconds + shot.endSeconds) / 2],
       reviewStatus: "Needs review",
       model: "auto-cluster",
       createdAt: new Date().toISOString(),
@@ -455,8 +477,14 @@ export async function discoverCharactersAcrossShots(
   }
 
   return {
-    cast,
+    cast: retainedCast,
     shotAnalyses,
     totalFaces: allFaces.length,
   };
+}
+
+/** Existing IDs, names and reference images are authoritative across rediscovery. */
+export function mergeDiscoveredCast(existing: CastMember[], discovered: CastMember[]): CastMember[] {
+  const ids = new Set(existing.map(member => member.id));
+  return [...existing, ...discovered.filter(member => !ids.has(member.id))];
 }

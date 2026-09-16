@@ -25,6 +25,7 @@ export default function ProjectHeader({
   isAnalyzing,
   hasVideo,
   onProjectNameChange,
+  onHome,
 }: {
   project: Project | null;
   dirty: boolean;
@@ -46,6 +47,7 @@ export default function ProjectHeader({
   isAnalyzing: boolean;
   hasVideo: boolean;
   onProjectNameChange?: (name: string) => void;
+  onHome?: () => void;
 }) {
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [importMenuOpen, setImportMenuOpen] = useState(false);
@@ -87,8 +89,11 @@ export default function ProjectHeader({
         <a
           className="brand"
           href="#"
-          onClick={(e) => e.preventDefault()}
-          title="EDITMAP: Film Editing Structural Map"
+          onClick={(e) => {
+            e.preventDefault();
+            if (onHome) onHome();
+          }}
+          title="EDITMAP: Return to Welcome Screen"
           aria-label="EDITMAP Home"
         >
           <span className="brand-mark" aria-hidden="true">▥</span>

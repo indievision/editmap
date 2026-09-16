@@ -66,10 +66,15 @@ class DmeSeparator:
         self.model.eval()
         logger.info("DnR Demucs model ready. Sources: %s", self.model.sources)
 
-    def extract_audio_to_wav(self, input_path: str, output_wav_path: str) -> None:
+    def extract_audio_to_wav(self, input_path: str, output_wav_path: str, cancel_event=None) -> None:
         """Extracts audio to 44.1kHz stereo 16-bit PCM WAV using ffmpeg."""
+        import json
+        probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", input_path], capture_output=True, text=True, timeout=30)
+        duration = float(json.loads(probe.stdout).get("format", {}).get("duration", 0))
+        if not 0 < duration <= 14400:
+            raise ValueError("DME supports media up to four hours with a known duration.")
         cmd = [
-            "ffmpeg",
+            "ffmpeg", "-nostdin",
             "-y",
             "-i", input_path,
             "-vn",
@@ -79,9 +84,22 @@ class DmeSeparator:
             output_wav_path
         ]
         logger.info("Extracting audio with ffmpeg: %s -> %s", input_path, output_wav_path)
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"FFmpeg audio extraction failed: {result.stderr}")
+        import time
+        with tempfile.TemporaryFile() as errors:
+            process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=errors)
+            deadline = time.monotonic() + 600
+            try:
+                while process.poll() is None:
+                    if (cancel_event and cancel_event.is_set()) or time.monotonic() > deadline:
+                        raise RuntimeError("Audio extraction cancelled or timed out.")
+                    time.sleep(.1)
+                if process.returncode:
+                    errors.seek(0)
+                    raise RuntimeError(f"FFmpeg audio extraction failed: {errors.read(4096).decode(errors='replace')}")
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.wait()
 
     def separate(
         self,
@@ -89,72 +107,68 @@ class DmeSeparator:
         bin_count: int = 1400,
         output_dir: Optional[str] = None,
         segment: float = 7.8,
-        overlap: float = 0.1
+        overlap: float = 0.1,
+        cancel_event=None,
+        on_progress=None,
     ) -> Dict[str, Any]:
         """
         Separates a video or audio file into Dialogue, Music, and Effects (DME).
         Returns normalized waveform bins and metadata.
         """
+        def check_cancel():
+            if cancel_event and cancel_event.is_set():
+                raise RuntimeError("DME separation cancelled.")
+        check_cancel()
         self.ensure_model()
-
+        check_cancel()
         with tempfile.TemporaryDirectory() as tmpdir:
             temp_wav = os.path.join(tmpdir, "extracted.wav")
-            self.extract_audio_to_wav(input_media_path, temp_wav)
-
-            audio_data, sr = sf.read(temp_wav, dtype="float32")
-            if sr != self.model.samplerate:
-                raise RuntimeError(f"Audio sample rate {sr} does not match model sample rate {self.model.samplerate}")
-
-            # Audio shape expected: (channels, samples)
-            if audio_data.ndim == 1:
-                tensor = torch.tensor(np.stack([audio_data, audio_data]), dtype=torch.float32)
-            else:
-                tensor = torch.tensor(audio_data.T, dtype=torch.float32)
-
-            duration = tensor.shape[1] / float(sr)
-            logger.info("Processing %0.2f seconds of audio with Demucs...", duration)
-
-            with torch.no_grad():
-                sources = apply_model(
-                    self.model,
-                    tensor[None],
-                    device=self.device,
-                    segment=segment,
-                    overlap=overlap,
-                    split=True
-                )[0]
-
-            source_names = self.model.sources
-            stems: Dict[str, np.ndarray] = {}
-            for idx, name in enumerate(source_names):
-                stem_tensor = sources[idx].cpu().numpy()
-                stems[name] = stem_tensor
-
-            dme_mapping = {
-                "dialogue": stems.get("speech"),
-                "music": stems.get("music"),
-                "effects": stems.get("sfx")
-            }
-
-            results: Dict[str, Any] = {
-                "duration": duration,
-                "binCount": bin_count,
-                "sampleRate": sr
-            }
-
-            if output_dir:
-                os.makedirs(output_dir, exist_ok=True)
-                for stem_name, stem_audio in dme_mapping.items():
-                    if stem_audio is not None:
-                        out_path = os.path.join(output_dir, f"{stem_name}.wav")
-                        sf.write(out_path, stem_audio.T, sr)
-                        logger.info("Saved stem WAV to %s", out_path)
-
-            for stem_name, stem_audio in dme_mapping.items():
-                if stem_audio is not None:
-                    mono = np.mean(stem_audio, axis=0)
-                    results[stem_name] = compute_waveform_bins(mono, bin_count=bin_count)
-                else:
-                    results[stem_name] = [0.0] * bin_count
-
-            return results
+            self.extract_audio_to_wav(input_media_path, temp_wav, cancel_event)
+            with sf.SoundFile(temp_wav) as audio:
+                sr, total = audio.samplerate, len(audio)
+                if sr != self.model.samplerate or total < 1:
+                    raise RuntimeError("Invalid audio or model sample rate mismatch.")
+                duration = total / sr
+                bins = {name: np.zeros(bin_count, dtype=np.float32) for name in ("dialogue", "music", "effects")}
+                source_map = {"dialogue": "speech", "music": "music", "effects": "sfx"}
+                missing = set(source_map.values()) - set(self.model.sources)
+                if missing:
+                    raise RuntimeError(f"DME model is missing sources: {sorted(missing)}")
+                # Thirty-second interiors plus context bound RAM independently of film length.
+                block_size, context = 30 * sr, sr
+                outputs = {}
+                try:
+                    if output_dir:
+                        os.makedirs(output_dir, exist_ok=True)
+                        outputs = {name: sf.SoundFile(os.path.join(output_dir, name + ".wav"), mode="w", samplerate=sr, channels=2) for name in bins}
+                    for start in range(0, total, block_size):
+                        check_cancel()
+                        end = min(total, start + block_size)
+                        read_start, read_end = max(0, start-context), min(total, end+context)
+                        audio.seek(read_start)
+                        data = audio.read(read_end-read_start, dtype="float32", always_2d=True)
+                        tensor = torch.from_numpy(data.T.copy())
+                        if tensor.shape[0] == 1:
+                            tensor = tensor.repeat(2, 1)
+                        with torch.no_grad():
+                            sources = apply_model(self.model, tensor[None], device=self.device, segment=segment, overlap=overlap, split=True, shifts=0)[0]
+                        check_cancel()
+                        for name, source in source_map.items():
+                            stem = sources[self.model.sources.index(source), :, start-read_start:end-read_start].cpu().numpy()
+                            if name in outputs:
+                                outputs[name].write(stem.T)
+                            # Stereo peak avoids cancellation from opposite-phase channels.
+                            peaks = np.max(np.abs(stem), axis=0)
+                            first_bin = min(bin_count-1, start * bin_count // total)
+                            last_bin = min(bin_count-1, (end-1) * bin_count // total)
+                            for b in range(first_bin, last_bin+1):
+                                lo = max(start, int(b * total / bin_count))
+                                hi = min(end, max(lo+1, int((b+1) * total / bin_count)))
+                                if hi > lo:
+                                    bins[name][b] = max(bins[name][b], float(np.max(peaks[lo-start:hi-start])))
+                        del sources, tensor, data
+                        if on_progress:
+                            on_progress(end / total)
+                finally:
+                    for output in outputs.values(): output.close()
+                return {"duration": duration, "binCount": bin_count, "sampleRate": sr, **{name: np.round(np.clip(values, 0, 1), 4).tolist() for name, values in bins.items()}}

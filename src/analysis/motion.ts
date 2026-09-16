@@ -1,3 +1,4 @@
+import { fetchLocalModel } from "./localModel";
 import type { CameraMovementType, MotionProfile, Shot } from "../models/project";
 
 const SAMPLE_WIDTH = 160;
@@ -283,7 +284,7 @@ export async function analyzeShotMotion(
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 2000);
-    const response = await fetch("/api/analyze-motion", {
+    const response = await fetchLocalModel("/api/analyze-motion", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

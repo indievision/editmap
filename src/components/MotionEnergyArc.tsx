@@ -24,23 +24,27 @@ const MotionEnergyArc = memo(function MotionEnergyArc({
   const duration = Math.max(1, project.duration);
   const shots = project.shots;
 
-  const analyzedCount = shots.filter((s) => s.motionProfile !== undefined).length;
+  const analyzedCount = shots.filter(
+    (s) => s.motionProfile !== undefined,
+  ).length;
   const avgKinetic =
     analyzedCount > 0
       ? Math.round(
-          shots.reduce((acc, s) => acc + (s.motionProfile?.totalKineticEnergy ?? 0), 0) /
-            analyzedCount
+          shots.reduce(
+            (acc, s) => acc + (s.motionProfile?.totalKineticEnergy ?? 0),
+            0,
+          ) / analyzedCount,
         )
       : 0;
 
   const highVelocityCount = shots.filter(
-    (s) => (s.motionProfile?.totalKineticEnergy ?? 0) >= 50
+    (s) => (s.motionProfile?.totalKineticEnergy ?? 0) >= 50,
   ).length;
 
   const staticCount = shots.filter(
     (s) =>
       (s.cameraMovement ?? s.motionProfile?.cameraMovement) === "Static" ||
-      (s.motionProfile?.cameraEnergy ?? 0) < 8
+      (s.motionProfile?.cameraEnergy ?? 0) < 8,
   ).length;
 
   const handleScanSequence = async () => {
@@ -74,9 +78,11 @@ const MotionEnergyArc = memo(function MotionEnergyArc({
     <section className="motion-energy-arc">
       <div className="motion-arc-header">
         <p className="rhythm-explanation">
-          <b>Kinetic Energy Arc</b>: Visualizes macro motion energy across the sequence.
-          Layered bars represent <span className="legend-camera">■ Camera Motion</span> (global frame move)
-          and <span className="legend-subject">■ Subject Motion</span> (internal actor/action energy).
+          <b>Kinetic Energy Arc</b>: Visualizes macro motion energy across the
+          sequence. Layered bars represent{" "}
+          <span className="legend-camera">■ Camera Motion</span> (global frame
+          move) and <span className="legend-subject">■ Subject Motion</span>{" "}
+          (internal actor/action energy).
         </p>
         <div className="motion-arc-actions">
           {url && onUpdateShots && (
@@ -87,7 +93,9 @@ const MotionEnergyArc = memo(function MotionEnergyArc({
               disabled={batchScanning}
               title="Batch analyze motion energy across all shots in the sequence"
             >
-              {batchScanning ? `Scanning sequence (${scanProgress}%)…` : "⚡ Scan Sequence Motion"}
+              {batchScanning
+                ? `Scanning sequence (${scanProgress}%)…`
+                : "⚡ Scan Sequence Motion"}
             </button>
           )}
         </div>
@@ -115,7 +123,9 @@ const MotionEnergyArc = memo(function MotionEnergyArc({
       </div>
 
       {!shots.length ? (
-        <p className="rhythm-empty muted">Import an EDL to see the motion energy arc.</p>
+        <p className="rhythm-empty muted">
+          Import an EDL to see the motion energy arc.
+        </p>
       ) : (
         <div className="motion-arc-chart-container">
           <div className="motion-y-axis">
@@ -137,7 +147,10 @@ const MotionEnergyArc = memo(function MotionEnergyArc({
                 const subEnergy = profile?.subjectEnergy ?? 0;
                 const totalEnergy = profile?.totalKineticEnergy ?? 0;
                 const isSelected = selected === shot.id;
-                const movement = shot.cameraMovement ?? profile?.cameraMovement ?? "Unclassified";
+                const movement =
+                  shot.cameraMovement ??
+                  profile?.cameraMovement ??
+                  "Unclassified";
 
                 return (
                   <button
@@ -156,16 +169,25 @@ const MotionEnergyArc = memo(function MotionEnergyArc({
                     }}
                   >
                     {profile ? (
-                      <div className="bar-energy-stack">
+                      <div
+                        className="bar-energy-stack"
+                        style={{ height: `${Math.max(2, totalEnergy)}%` }}
+                      >
                         {/* Subject energy layer (top/amber) */}
                         <div
                           className="bar-layer subject"
-                          style={{ height: `${subEnergy}%` }}
+                          style={{
+                            flex: subEnergy,
+                            minHeight: subEnergy > 0 ? "4px" : "0",
+                          }}
                         />
                         {/* Camera energy layer (bottom/cyan) */}
                         <div
                           className="bar-layer camera"
-                          style={{ height: `${camEnergy}%` }}
+                          style={{
+                            flex: camEnergy,
+                            minHeight: camEnergy > 0 ? "4px" : "0",
+                          }}
                         />
                       </div>
                     ) : (
@@ -185,8 +207,20 @@ const MotionEnergyArc = memo(function MotionEnergyArc({
 
               <div className="pacing-times">
                 <span>00:00:00</span>
-                <span>{formatTimecode(duration / 2, project.frameRate, project.dropFrame)}</span>
-                <span>{formatTimecode(duration, project.frameRate, project.dropFrame)}</span>
+                <span>
+                  {formatTimecode(
+                    duration / 2,
+                    project.frameRate,
+                    project.dropFrame,
+                  )}
+                </span>
+                <span>
+                  {formatTimecode(
+                    duration,
+                    project.frameRate,
+                    project.dropFrame,
+                  )}
+                </span>
               </div>
             </div>
           </div>

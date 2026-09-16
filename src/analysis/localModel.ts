@@ -1,18 +1,20 @@
-import { peopleLabels, selectableShotSizes, subjectLabels, type Shot } from "../models/project";
+import { peopleLabels, shotSizes, subjectLabels, type Shot } from "../models/project";
 
 export type Tags = Pick<
   Shot,
   "shotSize" | "composition" | "content" | "uncertain"
->;
+> & { model?: string };
 
-export const MODEL = "ultralytics-yolo";
+export const MODEL = "CinemaCLIP-1.0.0:shot.framing";
 
 // The classifier needs only four short enum values. Keeping the image and
 // generation budget compact substantially lowers local vision-model work.
 const FRAME_WIDTH = 336;
 const FRAME_JPEG_QUALITY = 0.75;
 
-const sizes = [...selectableShotSizes, "Not applicable"];
+// Accept retained legacy labels on import, but only emit the active five-rung
+// taxonomy from the CinemaCLIP backend and manual controls.
+const sizes = [...shotSizes];
 
 export const TAG_SCHEMA = {
   type: "object",
@@ -34,7 +36,7 @@ export function validateTags(value: unknown): Tags {
   if (
     !p ||
     typeof p.shotSize !== "string" ||
-    !sizes.includes(p.shotSize) ||
+    !sizes.includes(p.shotSize as Shot["shotSize"]) ||
     typeof composition !== "string" ||
     !Object.keys(peopleLabels).includes(composition) ||
     typeof p.content !== "string" ||
@@ -54,7 +56,7 @@ export function validateTags(value: unknown): Tags {
 
 export const BACKEND_URL = "http://127.0.0.1:8000";
 
-export async function fetchLocalModel(
+async function fetchTransport(
   path: string,
   options: RequestInit,
 ): Promise<Response> {
@@ -78,20 +80,42 @@ export async function fetchLocalModel(
       // Non-JSON proxy error response
     }
     return await fetch(directUrl, options);
-  } catch {
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
     return await fetch(directUrl, options);
   }
 }
 
-export async function analyzeFrame(
-  image: string,
+let sessionToken: string | undefined;
+export async function fetchLocalModel(path: string, options: RequestInit): Promise<Response> {
+  const withToken = () => {
+    const headers = new Headers(options.headers);
+    if (sessionToken) headers.set("X-Editmap-Token", sessionToken);
+    return { ...options, headers };
+  };
+  let response = await fetchTransport(path, withToken());
+  if (response.status === 401) {
+    options.signal?.throwIfAborted();
+    const session = await fetchTransport("/api/session", { method: "GET", signal: options.signal, cache: "no-store" });
+    if (!session.ok) throw new Error("Could not establish a local CV session.");
+    const data = await session.json();
+    if (typeof data.token !== "string") throw new Error("Invalid local CV session.");
+    sessionToken = data.token;
+    response = await fetchTransport(path, withToken());
+  }
+  return response;
+}
+
+export async function analyzeFrames(
+  images: string[],
   signal: AbortSignal,
 ): Promise<Tags> {
+  if (!images.length) throw new Error("No video frame is available for framing analysis.");
   const options = {
     method: "POST",
     signal,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ image }),
+    body: JSON.stringify({ image: images[0], images }),
   };
 
   let response = await fetchLocalModel("/api/analyze-shot", options);
@@ -134,12 +158,18 @@ export async function analyzeFrame(
   }
 
   try {
-    return validateTags(tagsCandidate);
+    const tags = validateTags(tagsCandidate);
+    return typeof out.model === "string" ? { ...tags, model: out.model } : tags;
   } catch {
     throw new Error(
       "The model returned invalid tags. Your existing tags were preserved.",
     );
   }
+}
+
+/** Backward-compatible single-frame entry point for a selected-shot review. */
+export function analyzeFrame(image: string, signal: AbortSignal): Promise<Tags> {
+  return analyzeFrames([image], signal);
 }
 
 export async function sampleFrame(
@@ -159,6 +189,30 @@ export type FrameSampler = {
   sample: (time: number) => Promise<string>;
   dispose: () => void;
 };
+
+export type ShotFrameSamples = {
+  images: string[];
+  time: number;
+  previewImage: string;
+};
+
+/**
+ * Samples three interior points so a flash frame or an imperfect cut boundary
+ * does not become the whole shot's framing suggestion.
+ */
+export async function sampleShotFrames(
+  sampler: FrameSampler,
+  startSeconds: number,
+  endSeconds: number,
+): Promise<ShotFrameSamples> {
+  const duration = Math.max(0, endSeconds - startSeconds);
+  const ratios = duration < 0.12 ? [0.5] : [0.2, 0.5, 0.8];
+  const times = ratios.map((ratio) => startSeconds + duration * ratio);
+  const images: string[] = [];
+  for (const time of times) images.push(await sampler.sample(time));
+  const previewIndex = Math.floor(images.length / 2);
+  return { images, time: times[previewIndex], previewImage: images[previewIndex] };
+}
 
 /**
  * Keeps a single off-screen decoder and canvas alive for a sequence of seeks.
@@ -209,15 +263,19 @@ export async function createFrameSampler(
 
   const ready = wait("loadeddata");
   v.src = url;
-  await ready;
+  try { await ready; } catch (error) { v.removeAttribute("src"); v.load(); throw error; }
 
   return {
     async sample(time) {
       if (time >= v.duration)
         throw new Error("This shot is outside the linked video.");
-      const seek = wait("seeked");
-      v.currentTime = Math.max(0.001, time);
-      await seek;
+      signal.throwIfAborted();
+      const target = Math.max(0, Math.min(time, v.duration - 0.001));
+      if (Math.abs(v.currentTime - target) > 0.00001 || v.readyState < 2) {
+        const seek = wait("seeked");
+        v.currentTime = target;
+        await seek;
+      }
       c.width = FRAME_WIDTH;
       c.height = Math.round((FRAME_WIDTH * v.videoHeight) / v.videoWidth);
       c.getContext("2d")!.drawImage(v, 0, 0, c.width, c.height);

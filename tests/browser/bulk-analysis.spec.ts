@@ -114,7 +114,7 @@ async function importShots(page: Page) {
 
 async function setup(page: Page) {
   await page.goto("/");
-  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await page.locator('button.header-action-btn[aria-label="New project"]').click();
   const castTab = page.getByRole("tab", { name: "Cast & AI" });
   if (await castTab.isVisible()) {
     await castTab.click();
@@ -137,6 +137,7 @@ test("scans every shot, protects confirmed edits, and saves direct readings", as
   await page.getByRole("button", { name: "Shot 1", exact: true }).click();
   await page.getByLabel("Shot size", { exact: true }).selectOption("MS");
   await page.getByRole("button", { name: "Confirm current tags" }).click();
+  await page.getByRole("button", { name: "Shot 1", exact: true }).click();
   await page
     .getByRole("textbox", { name: "Notes", exact: true })
     .fill("Keep this manual note");
@@ -152,7 +153,7 @@ test("scans every shot, protects confirmed edits, and saves direct readings", as
     .click();
   await expect.poll(() => requests).toBe(1);
   await expect(
-    page.getByRole("button", { name: /Analyze selected shot|Reanalyze shot/ }),
+    page.getByRole("button", { name: /Analyze frame|Reanalyze frame/ }),
   ).toBeDisabled();
   await page.getByRole("button", { name: "Shot 3", exact: true }).click();
   await respond(pending!, 0);
@@ -172,12 +173,13 @@ test("scans every shot, protects confirmed edits, and saves direct readings", as
   await expect(page.locator("footer [role=status]")).toContainText("saved");
   await page.screenshot({ path: "test-results/bulk-scan.png", fullPage: true });
   await page.reload();
-  await page.getByRole("button", { name: "Open", exact: true }).click();
+  await page.getByRole("button", { name: "Open project", exact: true }).click();
   await page.getByRole("button", { name: /Untitled film/ }).click();
   const castTabAfterReload = page.getByRole("tab", { name: "Cast & AI" });
   if (await castTabAfterReload.isVisible()) {
     await castTabAfterReload.click();
   }
+  await page.getByRole("button", { name: "Re-scan options", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "1. Scan framing & people", exact: true }),
   ).toBeDisabled();
@@ -208,7 +210,7 @@ test("single-shot analysis blocks bulk scanning until cancelled", async ({
   });
   await page.getByRole("button", { name: "Shot 1", exact: true }).click();
   await page
-    .getByRole("button", { name: /Analyze selected shot|Reanalyze shot/ })
+    .getByRole("button", { name: /Analyze frame|Reanalyze frame/ })
     .click();
   await expect.poll(() => requests).toBe(1);
   await expect(
@@ -309,7 +311,7 @@ for (const change of ["EDL", "video", "project"] as const) {
     }
     if (change === "project") {
       page.once("dialog", (dialog) => dialog.accept());
-      await page.getByRole("button", { name: "New", exact: true }).click();
+      await page.getByRole("button", { name: "New project", exact: true }).click();
       await importShots(page);
     }
     await expect(

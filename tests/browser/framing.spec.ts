@@ -11,9 +11,9 @@ test("framing summary, arc selection and local share follow current tags", async
     .setInputFiles(path.resolve("fixtures/cuts-24.edl"));
   await page.getByRole("button", { name: "Import", exact: true }).click();
   for (const [index, size] of [
-    [1, "WS"],
-    [2, "CU"],
-    [3, "ECU"],
+    [1, "Wide"],
+    [2, "Close"],
+    [3, "Extreme close"],
   ] as const) {
     await page
       .getByRole("button", { name: `Shot ${index}`, exact: true })
@@ -27,13 +27,13 @@ test("framing summary, arc selection and local share follow current tags", async
   await expect(
     page
       .locator(".framing-bin")
-      .filter({ has: page.getByText("ECU", { exact: true }) }),
+      .filter({ has: page.getByText("Extreme close", { exact: true }) }),
   ).toContainText("74.1%");
   await page.getByRole("button", { name: "Framing arc", exact: true }).click();
   await page
     .getByRole("button", { name: "Framing shot 2", exact: true })
     .click();
-  await expect(page.getByLabel("Shot size", { exact: true })).toHaveValue("CU");
+  await expect(page.getByLabel("Shot size", { exact: true })).toHaveValue("Close");
   await expect(
     page.getByRole("button", { name: "Framing shot 2", exact: true }),
   ).toHaveAttribute("aria-pressed", "true");

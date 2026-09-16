@@ -1,12 +1,20 @@
 import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { Project, Shot } from "../models/project";
+import type { Project, Shot, SpeechAnalysis, LoudnessAnalysis } from "../models/project";
+import { classifyCut, pauseRegions } from "../analysis/speech";
+import { lufsToNormalized } from "../analysis/loudness";
 import { colorMappings, sizeColors } from "../analysis/colors";
 import { actualRate, formatTimecode } from "../utils/timecode";
 import { reviewReasonLabel, reviewReasons, type ReviewFilter } from "../analysis/review";
 import { getSnapTime, quantizeToFrame } from "./timelineOps";
+import { cutTimes, pacingCurve, pacingAt, computeCutShockData } from "../analysis/pacing";
+import { framingRank } from "../analysis/framing";
+import { getSquintFilter } from "../utils/squint";
 
 export interface MapLayerState {
   framing: boolean;
+  pacing: boolean;
+  framingArc: boolean;
+  motion: boolean;
   characters: boolean;
   audio: boolean;
   scenes: boolean;
@@ -27,11 +35,14 @@ export default memo(function EditingMap({
   range,
   onRangeChange,
   waveform = [],
+  speechAnalysis,
+  loudnessAnalysis,
   highlightedShotIds,
   reviewMatchIds,
   onColorModeChange,
   tagBar,
   onSeparateDme,
+  onCancelDme,
   isDmeSeparating = false,
   dmeSeparationStatus = "",
   hasVideo = false,
@@ -46,6 +57,10 @@ export default memo(function EditingMap({
   snapToCuts = true,
   onToggleSnap,
   onNudgeCut,
+  squintMode = false,
+  squintLevel = 4,
+  onToggleSquint,
+  onSquintLevelChange,
 }: {
   project: Project;
   thumbnails: Record<string, string>;
@@ -61,12 +76,15 @@ export default memo(function EditingMap({
   range?: { start: number; end: number };
   onRangeChange: (range?: { start: number; end: number }) => void;
   waveform?: number[];
+  speechAnalysis?: SpeechAnalysis;
+  loudnessAnalysis?: LoudnessAnalysis;
   highlightedShotIds?: string[];
   /** Filtering never changes timing or visibility; non-matches are only dimmed. */
   reviewMatchIds?: string[];
   onColorModeChange?: (mode: string) => void;
   tagBar?: React.ReactNode;
   onSeparateDme?: () => void;
+  onCancelDme?: () => void;
   isDmeSeparating?: boolean;
   dmeSeparationStatus?: string;
   hasVideo?: boolean;
@@ -81,6 +99,10 @@ export default memo(function EditingMap({
   snapToCuts?: boolean;
   onToggleSnap?: () => void;
   onNudgeCut?: (incomingId: string, framesDelta: number) => void;
+  squintMode?: boolean;
+  squintLevel?: number;
+  onToggleSquint?: (active?: boolean) => void;
+  onSquintLevelChange?: (level: number) => void;
 }) {
   const viewport = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLDivElement>(null);
@@ -90,13 +112,17 @@ export default memo(function EditingMap({
   const rangeAnchor = useRef<number | null>(null);
   const suppressMapClick = useRef(false);
   const [dragRange, setDragRange] = useState<{ start: number; end: number }>();
-  const [audioMode, setAudioMode] = useState<"mixed" | "dme">(
-    project.dmeWaveforms ? "dme" : "mixed"
+  const activeLoudness = loudnessAnalysis || project.loudnessAnalysis;
+  const [audioMode, setAudioMode] = useState<"mixed" | "dme" | "loudness">(
+    project.dmeWaveforms ? "dme" : activeLoudness ? "loudness" : "mixed"
   );
 
   // Layers visibility state
   const [layers, setLayers] = useState<MapLayerState>({
     framing: true,
+    pacing: true,
+    framingArc: true,
+    motion: true,
     characters: true,
     audio: true,
     scenes: true,
@@ -109,8 +135,10 @@ export default memo(function EditingMap({
   useEffect(() => {
     if (project.dmeWaveforms) {
       setAudioMode("dme");
+    } else if (activeLoudness) {
+      setAudioMode("loudness");
     }
-  }, [project.dmeWaveforms]);
+  }, [project.dmeWaveforms, activeLoudness]);
 
   const [activeCutDrag, setActiveCutDrag] = useState<{
     incomingId: string;
@@ -235,6 +263,97 @@ export default memo(function EditingMap({
         s.endSeconds >= visibleStartTime && s.startSeconds <= visibleEndTime,
     );
   }, [project.sequences, visibleStartTime, visibleEndTime, zoom]);
+  const speechOverlay = useMemo(() => {
+    if (!speechAnalysis) return [];
+    const regions = speechAnalysis.regions.flatMap((region) => [{ ...region, kind: "speech" as const }, ...pauseRegions(speechAnalysis.regions).map((pause) => ({ ...pause, kind: "pause" as const }))]);
+    const visible = regions.filter((region) => region.endSeconds >= visibleStartTime && region.startSeconds <= visibleEndTime);
+    // The visual overlay is deliberately bounded; click handling still seeks every stored region.
+    return visible.length > 600 ? visible.filter((_, index) => index % Math.ceil(visible.length / 600) === 0) : visible;
+  }, [speechAnalysis, visibleStartTime, visibleEndTime]);
+  const speechCutOverlay = useMemo(() => {
+    if (!speechAnalysis) return [];
+    const visible = project.shots.slice(1).filter((shot) => shot.startSeconds >= visibleStartTime && shot.startSeconds <= visibleEndTime);
+    const bounded = visible.length > 600 ? visible.filter((_, index) => index % Math.ceil(visible.length / 600) === 0) : visible;
+    return bounded.map((shot) => ({ time: shot.startSeconds, kind: classifyCut(shot.startSeconds, speechAnalysis.regions) }));
+  }, [speechAnalysis, project.shots, visibleStartTime, visibleEndTime]);
+
+  const currentShot = useMemo(() => {
+    return (
+      project.shots.find((s) => s.id === (active || selected)) ||
+      project.shots.find((s) => time >= s.startSeconds && time <= s.endSeconds)
+    );
+  }, [project.shots, active, selected, time]);
+
+  const currentMotion = currentShot?.motionProfile;
+  const motionReadout = currentMotion
+    ? `${currentMotion.totalKineticEnergy}% Kinetic (${currentShot?.cameraMovement || currentMotion.cameraMovement || "Dynamic"})`
+    : "Ready to Scan";
+
+  const cuts = useMemo(() => cutTimes(project.shots), [project.shots]);
+  const cutShockData = useMemo(() => computeCutShockData(project.shots), [project.shots]);
+  const pacingPoints = useMemo(
+    () => pacingCurve(cuts, duration, 30),
+    [cuts, duration]
+  );
+  const currentPacing = useMemo(
+    () => pacingAt(cuts, duration, 30, time),
+    [cuts, duration, time]
+  );
+  const maxPacingRate = useMemo(() => {
+    return Math.max(12, Math.ceil(Math.max(...pacingPoints.map((p) => p.rate), 0) / 5) * 5);
+  }, [pacingPoints]);
+
+  const pacingSvgPath = useMemo(() => {
+    if (!pacingPoints.length || duration <= 0) return "";
+    return pacingPoints
+      .map(
+        (p, i) =>
+          `${i === 0 ? "M" : "L"} ${(p.time * scale).toFixed(1)},${(44 - (p.rate / maxPacingRate) * 36).toFixed(1)}`
+      )
+      .join(" ");
+  }, [pacingPoints, duration, scale, maxPacingRate]);
+
+  const pacingSvgArea = useMemo(() => {
+    if (!pacingSvgPath || duration <= 0) return "";
+    return `${pacingSvgPath} L ${(duration * scale).toFixed(1)},48 L 0,48 Z`;
+  }, [pacingSvgPath, duration, scale]);
+
+  const pacingCategory = useMemo(() => {
+    const rate = currentPacing.rate;
+    if (rate >= 24) return "Rapid Montage";
+    if (rate >= 14) return "Dynamic Action";
+    if (rate >= 8) return "Brisk Narrative";
+    if (rate >= 4) return "Measured Flow";
+    return "Contemplative";
+  }, [currentPacing.rate]);
+
+  const framingSplinePoints = useMemo(() => {
+    if (!visibleShots.length || duration <= 0) return "";
+    return visibleShots
+      .map((s) => {
+        const midTime = (s.startSeconds + s.endSeconds) / 2;
+        const rank = framingRank(s) ?? 0;
+        const x = midTime * scale;
+        const y = 36 - (rank / 8) * 28;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(" ");
+  }, [visibleShots, duration, scale]);
+
+  const allRiversOn = layers.pacing && layers.framingArc && layers.motion && layers.characters && layers.audio && layers.scenes;
+
+  const toggleAllRivers = () => {
+    const target = !allRiversOn;
+    setLayers({
+      framing: true,
+      pacing: target,
+      framingArc: target,
+      motion: target,
+      characters: target,
+      audio: target,
+      scenes: target,
+    });
+  };
 
   useEffect(() => {
     const el = viewport.current;
@@ -326,42 +445,74 @@ export default memo(function EditingMap({
 
         {/* Toolbar: Color Mode & Layer Toggles & Zoom/Fit */}
         <div className="tools">
-          {/* Layer Visibility Controls */}
+          {/* Rivers of Data Visibility Controls */}
           {(showLayersControl || workspaceMode === "map") && (
-            <div className="map-layers-group" role="group" aria-label="Timeline Layer Visibility">
-              <span className="layers-label">Layers:</span>
-              <label className={`layer-checkbox ${layers.framing ? "active" : ""}`}>
-                <input
-                  type="checkbox"
-                  checked={layers.framing}
-                  onChange={() => toggleLayer("framing")}
-                />
-                <span>Framing</span>
-              </label>
-              <label className={`layer-checkbox ${layers.characters ? "active" : ""}`}>
-                <input
-                  type="checkbox"
-                  checked={layers.characters}
-                  onChange={() => toggleLayer("characters")}
-                />
-                <span>Characters</span>
-              </label>
-              <label className={`layer-checkbox ${layers.audio ? "active" : ""}`}>
-                <input
-                  type="checkbox"
-                  checked={layers.audio}
-                  onChange={() => toggleLayer("audio")}
-                />
-                <span>Audio</span>
-              </label>
-              <label className={`layer-checkbox ${layers.scenes ? "active" : ""}`}>
-                <input
-                  type="checkbox"
-                  checked={layers.scenes}
-                  onChange={() => toggleLayer("scenes")}
-                />
-                <span>Scenes</span>
-              </label>
+            <div className="map-layers-group map-rivers-toolbar" role="group" aria-label="Timeline Layer Visibility">
+              <span className="layers-label">Rivers:</span>
+              <button
+                type="button"
+                className={`river-toggle-chip ${layers.scenes ? "active" : ""}`}
+                onClick={() => toggleLayer("scenes")}
+                title="Dramatic Scenes & Sequences River"
+              >
+                🎬 Scenes
+              </button>
+              <button
+                type="button"
+                className={`river-toggle-chip ${layers.framing ? "active" : ""}`}
+                onClick={() => toggleLayer("framing")}
+                title="V1 Film Shot Track"
+              >
+                🎞️ Film
+              </button>
+              <button
+                type="button"
+                className={`river-toggle-chip ${layers.pacing ? "active" : ""}`}
+                onClick={() => toggleLayer("pacing")}
+                title="Cutting Pacing & Rhythm Velocity River"
+              >
+                🌊 Pacing
+              </button>
+              <button
+                type="button"
+                className={`river-toggle-chip ${layers.framingArc ? "active" : ""}`}
+                onClick={() => toggleLayer("framingArc")}
+                title="Framing Scale Elevation River"
+              >
+                📐 Framing
+              </button>
+              <button
+                type="button"
+                className={`river-toggle-chip ${layers.motion ? "active" : ""}`}
+                onClick={() => toggleLayer("motion")}
+                title="Motion & Kinetic Energy River"
+              >
+                ⚡ Motion
+              </button>
+              <button
+                type="button"
+                className={`river-toggle-chip ${layers.characters ? "active" : ""}`}
+                onClick={() => toggleLayer("characters")}
+                title="Cast & Character Presence River"
+              >
+                👥 Characters
+              </button>
+              <button
+                type="button"
+                className={`river-toggle-chip ${layers.audio ? "active" : ""}`}
+                onClick={() => toggleLayer("audio")}
+                title="Soundtrack & Sonic Rivers (DME / Loudness / Speech)"
+              >
+                🔊 Audio
+              </button>
+              <button
+                type="button"
+                className={`river-flow-all-btn ${allRiversOn ? "active" : ""}`}
+                onClick={toggleAllRivers}
+                title={allRiversOn ? "Collapse secondary data rivers" : "Flow all data rivers synchronously"}
+              >
+                {allRiversOn ? "Collapse" : "🌊 Flow All"}
+              </button>
             </div>
           )}
 
@@ -399,25 +550,55 @@ export default memo(function EditingMap({
             )}
           </div>
 
-          {/* Color Mode Toggle */}
+          {/* Color & Squint Mode Toggle */}
           <div className="view-toggle-group" role="group" aria-label="Timeline Color Mode">
             <button
               type="button"
-              className={project.colorMode !== "palette" ? "active" : ""}
-              onClick={() => onColorModeChange?.("shotSize")}
+              className={project.colorMode !== "palette" && !squintMode ? "active" : ""}
+              onClick={() => {
+                if (squintMode) onToggleSquint?.(false);
+                onColorModeChange?.("shotSize");
+              }}
               title="Color timeline blocks by shot framing size"
             >
               Framing Colors
             </button>
             <button
               type="button"
-              className={project.colorMode === "palette" ? "active" : ""}
-              onClick={() => onColorModeChange?.("palette")}
+              className={project.colorMode === "palette" && !squintMode ? "active" : ""}
+              onClick={() => {
+                if (squintMode) onToggleSquint?.(false);
+                onColorModeChange?.("palette");
+              }}
               title="Color timeline blocks by extracted film palette"
             >
               Footage Palette
             </button>
+            <button
+              type="button"
+              className={`timeline-squint-btn ${squintMode ? "active" : ""}`}
+              onClick={() => onToggleSquint?.(!squintMode)}
+              title="Toggle Squint Mode (Multi-effect Notan / Chiaroscuro tonal blur on timeline shots)"
+            >
+              😑 Squint {squintMode ? `(L${squintLevel})` : ""}
+            </button>
           </div>
+
+          {/* Inline Squint Depth Slider on Timeline */}
+          {squintMode && onSquintLevelChange && (
+            <div className="timeline-squint-slider-wrap" title="Squint Depth: controls diffraction blur, rod desaturation, highlight bloom & chiaroscuro value massing">
+              <span className="squint-slider-label">Depth: <b>L{squintLevel}</b></span>
+              <input
+                type="range"
+                min="1"
+                max="10"
+                step="1"
+                value={squintLevel}
+                onChange={(e) => onSquintLevelChange(Number(e.target.value))}
+                className="timeline-squint-slider"
+              />
+            </div>
+          )}
 
           {/* Active Review Filter Indicator & Reset */}
           {reviewFilter && reviewFilter !== "all" && (
@@ -466,7 +647,9 @@ export default memo(function EditingMap({
             rangeAnchor.current = pointAt(event.clientX);
             suppressMapClick.current = true;
             setDragRange({ start: rangeAnchor.current, end: rangeAnchor.current });
-            event.currentTarget.setPointerCapture(event.pointerId);
+            try {
+              event.currentTarget.setPointerCapture(event.pointerId);
+            } catch {}
           }}
           onPointerMove={(event) => {
             if (rangeAnchor.current === null) return;
@@ -477,8 +660,12 @@ export default memo(function EditingMap({
             const end = pointAt(event.clientX), start = rangeAnchor.current;
             rangeAnchor.current = null;
             setDragRange(undefined);
-            if (Math.abs(end - start) > 1 / actualRate(project.frameRate)) onRangeChange({ start: Math.min(start, end), end: Math.max(start, end) });
-            event.currentTarget.releasePointerCapture(event.pointerId);
+            if (Math.abs(end - start) > 1 / actualRate(project.frameRate)) {
+              onRangeChange({ start: Math.min(start, end), end: Math.max(start, end) });
+            }
+            try {
+              event.currentTarget.releasePointerCapture(event.pointerId);
+            } catch {}
           }}
           onClick={(e) => {
             if (suppressMapClick.current) {
@@ -495,7 +682,7 @@ export default memo(function EditingMap({
           <div
             className="ruler"
             onPointerDown={(e) => {
-              if (e.button !== 0) return;
+              if (e.button !== 0 || e.shiftKey) return;
               e.preventDefault();
               e.stopPropagation();
               dragging.current = true;
@@ -527,42 +714,41 @@ export default memo(function EditingMap({
             ))}
           </div>
 
-          {/* Track: Framing Lane (when enabled in Map Focus) */}
-          {layers.framing && (workspaceMode === "map" || showLayersControl) && (
-            <div className="lane-track framing-lane" aria-label="Framing shot sizes lane">
-              <div className="track-caption framing-caption">
-                FRAMING <span>AUTO / CONFIRMED</span>
+          {/* River 1: Scenes & Dramatic Arc River (when enabled) */}
+          {layers.scenes && visibleSequences.length > 0 && (
+            <div className="lane-track scenes-river" aria-label="Dramatic scenes & sequences river">
+              <div className="river-sticky-badge scenes-badge">
+                <span className="river-badge-icon">🎬</span>
+                <span className="river-badge-title">SCENES</span>
+                <span className="river-badge-detail mono">{visibleSequences.length}</span>
               </div>
-              {visibleShots.map((s) => {
-                const w = s.duration * scale;
-                const color = (colorMappings[project.colorMode] || colorMappings.shotSize).color(s);
-                return (
-                  <button
-                    type="button"
-                    key={`framing-${s.id}`}
-                    className={`framing-lane-block ${selected === s.id ? "selected" : ""}`}
-                    style={{
-                      left: s.startSeconds * scale,
-                      width: w,
-                      backgroundColor: color,
-                    }}
-                    title={`Shot ${s.index}: ${s.shotSize}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onShot(s);
-                    }}
-                  >
-                    {w > 32 && <span className="framing-lane-text">{s.shotSize}</span>}
-                  </button>
-                );
-              })}
+              {visibleSequences.map((scene, idx) => (
+                <button
+                  type="button"
+                  key={scene.id || `scene-${idx}`}
+                  className="scene-marker"
+                  title={`${scene.name}: ${(scene.endSeconds - scene.startSeconds).toFixed(1)}s`}
+                  style={{
+                    left: scene.startSeconds * scale,
+                    width: Math.max(2, (scene.endSeconds - scene.startSeconds) * scale),
+                  }}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onRangeChange({ start: scene.startSeconds, end: scene.endSeconds });
+                  }}
+                >
+                  <span className="scene-marker-text">{scene.name}</span>
+                </button>
+              ))}
             </div>
           )}
 
-          {/* Track: Shots (Video V1) */}
+          {/* River 2: Film Shot Track (V1) */}
           <div className="shot-track" aria-label="Video shot track">
-            <div className="track-caption v1-caption">
-              V1 <span>RECORD TIMELINE</span>
+            <div className="river-sticky-badge v1-badge">
+              <span className="river-badge-icon">🎞️</span>
+              <span className="river-badge-title">V1 FILM</span>
+              <span className="river-badge-detail mono">{project.shots.length} shots</span>
             </div>
             {visibleShots.map((s) => {
               let startSec = s.startSeconds;
@@ -578,18 +764,20 @@ export default memo(function EditingMap({
               const w = effDur * scale;
               const reviewMatch = !reviewMatchIds || reviewMatchIds.includes(s.id);
               const colorGetter = (colorMappings[project.colorMode] || colorMappings.shotSize).color;
+              const lumaVal = s.colorProfile?.luminance ?? 0.5;
+              const lumaColor = `rgb(${Math.round(255 * lumaVal)}, ${Math.round(255 * lumaVal)}, ${Math.round(255 * lumaVal)})`;
               return (
                 <button
                   type="button"
                   key={s.id}
                   title={`${reviewReasonLabel(reviewReasons(s))} · Shot ${s.index} · ${s.shotSize} · ${effDur.toFixed(3)}s`}
                   aria-label={`Shot ${s.index}${reviewMatch ? "" : ", outside active review filter"}`}
-                  className={`shot ${selected === s.id ? "selected" : ""} ${active === s.id ? "active" : ""} ${highlightedShotIds?.includes(s.id) ? "character-highlight" : ""} ${reviewMatch ? "review-match" : "review-dimmed"}`}
+                  className={`shot ${selected === s.id ? "selected" : ""} ${active === s.id ? "active" : ""} ${highlightedShotIds?.includes(s.id) ? "character-highlight" : ""} ${reviewMatch ? "review-match" : "review-dimmed"} ${squintMode ? "timeline-squint-shot" : ""}`}
                   style={
                     {
                       left: startSec * scale,
                       width: w,
-                      "--size-color": colorGetter(s),
+                      "--size-color": squintMode ? lumaColor : colorGetter(s),
                     } as CSSProperties
                   }
                   onClick={(e) => {
@@ -603,10 +791,11 @@ export default memo(function EditingMap({
                 >
                   {w > 58 && thumbnails[s.id] && (
                     <img
-                      className="shot-thumbnail"
+                      className={`shot-thumbnail ${squintMode ? "squint-active" : ""}`}
                       src={thumbnails[s.id]}
                       alt={`Shot ${s.index}`}
                       draggable={false}
+                      style={squintMode ? { filter: getSquintFilter(squintLevel) } : undefined}
                     />
                   )}
                   {s.reviewStatus !== "Confirmed" && (
@@ -752,22 +941,172 @@ export default memo(function EditingMap({
             })}
           </div>
 
-          {/* Track 3: Character Appearances Lane (when enabled) */}
-          {layers.characters && (workspaceMode === "map" || showLayersControl) && project.cast && project.cast.length > 0 && (
-            <div className="lane-track characters-lane" aria-label="Character appearances lane">
-              <div className="track-caption characters-caption">
-                CHARACTERS <span>CAST INTERVALS & SHOT ASSIGNMENTS</span>
+          {/* River 3: Pacing & Cutting Rhythm River (when enabled) */}
+          {layers.pacing && project.shots.length > 0 && (
+            <div className="lane-track pacing-river" aria-label="Pacing and cutting rhythm river">
+              <div className="river-sticky-badge pacing-badge">
+                <span className="river-badge-icon">🌊</span>
+                <span className="river-badge-title">PACING</span>
+                <span className="river-badge-detail mono">{currentPacing.rate.toFixed(1)} cuts/m · {pacingCategory}</span>
               </div>
-              <div className="character-sublanes-wrap">
+              <svg
+                className="pacing-river-canvas"
+                width={canvasWidth}
+                height={50}
+                aria-hidden="true"
+              >
+                <defs>
+                  <linearGradient id="pacingRiverGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" stopColor="#f59e0b" stopOpacity="0.45" />
+                    <stop offset="60%" stopColor="#f59e0b" stopOpacity="0.15" />
+                    <stop offset="100%" stopColor="#f59e0b" stopOpacity="0.02" />
+                  </linearGradient>
+                </defs>
+                {pacingSvgArea && (
+                  <path d={pacingSvgArea} fill="url(#pacingRiverGradient)" />
+                )}
+                {pacingSvgPath && (
+                  <path
+                    d={pacingSvgPath}
+                    fill="none"
+                    stroke="#fbbf24"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  />
+                )}
+                {/* Sensory Shock spike indicators */}
+                {cutShockData.filter((c) => c.shockScore >= 45).map((c, idx) => (
+                  <g key={`shock-marker-${idx}`} transform={`translate(${c.time * scale}, 0)`}>
+                    <line y1="10" y2="48" stroke="rgba(239, 68, 68, 0.7)" strokeWidth="1.5" strokeDasharray="2,2" />
+                    <circle cx="0" cy="12" r="3" fill="#ef4444" />
+                  </g>
+                ))}
+                {/* Playhead indicator dot */}
+                <circle
+                  cx={time * scale}
+                  cy={44 - (currentPacing.rate / maxPacingRate) * 36}
+                  r="4"
+                  fill="#ffffff"
+                  stroke="#f59e0b"
+                  strokeWidth="2"
+                />
+              </svg>
+            </div>
+          )}
+
+          {/* River 4: Framing Scale Elevation River (when enabled) */}
+          {layers.framingArc && project.shots.length > 0 && (
+            <div className="lane-track framing-arc-river" aria-label="Framing scale elevation river">
+              <div className="river-sticky-badge framing-badge">
+                <span className="river-badge-icon">📐</span>
+                <span className="river-badge-title">FRAMING ARC</span>
+                <span className="river-badge-detail mono">{currentShot?.shotSize || "—"}</span>
+              </div>
+              <div className="framing-river-canvas">
+                {visibleShots.map((s) => {
+                  const rank = framingRank(s);
+                  const effectiveRank = rank === null ? 0 : rank;
+                  const shotW = Math.max(3, s.duration * scale);
+                  const shotX = s.startSeconds * scale;
+                  const barH = Math.max(6, ((effectiveRank + 1) / 9) * 36);
+                  const color = rank === null ? "#64748b" : sizeColors[s.shotSize] || "#64748b";
+                  const isSelected = selected === s.id;
+                  const isPlaying = time >= s.startSeconds && time <= s.endSeconds;
+
+                  return (
+                    <button
+                      key={`framing-seg-${s.id}`}
+                      type="button"
+                      className={`framing-river-segment ${isSelected ? "selected" : ""} ${isPlaying ? "playing" : ""}`}
+                      style={{
+                        left: shotX,
+                        width: shotW,
+                        height: barH,
+                        backgroundColor: color,
+                      }}
+                      title={`Shot ${s.index}: ${s.shotSize} (${s.duration.toFixed(2)}s)`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onShot(s);
+                        onSeek(s.startSeconds);
+                      }}
+                    >
+                      {shotW > 28 && (
+                        <span className="framing-river-tag">{s.shotSize}</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* River 5: Motion Energy River (when enabled) */}
+          {layers.motion && project.shots.length > 0 && (
+            <div className="lane-track motion-river" aria-label="Motion energy river">
+              <div className="river-sticky-badge motion-badge">
+                <span className="river-badge-icon">⚡</span>
+                <span className="river-badge-title">MOTION</span>
+                <span className="river-badge-detail mono">{motionReadout}</span>
+              </div>
+              <div className="motion-river-canvas">
+                {visibleShots.map((s) => {
+                  const profile = s.motionProfile;
+                  const shotW = Math.max(3, s.duration * scale);
+                  const shotX = s.startSeconds * scale;
+                  const isSelected = selected === s.id;
+                  const isPlaying = time >= s.startSeconds && time <= s.endSeconds;
+
+                  const hasProfile = Boolean(profile);
+                  const totalEnergy = profile?.totalKineticEnergy ?? Math.max(12, Math.min(80, Math.round(65 - Math.min(s.duration, 12) * 4)));
+                  const camEnergy = profile?.cameraEnergy ?? Math.round(totalEnergy * 0.45);
+                  const subEnergy = profile?.subjectEnergy ?? Math.round(totalEnergy * 0.55);
+                  const barH = Math.max(6, (totalEnergy / 100) * 36);
+
+                  return (
+                    <button
+                      key={`motion-seg-${s.id}`}
+                      type="button"
+                      className={`motion-river-segment ${isSelected ? "selected" : ""} ${isPlaying ? "playing" : ""} ${hasProfile ? "scanned" : "estimated"}`}
+                      style={{
+                        left: shotX,
+                        width: shotW,
+                        height: barH,
+                      }}
+                      title={`Shot ${s.index}: ${hasProfile ? `${s.cameraMovement || "Motion"}: ${totalEnergy}% (Cam: ${camEnergy}%, Sub: ${subEnergy}%)` : `Est. dynamic baseline: ~${totalEnergy}%`}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onShot(s);
+                        onSeek(s.startSeconds);
+                      }}
+                    >
+                      <div className="motion-layer subject" style={{ height: `${(subEnergy / (totalEnergy || 1)) * 100}%` }} />
+                      <div className="motion-layer camera" style={{ height: `${(camEnergy / (totalEnergy || 1)) * 100}%` }} />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* River 6: Cast & Character Presence River (when enabled) */}
+          {layers.characters && project.cast && project.cast.length > 0 && (
+            <div className="lane-track cast-presence-river" aria-label="Cast presence river">
+              <div className="river-sticky-badge cast-badge">
+                <span className="river-badge-icon">👥</span>
+                <span className="river-badge-title">CAST</span>
+                <span className="river-badge-detail mono">{project.cast.length} ACTORS</span>
+              </div>
+              <div className="cast-swimlanes-wrap">
                 {project.cast.map((member) => {
-                  // Collect intervals (confirmed vs suggested) and shot assignments (manual)
-                  const intervals: {
+                  const intervals: Array<{
                     id: string;
                     start: number;
                     end: number;
                     type: "verified" | "suggested" | "shot-assigned";
+                    shot: Shot;
                     label: string;
-                  }[] = [];
+                  }> = [];
 
                   for (const s of visibleShots) {
                     const ca = s.characterAnalysis;
@@ -775,19 +1114,17 @@ export default memo(function EditingMap({
 
                     const hasManualReview = ca.manualReviewStatus === "Confirmed";
                     if (hasManualReview) {
-                      // Confirmed manual shot assignments take absolute precedence
                       if (ca.manualMemberIds?.includes(member.id)) {
                         intervals.push({
                           id: `${s.id}-${member.id}-manual`,
                           start: s.startSeconds,
                           end: s.endSeconds,
                           type: "shot-assigned",
-                          label: "Shot assignment (shot-level)",
+                          shot: s,
+                          label: `Shot ${s.index} (Manual)`,
                         });
                       }
-                      // If manual review took place and member is not in manualMemberIds, it's manually excluded!
                     } else {
-                      // Unreviewed / automatic detections
                       const memberIntervals = ca.intervals?.filter((i) => i.memberId === member.id) ?? [];
                       for (const mi of memberIntervals) {
                         const isConfirmed = mi.reviewStatus === "Confirmed" || ca.reviewStatus === "Confirmed";
@@ -796,28 +1133,56 @@ export default memo(function EditingMap({
                           start: mi.startSeconds,
                           end: mi.endSeconds,
                           type: isConfirmed ? "verified" : "suggested",
-                          label: isConfirmed ? "Confirmed interval" : "Suggested interval (needs review)",
+                          shot: s,
+                          label: `Shot ${s.index} (${isConfirmed ? "Confirmed" : "Suggested"})`,
                         });
                       }
                     }
                   }
+
                   if (!intervals.length) return null;
+
+                  const isCurrentActive = intervals.some(
+                    (item) => time >= item.start && time <= item.end
+                  );
+
+                  const avatarImg = member.references?.[0]?.image;
+
                   return (
-                    <div key={member.id} className="character-row-lane">
-                      <span className="character-row-name" title={member.name}>
-                        {member.name}
-                      </span>
-                      {intervals.map((item) => (
-                        <div
-                          key={item.id}
-                          className={`character-presence-bar ${item.type}`}
-                          style={{
-                            left: item.start * scale,
-                            width: Math.max(3, (item.end - item.start) * scale),
-                          }}
-                          title={`${member.name}: ${item.label}`}
-                        />
-                      ))}
+                    <div key={`cast-lane-${member.id}`} className={`cast-swimlane-row ${isCurrentActive ? "active" : ""}`}>
+                      <div className="cast-swimlane-header-pill" title={`${member.name}: ${intervals.length} appearances`}>
+                        <div className="cast-swimlane-avatar">
+                          {avatarImg ? (
+                            <img src={avatarImg} alt="" className="cast-avatar-img" />
+                          ) : (
+                            <span className="cast-avatar-init">
+                              {member.name.slice(0, 2).toUpperCase()}
+                            </span>
+                          )}
+                        </div>
+                        <span className="cast-swimlane-name">{member.name}</span>
+                        <span className="cast-swimlane-count mono">{intervals.length}</span>
+                      </div>
+
+                      <div className="cast-swimlane-track">
+                        {intervals.map((item) => (
+                          <button
+                            type="button"
+                            key={item.id}
+                            className={`cast-presence-bar ${item.type}`}
+                            style={{
+                              left: item.start * scale,
+                              width: Math.max(6, (item.end - item.start) * scale),
+                            }}
+                            title={`${member.name}: ${item.label} (${(item.end - item.start).toFixed(2)}s)`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onShot(item.shot);
+                              onSeek(item.start);
+                            }}
+                          />
+                        ))}
+                      </div>
                     </div>
                   );
                 })}
@@ -825,13 +1190,90 @@ export default memo(function EditingMap({
             </div>
           )}
 
-          {/* Track 4: Audio Waveform / DME Stems */}
+          {/* River 7: Soundtrack & Sonic Rivers (when enabled) */}
           {layers.audio && (
             <div
-              className={`audio-track ${audioMode === "dme" && project.dmeWaveforms ? "dme-mode" : ""}`}
-              aria-label="Soundtrack waveform"
+              className={`audio-track sonic-river ${audioMode === "dme" && project.dmeWaveforms ? "dme-mode" : audioMode === "loudness" && activeLoudness ? "loudness-mode" : ""}`}
+              aria-label="Soundtrack and sonic rivers"
             >
-              {audioMode === "dme" && project.dmeWaveforms ? (
+              <div className="river-sticky-badge sonic-badge">
+                <span className="river-badge-icon">🔊</span>
+                <span className="river-badge-title">SOUND</span>
+                <div className="sonic-stream-modes" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    className={`sonic-stream-btn ${audioMode === "mixed" ? "active" : ""}`}
+                    onClick={() => setAudioMode("mixed")}
+                  >
+                    Mixed
+                  </button>
+                  {project.dmeWaveforms && (
+                    <button
+                      type="button"
+                      className={`sonic-stream-btn ${audioMode === "dme" ? "active" : ""}`}
+                      onClick={() => setAudioMode("dme")}
+                    >
+                      DME 3-Stem
+                    </button>
+                  )}
+                  {activeLoudness && (
+                    <button
+                      type="button"
+                      className={`sonic-stream-btn ${audioMode === "loudness" ? "active" : ""}`}
+                      onClick={() => setAudioMode("loudness")}
+                    >
+                      LUFS
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {audioMode === "loudness" && activeLoudness ? (
+                <div className="loudness-track-lane" aria-hidden="true">
+                  <div
+                    className="loudness-target-guide"
+                    style={{ bottom: `${lufsToNormalized(-23, -60, 0) * 100}%` }}
+                    title="EBU R128 -23 LUFS Target"
+                  />
+                  <div className="waveform loudness-waveform">
+                    {activeLoudness.momentary.map((level, i) => {
+                      const norm = lufsToNormalized(level, -60, 0);
+                      const sLevel = activeLoudness.shortTerm[i] ?? level;
+                      const levelClass =
+                        level >= -12
+                          ? "level-peak"
+                          : level >= -18
+                            ? "level-loud"
+                            : level >= -26
+                              ? "level-target"
+                              : "level-quiet";
+                      return (
+                        <i
+                          key={i}
+                          className={levelClass}
+                          style={{ height: `${Math.max(4, norm * 100)}%` }}
+                          title={`Momentary: ${level.toFixed(1)} LUFS · Sustained: ${sLevel.toFixed(1)} LUFS`}
+                        />
+                      );
+                    })}
+                  </div>
+                  {activeLoudness.transitions.map((t, index) => (
+                    <button
+                      key={`trans-${t.time}-${index}`}
+                      type="button"
+                      className={`loudness-timeline-marker ${t.type}`}
+                      style={{ left: t.time * scale }}
+                      title={`${t.type === "quiet-to-loud" ? "Quiet-to-Loud Jump" : "Loud-to-Quiet Drop"}: ${t.deltaLufs >= 0 ? "+" : ""}${t.deltaLufs.toFixed(1)} LUFS at ${formatTimecode(t.time, project.frameRate, project.dropFrame)}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onSeek(t.time);
+                      }}
+                    >
+                      <span>{t.type === "quiet-to-loud" ? "▲" : "▼"}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : audioMode === "dme" && project.dmeWaveforms ? (
                 <div className="dme-stem-lanes" aria-hidden="true">
                   <div className="dme-lane dialogue" title="DX: Dialogue">
                     <span className="dme-lane-badge dx">DX</span>
@@ -888,10 +1330,63 @@ export default memo(function EditingMap({
                   {span.kind}
                 </button>
               ))}
+              {speechAnalysis && (
+                <div
+                  className="speech-overlay"
+                  aria-label="Speech and pause overlay"
+                  onClick={(event) => {
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    const target = ((event.clientX - rect.left) / rect.width) * duration;
+                    const item = [...speechAnalysis.regions, ...pauseRegions(speechAnalysis.regions)].find((region) => target >= region.startSeconds && target <= region.endSeconds);
+                    if (item) {
+                      event.stopPropagation();
+                      onSeek(item.startSeconds);
+                    }
+                  }}
+                >
+                  {speechOverlay.map((region, index) => (
+                    <i
+                      key={`${region.kind}-${index}-${region.startSeconds}`}
+                      className={region.kind}
+                      style={{
+                        left: region.startSeconds * scale,
+                        width: Math.max(2, (region.endSeconds - region.startSeconds) * scale),
+                      }}
+                      title={`${region.kind === "speech" ? "Speech" : "Pause"}: ${formatTimecode(region.startSeconds, project.frameRate, project.dropFrame)}`}
+                    />
+                  ))}
+                </div>
+              )}
+              {speechAnalysis && (
+                <div className="speech-cut-markers" aria-label="Cut speech classification">
+                  {speechCutOverlay.map((cut, index) => (
+                    <button
+                      type="button"
+                      key={`${cut.time}-${index}`}
+                      className={cut.kind.replaceAll(" ", "-")}
+                      style={{ left: cut.time * scale }}
+                      title={`Cut ${cut.kind}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onSeek(cut.time);
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
 
               <div className="audio-caption-bar">
                 <div className="audio-caption">
-                  {audioMode === "dme" && project.dmeWaveforms ? (
+                  {audioMode === "loudness" && activeLoudness ? (
+                    <>
+                      EBU R128{" "}
+                      <span>
+                        LOUDNESS · I: {activeLoudness.integratedLoudness.toFixed(1)} LUFS · LRA:{" "}
+                        {activeLoudness.loudnessRange.toFixed(1)} LU · TPK:{" "}
+                        {activeLoudness.truePeak.toFixed(1)} dBTP
+                      </span>
+                    </>
+                  ) : audioMode === "dme" && project.dmeWaveforms ? (
                     <>
                       DME <span>STEM SEPARATION (DX · MX · FX)</span>
                     </>
@@ -903,7 +1398,7 @@ export default memo(function EditingMap({
                 </div>
 
                 <div className="audio-actions" onClick={(e) => e.stopPropagation()}>
-                  {project.dmeWaveforms ? (
+                  {project.dmeWaveforms || activeLoudness ? (
                     <div className="dme-mode-pills">
                       <button
                         type="button"
@@ -912,22 +1407,33 @@ export default memo(function EditingMap({
                       >
                         Mixed
                       </button>
-                      <button
-                        type="button"
-                        className={`dme-pill-btn ${audioMode === "dme" ? "active" : ""}`}
-                        onClick={() => setAudioMode("dme")}
-                      >
-                        DME (3-Stem)
-                      </button>
+                      {project.dmeWaveforms && (
+                        <button
+                          type="button"
+                          className={`dme-pill-btn ${audioMode === "dme" ? "active" : ""}`}
+                          onClick={() => setAudioMode("dme")}
+                        >
+                          DME (3-Stem)
+                        </button>
+                      )}
+                      {activeLoudness && (
+                        <button
+                          type="button"
+                          className={`dme-pill-btn ${audioMode === "loudness" ? "active" : ""}`}
+                          onClick={() => setAudioMode("loudness")}
+                        >
+                          Loudness (LUFS)
+                        </button>
+                      )}
                       {onSeparateDme && (
                         <button
                           type="button"
                           className="dme-rescan-btn"
                           title="Re-run DME separation"
-                          disabled={isDmeSeparating}
-                          onClick={onSeparateDme}
+                          disabled={!hasVideo}
+                          onClick={isDmeSeparating ? onCancelDme : onSeparateDme}
                         >
-                          ↻ Re-scan
+                          {isDmeSeparating ? "Cancel separation" : "↻ Re-scan"}
                         </button>
                       )}
                     </div>
@@ -935,14 +1441,14 @@ export default memo(function EditingMap({
                     <button
                       type="button"
                       className="btn-dme-test"
-                      onClick={onSeparateDme}
-                      disabled={isDmeSeparating || !hasVideo}
+                      onClick={isDmeSeparating ? onCancelDme : onSeparateDme}
+                      disabled={!hasVideo}
                       title={!hasVideo ? "Connect a video file first to test DME separation" : "Separate Dialogue, Music, and Effects locally"}
                     >
                       {isDmeSeparating ? (
                         <>
                           <span className="dme-spinner" />
-                          <span>{dmeSeparationStatus || "Separating DME..."}</span>
+                          <span>{`${dmeSeparationStatus || "Separating DME..."} · Cancel`}</span>
                         </>
                       ) : (
                         <>🧪 Test DME Separation</>
@@ -963,30 +1469,6 @@ export default memo(function EditingMap({
                 width: Math.max(2, (visibleRange.end - visibleRange.start) * scale),
               }}
             />
-          )}
-
-          {/* Track 5: Scenes & Sequences */}
-          {layers.scenes && (
-            <div className="scenes-lane">
-              {visibleSequences.map((scene) => (
-                <button
-                  type="button"
-                  key={scene.id}
-                  className="scene-marker"
-                  title={scene.name}
-                  style={{
-                    left: scene.startSeconds * scale,
-                    width: Math.max(2, (scene.endSeconds - scene.startSeconds) * scale),
-                  }}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onRangeChange({ start: scene.startSeconds, end: scene.endSeconds });
-                  }}
-                >
-                  <span className="scene-marker-text">{scene.name}</span>
-                </button>
-              ))}
-            </div>
           )}
 
           {!project.shots.length && (
@@ -1021,7 +1503,7 @@ export default memo(function EditingMap({
             style={{ left: Math.min(time, duration) * scale }}
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => {
-              if (e.button !== 0) return;
+              if (e.button !== 0 || e.shiftKey) return;
               e.preventDefault();
               e.stopPropagation();
               dragging.current = true;
@@ -1076,7 +1558,7 @@ export default memo(function EditingMap({
 
       {/* Whole-Film Overview Minimap (Prominent in Map Focus and Studio) */}
       {showMinimap && project.shots.length > 0 && (
-        <div className="minimap-section">
+        <div className={`minimap-section ${squintMode ? "minimap-squint-active" : ""}`}>
           <div className="minimap-header">
             <span className="eyebrow">FILM OVERVIEW (ENTIRE TIMELINE)</span>
             <span className="mono muted">
@@ -1105,6 +1587,10 @@ export default memo(function EditingMap({
             <div className="minimap-tracks-wrap">
               {project.shots.map((s) => {
                 const color = (colorMappings[project.colorMode] || colorMappings.shotSize).color(s);
+                const lumaVal = s.colorProfile?.luminance ?? 0.5;
+                const barColor = squintMode
+                  ? `rgb(${Math.round(255 * lumaVal)}, ${Math.round(255 * lumaVal)}, ${Math.round(255 * lumaVal)})`
+                  : color;
                 return (
                   <div
                     key={`mini-${s.id}`}
@@ -1112,7 +1598,7 @@ export default memo(function EditingMap({
                     style={{
                       left: `${(s.startSeconds / duration) * 100}%`,
                       width: `${Math.max(0.4, (s.duration / duration) * 100)}%`,
-                      backgroundColor: color,
+                      backgroundColor: barColor,
                     }}
                   />
                 );
@@ -1203,16 +1689,11 @@ export default memo(function EditingMap({
           {Object.entries(sizeColors)
             .filter(([name]) =>
               [
-                "EWS",
-                "WS",
-                "MWS",
-                "MS",
-                "MCU",
-                "CU",
-                "ECU",
-                "Insert",
-                "OTS",
-                "POV",
+                "Wide",
+                "Full",
+                "Medium",
+                "Close",
+                "Extreme close",
               ].includes(name),
             )
             .map(([name, color]) => (

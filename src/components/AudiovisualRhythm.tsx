@@ -9,6 +9,7 @@ import {
   detectImpactCuts,
 } from "../analysis/pacing";
 import { audioIntensityCurve } from "../analysis/audio";
+import { lufsToNormalized } from "../analysis/loudness";
 import { formatTimecode } from "../utils/timecode";
 
 const AudiovisualRhythm = memo(function AudiovisualRhythm({
@@ -24,7 +25,7 @@ const AudiovisualRhythm = memo(function AudiovisualRhythm({
 }) {
   const [window, setWindow] = useState(30);
   const [hover, setHover] = useState<number>();
-  const [stemMode, setStemMode] = useState<"mixed" | "dialogue" | "music" | "effects">("mixed");
+  const [stemMode, setStemMode] = useState<"mixed" | "loudness" | "dialogue" | "music" | "effects">("mixed");
 
   const duration = project.duration || 1;
   const cuts = useMemo(() => cutTimes(project.shots), [project.shots]);
@@ -47,10 +48,20 @@ const AudiovisualRhythm = memo(function AudiovisualRhythm({
     [cuts, project.duration, window],
   );
 
-  const audioPoints = useMemo(
-    () => audioIntensityCurve(activeWaveform, project.duration, window),
-    [activeWaveform, project.duration, window],
-  );
+  const audioPoints = useMemo(() => {
+    if (stemMode === "loudness" && project.loudnessAnalysis) {
+      const { shortTerm, binCount, duration: loudDur } = project.loudnessAnalysis;
+      const count = 601;
+      return Array.from({ length: count }, (_, i) => {
+        const time = project.duration > 0 ? (i * project.duration) / Math.max(1, count - 1) : 0;
+        const bin = Math.min(binCount - 1, Math.floor((time / (loudDur || project.duration || 1)) * binCount));
+        const lufs = shortTerm[bin] ?? -60;
+        const normalized = lufsToNormalized(lufs, -60, 0);
+        return { time, db: lufs, normalized };
+      });
+    }
+    return audioIntensityCurve(activeWaveform, project.duration, window);
+  }, [stemMode, project.loudnessAnalysis, activeWaveform, project.duration, window]);
 
   const impactCutsList = useMemo(
     () => detectImpactCuts(cuts, activeWaveform, project.duration),
@@ -133,7 +144,9 @@ const AudiovisualRhythm = memo(function AudiovisualRhythm({
         ? "Dialogue Velocity Correlation"
         : stemMode === "effects"
           ? "SFX Impact Alignment"
-          : "Dynamic Index";
+          : stemMode === "loudness"
+            ? "EBU R128 Loudness Correlation"
+            : "Dynamic Index";
 
   return (
     <section className="panel audiovisual-rhythm">
@@ -148,6 +161,15 @@ const AudiovisualRhythm = memo(function AudiovisualRhythm({
               onClick={() => setStemMode("mixed")}
             >
               Mixed Track
+            </button>
+            <button
+              type="button"
+              className={`av-stem-btn lufs ${stemMode === "loudness" ? "active" : ""}`}
+              disabled={!project.loudnessAnalysis}
+              onClick={() => setStemMode("loudness")}
+              title={!project.loudnessAnalysis ? "Scan EBU R128 loudness first" : "Correlate cuts with EBU R128 sustained loudness"}
+            >
+              EBU R128
             </button>
             <button
               type="button"
@@ -220,7 +242,7 @@ const AudiovisualRhythm = memo(function AudiovisualRhythm({
           </div>
 
           <div className="rhythm-explanation av-explanation">
-            Correlates editing velocity with soundtrack loudness (dBFS).
+            Correlates editing velocity with {stemMode === "loudness" ? "EBU R128 loudness (LUFS)" : "soundtrack loudness (dBFS)"}.
             <span className="av-legend-item cutting-rate-legend">
               <span className="legend-swatch blue" /> Cutting Rate (left axis, 0–{maxRate} cuts/min)
             </span>
@@ -233,7 +255,9 @@ const AudiovisualRhythm = memo(function AudiovisualRhythm({
                       ? "gold"
                       : stemMode === "effects"
                         ? "coral"
-                        : "amber"
+                        : stemMode === "loudness"
+                          ? "purple"
+                          : "amber"
                 }`}
               />{" "}
               {stemMode === "dialogue"
@@ -242,8 +266,10 @@ const AudiovisualRhythm = memo(function AudiovisualRhythm({
                   ? "Music (MX)"
                   : stemMode === "effects"
                     ? "Effects (FX)"
-                    : "Audio Loudness"}{" "}
-              (right axis, -48 to 0 dBFS)
+                    : stemMode === "loudness"
+                      ? "EBU R128 Loudness (S)"
+                      : "Audio Loudness"}{" "}
+              (right axis, {stemMode === "loudness" ? "-60 to 0 LUFS" : "-48 to 0 dBFS"})
             </span>
             <span className="av-legend-item impact-cut-legend">
               <span className="legend-swatch red" /> Impact Cut (&gt;8 dB audio spike at cut boundary)
@@ -261,7 +287,9 @@ const AudiovisualRhythm = memo(function AudiovisualRhythm({
             <div className="pacing-axis right-axis">
               {[0, 0.5, 1].map((f) => (
                 <span key={f} style={{ bottom: `${f * 100}%` }}>
-                  {Math.round(-48 + 48 * f)} dB
+                  {stemMode === "loudness"
+                    ? `${Math.round(-60 + 60 * f)} LUFS`
+                    : `${Math.round(-48 + 48 * f)} dB`}
                 </span>
               ))}
             </div>

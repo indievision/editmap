@@ -1,33 +1,48 @@
 import { useMemo } from "react";
 import type { Project, Shot } from "../models/project";
 import { colorMappings } from "../analysis/colors";
+import MapRhythmOverview from "./charts/MapRhythmOverview";
 
 export default function MapSequenceOverview({
   project,
   selectedShot,
   time,
+  waveform,
   onSelectShot,
   onSeek,
 }: {
   project: Project;
   selectedShot?: Shot;
   time: number;
+  waveform: number[];
   onSelectShot: (shot: Shot) => void;
   onSeek: (t: number) => void;
 }) {
-  const { totalShots, avgDuration, maxDuration, minDuration } = useMemo(() => {
+  const { totalShots, avgDuration, maxDuration, minDuration, shortestShot, longestShot } = useMemo(() => {
     if (!project.shots.length) {
-      return { totalShots: 0, avgDuration: 0, maxDuration: 0, minDuration: 0 };
+      return { totalShots: 0, avgDuration: 0, maxDuration: 0, minDuration: 0, shortestShot: null, longestShot: null };
     }
     const durations = project.shots.map((s) => s.duration);
     const sum = durations.reduce((a, b) => a + b, 0);
+    const min = Math.min(...durations);
+    const max = Math.max(...durations);
     return {
       totalShots: project.shots.length,
       avgDuration: sum / project.shots.length,
-      maxDuration: Math.max(...durations),
-      minDuration: Math.min(...durations),
+      maxDuration: max,
+      minDuration: min,
+      shortestShot: project.shots.find((s) => s.duration === min) ?? null,
+      longestShot: project.shots.find((s) => s.duration === max) ?? null,
     };
   }, [project.shots]);
+
+  const tempoClassification = useMemo(() => {
+    if (avgDuration <= 0) return "No Shots";
+    if (avgDuration < 3.0) return "Rapid Montage (ASL < 3s)";
+    if (avgDuration < 5.5) return "Dynamic Kinetic Pace (ASL 3-5.5s)";
+    if (avgDuration < 9.0) return "Narrative Continuity (ASL 5.5-9s)";
+    return "Contemplative Extended Takes (ASL > 9s)";
+  }, [avgDuration]);
 
   // Current sequence if time falls inside one
   const currentSequence = useMemo(() => {
@@ -59,6 +74,31 @@ export default function MapSequenceOverview({
         </div>
       </div>
 
+      {/* Rhythm Intelligence Banner */}
+      <div className="rhythm-insight-banner">
+        <div className="rhythm-insight-badge">
+          <span className="insight-pulse-dot" />
+          <span className="insight-tempo-name">{tempoClassification}</span>
+        </div>
+        <div className="rhythm-insight-meta mono">
+          <span>{totalShots} Shots</span>
+          <span className="meta-sep">·</span>
+          <span>{project.sequences?.length ?? 0} Sequences</span>
+          {shortestShot && (
+            <>
+              <span className="meta-sep">·</span>
+              <span>Min: Shot {shortestShot.index} ({shortestShot.duration.toFixed(2)}s)</span>
+            </>
+          )}
+          {longestShot && (
+            <>
+              <span className="meta-sep">·</span>
+              <span>Max: Shot {longestShot.index} ({longestShot.duration.toFixed(2)}s)</span>
+            </>
+          )}
+        </div>
+      </div>
+
       {/* Sequence Header Blocks (if sequences defined) */}
       {project.sequences && project.sequences.length > 0 && (
         <div className="sequence-ruler-blocks">
@@ -82,6 +122,19 @@ export default function MapSequenceOverview({
           })}
         </div>
       )}
+
+      <div className="map-overview-chart-section">
+        <div className="map-overview-chart-head">
+          <span className="eyebrow">CUT DENSITY / AUDIO INTENSITY</span>
+          <span className="muted">Linked film-time overview</span>
+        </div>
+        <MapRhythmOverview
+          project={project}
+          waveform={waveform}
+          currentTime={time}
+          onSeek={onSeek}
+        />
+      </div>
 
       {/* Chronological Shot Duration Chart */}
       <div className="map-duration-chart-container" role="img" aria-label="Chronological shot duration chart">

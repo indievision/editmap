@@ -48,7 +48,7 @@ export default function ShotAnalysis({
           reviewStatus: "Needs review",
           suggestion: {
             ...tags,
-            model: MODEL,
+            model: tags.model ?? MODEL,
             createdAt: new Date().toISOString(),
             frame: { image, time },
           },

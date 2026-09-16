@@ -1,11 +1,15 @@
 # EDITMAP AI Agent & Development Guidelines
 
-## Local Vision Model (Ollama)
-- This project integrates with a local Ollama instance running `qwen3-vl:4b` on `http://127.0.0.1:11434`.
-- **CRITICAL**: When starting the development server (`npm run dev` / `vite`), you MUST run the command with `BypassSandbox: true`!
-  - Running Vite inside the sandbox restricts host network access, causing Vite's proxy to fail with `connect EPERM 127.0.0.1:11434` (HTTP 500 error).
-  - Outside the sandbox, Vite proxy communicates seamlessly with Ollama.
-- **Direct Fallback**: The client-side code uses `fetchLocalModel`, which attempts the Vite proxy first (`/local-model/api/chat`), and if a proxy failure occurs, automatically falls back to connecting directly to `http://127.0.0.1:11434/api/chat`.
+## Core Philosophy
+> **"Editing is emotion, story, and rhythm. From all these, rhythm is measurable. That's why EditMap."**
+> Every feature, metric, and visualization in EditMap exists to translate the intangible emotion and narrative flow of a film into concrete, measurable rhythmic architecture (pacing waves, cut frequency, visual deltas, sensory shock, framing elevation, and sonic rivers).
+
+## Local CV backend
+- The current backend is FastAPI on `http://127.0.0.1:8000`, using YOLO for framing, InsightFace / face_recognition for identities, and Demucs for DME. Ollama is not required by this checkout.
+- Start Vite outside the sandbox with host-network access (`require_escalated` in Codex). Sandboxed proxies can fail with `connect EPERM`.
+- `fetchLocalModel` tries the Vite `/api` proxy, then the loopback backend on transport/proxy failure. It obtains a local session token when requested by the backend.
+- Keep the service bound to loopback. Do not weaken origin/token checks. See `server/README.md` for limits, jobs, and model provisioning.
+- Run `npm run build`, `npm test`, and `server/.venv/bin/python -m unittest discover -s server -p 'test_*.py'` after relevant changes. Browser tests require the development server with `PLAYWRIGHT_BASE_URL` set to its URL.
 
 ## Scanning Architecture
 - **Step 1: Shot Sizes & Composition**: Scans unconfirmed shots for scale, people count, and subject category using one frame per shot. Decoupled from character detection.

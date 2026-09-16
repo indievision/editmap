@@ -1,5 +1,16 @@
 import type { Shot } from "../models/project";
+import { framingRank } from "./framing";
 import { calculateCutVisualDelta } from "./cuts";
+
+export function isHardCut(transition?: string): boolean {
+  if (!transition) return true;
+  const t = transition.trim().toUpperCase();
+  return (
+    t === "C" ||
+    t === "CUT" ||
+    (t !== "D" && t !== "DISSOLVE" && t !== "W" && t !== "WIPE" && t !== "SOFT" && t !== "FADE")
+  );
+}
 
 export function cutTimes(shots: Shot[]) {
   // Only contiguous hard-cut boundaries; gaps and dissolves are not cuts.
@@ -7,7 +18,7 @@ export function cutTimes(shots: Shot[]) {
     .slice(1)
     .filter(
       (s, i) =>
-        s.transition === "C" &&
+        isHardCut(s.transition) &&
         Math.abs(s.startSeconds - shots[i].endSeconds) < 0.00001,
     )
     .map((s) => s.startSeconds);
@@ -61,7 +72,7 @@ export function computeCutShockData(shots: Shot[]): CutShockData[] {
     const outgoing = shots[i - 1];
     const incoming = shots[i];
     if (
-      incoming.transition === "C" &&
+      isHardCut(incoming.transition) &&
       Math.abs(outgoing.endSeconds - incoming.startSeconds) < 0.00001
     ) {
       const delta = calculateCutVisualDelta(outgoing, incoming);
@@ -169,10 +180,6 @@ export type SequenceReading = {
   framingChanges: { tighter: number; wider: number; unchanged: number; unknown: number };
 };
 
-const framingOrder: Partial<Record<Shot["shotSize"], number>> = {
-  EWS: 0, WS: 1, MWS: 1.5, FS: 2, AS: 3, MS: 4, MCU: 5, CU: 6, ECU: 7,
-};
-
 export function sequenceReading(shots: Shot[], start: number, end: number): SequenceReading {
   const selected = shots.filter((shot) => shot.endSeconds > start && shot.startSeconds < end);
   const durations = selected.map((shot) => shot.duration).sort((a, b) => a - b);
@@ -185,9 +192,9 @@ export function sequenceReading(shots: Shot[], start: number, end: number): Sequ
     : 0;
   const framingChanges = { tighter: 0, wider: 0, unchanged: 0, unknown: 0 };
   for (let index = 1; index < selected.length; index++) {
-    const previous = framingOrder[selected[index - 1].shotSize];
-    const next = framingOrder[selected[index].shotSize];
-    if (previous === undefined || next === undefined) framingChanges.unknown++;
+    const previous = framingRank(selected[index - 1]);
+    const next = framingRank(selected[index]);
+    if (previous === null || next === null) framingChanges.unknown++;
     else if (next > previous) framingChanges.tighter++;
     else if (next < previous) framingChanges.wider++;
     else framingChanges.unchanged++;

@@ -2,10 +2,13 @@ import io
 import base64
 import hashlib
 import logging
+import uuid
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from PIL import Image
+from shot_engine import ShotBoundaryDetector
 
 logger = logging.getLogger("editmap.cv")
 
@@ -13,12 +16,20 @@ logger = logging.getLogger("editmap.cv")
 # Image Utilities
 # ---------------------------------------------------------------------------
 
+class ModelUnavailableError(RuntimeError):
+    """Inference could not run; never substitute an empty detection."""
+
+
 def decode_base64_image(image_data: str) -> Image.Image:
     """Decodes a base64 or data-URL encoded image to a RGB PIL Image."""
     if "," in image_data:
         image_data = image_data.split(",", 1)[1]
-    raw_bytes = base64.b64decode(image_data)
+    if len(image_data) > 8 * 1024 * 1024:
+        raise ValueError("Image exceeds 8 MB encoded limit")
+    raw_bytes = base64.b64decode(image_data, validate=True)
     img = Image.open(io.BytesIO(raw_bytes))
+    if img.width * img.height > 16_000_000 or min(img.size) < 2:
+        raise ValueError("Image dimensions exceed supported bounds")
     return img.convert("RGB")
 
 
@@ -55,11 +66,106 @@ COCO_OBJECTS = {
     "mouse", "remote", "keyboard", "cell phone"
 }
 
+ACTIVE_FRAMING_SIZES = ("Wide", "Full", "Medium", "Close", "Extreme close")
+
+
+class CinemaShotScaleClassifier:
+    """Local CinemaCLIP adapter limited to its supervised shot-framing head."""
+
+    model_id = "OZU-Technology/CinemaCLIP"
+    model_name = "CinemaCLIP-1.0.0:shot.framing"
+    _LABEL_TO_SIZE = {
+        "extreme-wide": "Wide",
+        "wide": "Wide",
+        "full": "Full",
+        "medium-wide": "Medium",
+        "medium": "Medium",
+        "medium-closeup": "Medium",
+        "closeup": "Close",
+        "extreme-closeup-face": "Extreme close",
+        "extreme-closeup-face-macro-eyes-dual": "Extreme close",
+        "extreme-closeup-face-macro-eye-single": "Extreme close",
+        "extreme-closeup-face-macro-mouth": "Extreme close",
+        "extreme-closeup-hands": "Extreme close",
+        "extreme-closeup-body": "Extreme close",
+        "extreme-closeup-prop": "Extreme close",
+    }
+
+    def __init__(self):
+        self._model = None
+        self.last_error = None
+
+    def _get_model(self):
+        if self._model is None:
+            try:
+                import torch
+                from cinemaclip import CinemaCLIP
+
+                model = CinemaCLIP.from_pretrained(self.model_id).eval()
+                if torch.backends.mps.is_available():
+                    model = model.to("mps")
+                self._model = model
+                logger.info("Loaded %s", self.model_name)
+            except Exception as error:
+                self.last_error = str(error)
+                raise ModelUnavailableError(
+                    "CinemaCLIP shot-framing model is unavailable. "
+                    "Run `server/.venv/bin/python server/provision_cinemaclip.py` while online, then restart the local CV service."
+                ) from error
+        return self._model
+
+    @staticmethod
+    def _prediction_value(prediction: Any, name: str) -> Any:
+        value = getattr(prediction, name, None)
+        if value is None and isinstance(prediction, dict):
+            value = prediction.get(name)
+        if isinstance(value, (list, tuple, np.ndarray)):
+            return value[0] if len(value) else None
+        return value
+
+    def classify_frames(self, images: List[Image.Image]) -> Tuple[str, bool, float]:
+        if not images:
+            raise ValueError("At least one frame is required for framing analysis.")
+        model = self._get_model()
+        totals = {size: 0.0 for size in ACTIVE_FRAMING_SIZES}
+        votes = {size: 0 for size in ACTIVE_FRAMING_SIZES}
+        valid_predictions = 0
+
+        try:
+            for image in images:
+                prediction = model.predict_image(image)["classifier_preds"]["shot.framing"]
+                label = self._prediction_value(prediction, "label")
+                confidence = self._prediction_value(prediction, "confidence")
+                size = self._LABEL_TO_SIZE.get(str(label).removeprefix("shot.framing."))
+                if size is None:
+                    continue
+                score = float(confidence)
+                totals[size] += score
+                votes[size] += 1
+                valid_predictions += 1
+        except Exception as error:
+            self.last_error = str(error)
+            raise ModelUnavailableError(f"CinemaCLIP framing inference failed: {error}") from error
+
+        if not valid_predictions:
+            return "Unknown", True, 0.0
+        size, total = max(totals.items(), key=lambda item: item[1])
+        confidence = total / valid_predictions
+        # A scale observed in only one of the three interior samples, or without
+        # enough class probability, remains a review suggestion rather than fact.
+        # Two agreeing interior frames and a 0.50 mean probability avoid a false
+        # feeling of precision at an edit boundary or during a reframing move.
+        uncertain = votes[size] < 2 or confidence < 0.50
+        self.last_error = None
+        return size, uncertain, confidence
+
 
 class ShotClassifier:
     def __init__(self, model_name: str = "yolo11n.pt"):
         self.model_name = model_name
         self._model = None
+        self.last_error = None
+        self.framing_classifier = CinemaShotScaleClassifier()
 
     def _get_model(self):
         if self._model is None:
@@ -72,14 +178,18 @@ class ShotClassifier:
                 try:
                     from ultralytics import YOLO
                     self._model = YOLO("yolov8n.pt")
+                    self.model_name = "yolov8n.pt"
                     logger.info("Loaded fallback YOLO model: yolov8n.pt")
                 except Exception as ex:
                     logger.error("Failed to load YOLO model: %s / %s", e, ex)
                     raise
         return self._model
 
-    def _detect_title_card(self, img: Image.Image) -> bool:
+    def _detect_title_card(self, img: Image.Image, has_people: bool = False, has_objects: bool = False) -> bool:
         """Heuristic check for title cards, credit rolls, and graphics."""
+        if has_people or has_objects:
+            return False
+
         np_img = np.array(img)
         # Check color variance across channels
         r, g, b = np_img[:, :, 0], np_img[:, :, 1], np_img[:, :, 2]
@@ -95,8 +205,8 @@ class ShotClassifier:
         median_val = np.median(gray)
         uniform_ratio = np.mean(np.abs(gray - median_val) < 15)
 
-        # Title cards typically have high background uniformity (>60%) with sharp edge contrast and low color difference
-        if uniform_ratio > 0.65 and color_diff < 15 and edge_mean > 2.0:
+        # Title cards typically have high background uniformity (>80%) with sharp edge contrast and low color difference
+        if uniform_ratio > 0.80 and color_diff < 12 and edge_mean > 2.2:
             return True
         return False
 
@@ -116,19 +226,20 @@ class ShotClassifier:
         nature_score = (np.sum(green_mask) + np.sum(sky_mask) + np.sum(earth_mask)) / total_pixels
         return nature_score > 0.40
 
-    def analyze(self, img: Image.Image) -> Dict[str, Any]:
+    def analyze_frames(self, images: List[Image.Image]) -> Dict[str, Any]:
+        shot_size, framing_uncertain, confidence = self.framing_classifier.classify_frames(images)
+        return self.analyze(
+            images[len(images) // 2],
+            framing=(shot_size, framing_uncertain, confidence),
+        )
+
+    def analyze(
+        self,
+        img: Image.Image,
+        framing: Optional[Tuple[str, bool, float]] = None,
+    ) -> Dict[str, Any]:
         """Classifies shot framing, people composition, content, and uncertainty."""
         w, h = img.size
-        is_title = self._detect_title_card(img)
-
-        # If it's a title card
-        if is_title:
-            return {
-                "shotSize": "Not applicable",
-                "composition": "No people",
-                "content": "Text / title card",
-                "uncertain": False,
-            }
 
         try:
             model = self._get_model()
@@ -136,8 +247,11 @@ class ShotClassifier:
             boxes = results[0].boxes if len(results) > 0 else None
         except Exception as e:
             logger.warning("YOLO detection error: %s", e)
+            self.last_error = str(e)
             boxes = None
 
+        if boxes is not None:
+            self.last_error = None
         detected_people = []
         detected_animals = []
         detected_interiors = []
@@ -168,6 +282,24 @@ class ShotClassifier:
                 if conf < 0.45:
                     uncertain = True
 
+        has_people = len(detected_people) > 0
+        has_major_objects = (
+            len(detected_animals) > 0
+            or (len(detected_interiors) > 0 and max([o["area"] for o in detected_interiors], default=0) > 0.10)
+            or (len(detected_objects) > 0 and max([o["area"] for o in detected_objects], default=0) > 0.05)
+        )
+        is_title = self._detect_title_card(img, has_people=has_people, has_objects=has_major_objects)
+
+        # If it's a title card
+        if is_title:
+            return {
+                "shotSize": "Not applicable",
+                "composition": "No people",
+                "content": "Text / title card",
+                "uncertain": True,
+                "model": "title-card-heuristic-v1",
+            }
+
         # Composition calculation
         num_people = len(detected_people)
         if num_people == 0:
@@ -197,66 +329,136 @@ class ShotClassifier:
         else:
             content = "Landscape / nature" if self._analyze_landscape_nature(img) else "Other"
 
-        # Shot Size calculation
-        if num_people > 0:
-            # Sort people by area to find primary featured person
-            primary_person = max(detected_people, key=lambda p: p["area"])
-            p_h_ratio = primary_person["h"] / h
-
-            # Sizing thresholds based on person height ratio
-            if p_h_ratio >= 0.85:
-                shot_size = "CU"
-            elif p_h_ratio >= 0.68:
-                shot_size = "FS"
-            elif p_h_ratio >= 0.50:
-                shot_size = "AS"
-            elif p_h_ratio >= 0.35:
-                shot_size = "MS"
-            elif p_h_ratio >= 0.22:
-                shot_size = "MCU" if primary_person["area"] > 0.12 else "WS"
-            elif p_h_ratio >= 0.12:
-                shot_size = "WS"
-            else:
-                shot_size = "EWS"
-        else:
-            if content == "Text / title card":
-                shot_size = "Not applicable"
-            elif content == "Object / detail" and len(detected_objects) > 0:
-                max_obj = max(detected_objects, key=lambda o: o["area"])
-                obj_h_ratio = max_obj["h"] / h
-                if obj_h_ratio >= 0.75:
-                    shot_size = "ECU"
-                elif obj_h_ratio >= 0.45:
-                    shot_size = "CU"
-                elif obj_h_ratio >= 0.25:
-                    shot_size = "MS"
-                else:
-                    shot_size = "WS"
-            elif content == "Animals" and len(detected_animals) > 0:
-                max_anim = max(detected_animals, key=lambda a: a["area"])
-                anim_h_ratio = max_anim["h"] / h
-                if anim_h_ratio >= 0.70:
-                    shot_size = "CU"
-                elif anim_h_ratio >= 0.40:
-                    shot_size = "MS"
-                else:
-                    shot_size = "WS"
-            elif content == "Landscape / nature":
-                shot_size = "WS"
-            else:
-                shot_size = "Unknown"
+        if framing is None:
+            framing = self.framing_classifier.classify_frames([img])
+        shot_size, framing_uncertain, framing_confidence = framing
 
         return {
             "shotSize": shot_size,
             "composition": composition,
             "content": content,
-            "uncertain": uncertain,
+            "uncertain": uncertain or framing_uncertain or boxes is None or len(boxes) == 0,
+            "model": f"{self.framing_classifier.model_name}+{self.model_name}:composition",
+            "framingConfidence": framing_confidence,
         }
 
 
 # ---------------------------------------------------------------------------
 # Step 2: Character Mapping (InsightFace / face_recognition)
 # ---------------------------------------------------------------------------
+    @staticmethod
+    def _estimate_person_size(img: Image.Image, person: Dict[str, Any]) -> str:
+        """Estimates cinematic shot size based on face scale and person bounding box geometry."""
+        w, h = img.size
+        x1, y1, x2, y2 = person["xyxy"]
+        pw = max(1.0, x2 - x1)
+        ph = max(1.0, y2 - y1)
+        h_ratio = ph / h
+        w_ratio = pw / w
+        y1_rel = y1 / h
+        y2_rel = y2 / h
+
+        # 1. Face Evidence Detection
+        try:
+            import cv2
+            detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+            np_img = np.array(img)
+            gray = cv2.cvtColor(np_img, cv2.COLOR_RGB2GRAY)
+            
+            # Crop upper portion of person box for higher face detection recall
+            crop_y1 = max(0, int(y1))
+            crop_y2 = min(h, int(y1 + ph * 0.75))
+            crop_x1 = max(0, int(x1 - pw * 0.1))
+            crop_x2 = min(w, int(x2 + pw * 0.1))
+            
+            face_ratio = 0.0
+            if crop_y2 > crop_y1 + 10 and crop_x2 > crop_x1 + 10:
+                crop_gray = gray[crop_y1:crop_y2, crop_x1:crop_x2]
+                faces = detector.detectMultiScale(crop_gray, scaleFactor=1.1, minNeighbors=4)
+                if len(faces) > 0:
+                    best_fh = max(fh for fx, fy, fw, fh in faces)
+                    face_ratio = best_fh / h
+
+            if face_ratio == 0.0:
+                faces = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
+                ratios = [fh / h for fx, fy, fw, fh in faces if x1 - pw * 0.2 <= fx + fw / 2 <= x2 + pw * 0.2 and y1 <= fy + fh / 2 <= y2]
+                if ratios:
+                    face_ratio = max(ratios)
+
+            if face_ratio > 0:
+                if face_ratio >= 0.40:
+                    return "ECU"
+                if face_ratio >= 0.22:
+                    return "CU"
+                if face_ratio >= 0.13:
+                    return "MCU"
+                if face_ratio >= 0.07:
+                    return "MS"
+                if face_ratio >= 0.04:
+                    return "MWS"
+        except Exception:
+            pass  # Fall through to bounding box geometry
+
+        # Degenerate whole-frame box filling >96% of width and height without face evidence
+        if w_ratio >= 0.96 and h_ratio >= 0.96 and y1_rel <= 0.02 and y2_rel >= 0.98:
+            return "Unknown"
+
+        # 2. Person Bounding Box Geometry
+        is_unclipped = (y1_rel >= 0.02) and (y2_rel <= 0.98)
+        
+        if is_unclipped:
+            if h_ratio >= 0.70:
+                return "FS"
+            if h_ratio >= 0.35:
+                return "FS" if h_ratio >= 0.55 else "WS"
+            if h_ratio >= 0.12:
+                return "WS"
+            return "EWS"
+
+        # Clipped box (person extends to top or bottom frame boundary)
+        if y2_rel >= 0.95:
+            if y1_rel <= 0.05:
+                if w_ratio >= 0.50:
+                    return "CU"
+                if w_ratio >= 0.30:
+                    return "MCU"
+                if w_ratio >= 0.20:
+                    return "MS"
+                return "MWS"
+            elif y1_rel <= 0.18:
+                if w_ratio >= 0.40:
+                    return "MCU"
+                if w_ratio >= 0.22:
+                    return "MS"
+                return "MWS"
+            elif y1_rel <= 0.35:
+                if h_ratio >= 0.50:
+                    return "MS"
+                return "MCU"
+            else:
+                if h_ratio >= 0.40:
+                    return "MCU"
+                if h_ratio >= 0.25:
+                    return "CU"
+                return "ECU"
+
+        if y1_rel <= 0.05:
+            if h_ratio >= 0.60:
+                return "MS"
+            if h_ratio >= 0.35:
+                return "MCU"
+            if h_ratio >= 0.20:
+                return "CU"
+            return "ECU"
+
+        if h_ratio >= 0.65:
+            return "MS"
+        if h_ratio >= 0.35:
+            return "MCU"
+        if h_ratio >= 0.15:
+            return "WS"
+        return "EWS"
+
 
 class CharacterRecognizer:
     def __init__(self, similarity_threshold: float = 0.45):
@@ -264,8 +466,11 @@ class CharacterRecognizer:
         self._engine = None
         self._engine_type = None
         self._reference_cache: Dict[str, List[np.ndarray]] = {}
+        self.last_error = None
 
     def _init_engine(self):
+        if self._engine_type == "fallback":
+            raise ModelUnavailableError("Face recognition is unavailable; install InsightFace or face_recognition and restart the service.")
         if self._engine is not None:
             return
 
@@ -295,6 +500,8 @@ class CharacterRecognizer:
         logger.warning("No advanced face recognition engine available; using fallback detector.")
         self._engine = "fallback"
         self._engine_type = "fallback"
+        self.last_error = "No face recognition engine is available"
+        raise ModelUnavailableError(self.last_error)
 
     def _extract_face_embeddings(self, img: Image.Image) -> List[np.ndarray]:
         """Extracts normalized face embeddings for all faces in image."""
@@ -334,8 +541,12 @@ class CharacterRecognizer:
         try:
             ref_img = decode_base64_image(image_b64)
             embeddings = self._extract_face_embeddings(ref_img)
+            if len(self._reference_cache) >= 512:
+                self._reference_cache.pop(next(iter(self._reference_cache)))
             self._reference_cache[cache_key] = embeddings
             return embeddings
+        except ModelUnavailableError:
+            raise
         except Exception as e:
             logger.error("Failed to extract reference embeddings for %s: %s", ref_id, e)
             return []
@@ -485,6 +696,7 @@ class CharacterRecognizer:
         faces_data: List[Dict[str, Any]],
         similarity_threshold: Optional[float] = None,
         min_appearances: int = 1,
+        existing_cast: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Clusters a collection of face embeddings into distinct characters using cosine similarity.
@@ -500,7 +712,17 @@ class CharacterRecognizer:
                 "unassignedFaces": 0,
             }
 
-        thresh = similarity_threshold if similarity_threshold is not None else self.similarity_threshold
+        # ArcFace (512 dimensions) and dlib/face_recognition (128 dimensions)
+        # have materially different cosine-score ranges.  The former commonly
+        # drops below .50 for the same person in a profile or down-facing shot,
+        # which was fragmenting one cast member into several "Character N"
+        # entries.  Keep an explicitly supplied threshold authoritative, but
+        # use conservative engine-aware defaults for automatic discovery.
+        if similarity_threshold is not None:
+            thresh = similarity_threshold
+        else:
+            embedding_dimensions = len(faces_data[0].get("embedding", []))
+            thresh = 0.38 if embedding_dimensions == 512 else 0.72
 
         # Sort faces by quality (area * score) descending so clearest, biggest faces establish initial cluster anchors
         sorted_faces = sorted(
@@ -572,10 +794,30 @@ class CharacterRecognizer:
             reverse=True,
         )
 
+        existing_cast = existing_cast or []
+        reference_embeddings = {}
+        for member in existing_cast:
+            refs = []
+            for ref in member.get("references", []):
+                refs.extend(self._get_reference_embeddings(ref["id"], ref["image"]))
+            if refs:
+                reference_embeddings[member["id"]] = refs
         characters = []
+        used_ids = set()
         for idx, c in enumerate(valid_clusters, start=1):
-            char_id = f"char-{idx}"
-            name = f"Character {idx}"
+            char_id = "char-" + str(uuid.uuid4())
+            name = f"Character {len(existing_cast) + idx}"
+            matches = []
+            for member in existing_cast:
+                scores = [float(np.dot(c["centroid"], emb)) for emb in reference_embeddings.get(member["id"], []) if emb.shape == c["centroid"].shape]
+                if scores: matches.append((max(scores), member))
+            matches.sort(key=lambda item: item[0], reverse=True)
+            # Ambiguous clusters remain new suggestions; never reassign a confirmed identity.
+            if matches and matches[0][0] >= .60 and (len(matches) == 1 or matches[0][0] - matches[1][0] >= .08):
+                member = matches[0][1]
+                if member["id"] not in used_ids:
+                    char_id, name = member["id"], member["name"]
+            used_ids.add(char_id)
 
             seen_shots = set()
             appearances = []
@@ -937,6 +1179,7 @@ class EyeTraceAnalyzer:
             except Exception as e:
                 logger.warning("Face detection in EyeTraceAnalyzer failed: %s", e)
 
+
         # Priority 2: Person detection via ShotClassifier (YOLO)
         if self.shot_classifier:
             try:
@@ -958,11 +1201,11 @@ class EyeTraceAnalyzer:
                             people_boxes.sort(key=lambda p: p[0], reverse=True)
                             _, xyxy, conf = people_boxes[0]
                             cx = (xyxy[0] + xyxy[2]) / 2.0
-                            upper_y = xyxy[1] + 0.20 * (xyxy[3] - xyxy[1])
+                            upper_y = xyxy[1] + 0.15 * (xyxy[3] - xyxy[1]) # Top 15% is closer to head
                             return {
                                 "x": round(max(0.02, min(0.98, cx / w)), 3),
                                 "y": round(max(0.02, min(0.98, upper_y / h)), 3),
-                                "type": "face",
+                                "type": "person",
                                 "confidence": round(conf, 2),
                             }
             except Exception as e:
@@ -1154,5 +1397,3 @@ class MotionAnalyzer:
             "totalKineticEnergy": total_kinetic_energy,
             "confidence": 0.85,
         }
-
-

@@ -1,5 +1,9 @@
 # EDITMAP AI Agent & Development Guidelines
 
+## Core Philosophy
+> **"Editing is emotion, story, and rhythm. From all these, rhythm is measurable. That's why EditMap."**
+> Every feature, metric, and visualization in EditMap exists to translate the intangible emotion and narrative flow of a film into concrete, measurable rhythmic architecture (pacing waves, cut frequency, visual deltas, sensory shock, framing elevation, and sonic rivers).
+
 ## Local Vision Model (Ollama)
 - This project integrates with a local Ollama instance running `qwen3-vl:4b` on `http://127.0.0.1:11434`.
 - **CRITICAL**: When starting the development server (`npm run dev` / `vite`), you MUST run the command with `BypassSandbox: true`!
