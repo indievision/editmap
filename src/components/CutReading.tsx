@@ -3,6 +3,7 @@ import {
   analyzeCutEyeTrace,
   annotationFor,
   calculateCutVisualDelta,
+  colorMatchAtCut,
   cutPairAt,
   durationChange,
   framingChange,
@@ -233,6 +234,7 @@ export default function CutReading({
   const framing = framingChange(pair);
   const duration = durationChange(pair);
   const visualDelta = calculateCutVisualDelta(pair.outgoing, pair.incoming);
+  const colorMatch = colorMatchAtCut(pair.outgoing, pair.incoming);
 
   if (variant === "drawer") {
     const degrees = eyeTrace ? ((eyeTrace.jumpDistancePercent / 100) * 35).toFixed(1) : null;
@@ -442,6 +444,13 @@ export default function CutReading({
                   ) : (
                     "Awaiting frames"
                   )}
+                </span>
+              </div>
+
+              <div className="cut-evidence-row">
+                <span className="cut-evidence-label">Colour match</span>
+                <span className="cut-evidence-value">
+                  {colorMatch.label}{colorMatch.score === null ? "" : ` · ${Math.round(colorMatch.score * 100)}% measured difference`}
                 </span>
               </div>
 
@@ -842,4 +851,3 @@ export default function CutReading({
     </section>
   );
 }
-

@@ -1,5 +1,5 @@
-import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { Project, Shot, SpeechAnalysis, LoudnessAnalysis } from "../models/project";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import type { Project, Shot, SpeechAnalysis, LoudnessAnalysis, SequenceMarker } from "../models/project";
 import { classifyCut, pauseRegions } from "../analysis/speech";
 import { lufsToNormalized } from "../analysis/loudness";
 import { colorMappings, sizeColors } from "../analysis/colors";
@@ -8,7 +8,31 @@ import { reviewReasonLabel, reviewReasons, type ReviewFilter } from "../analysis
 import { getSnapTime, quantizeToFrame } from "./timelineOps";
 import { cutTimes, pacingCurve, pacingAt, computeCutShockData } from "../analysis/pacing";
 import { framingRank } from "../analysis/framing";
+import { classifyKineticVelocity, classifyMomentumTransition } from "../analysis/motion";
 import { getSquintFilter } from "../utils/squint";
+import {
+  generatePacingPathAndArea,
+  generateMotionFlowPathAndArea,
+  generateSymmetricalWaveformPath,
+  generateSteppedFramingPath,
+} from "./FullscreenMapVisualization";
+import { StudioToolbar } from "../components/StudioToolbar";
+import type { StudioToolTab } from "../components/StudioToolRail";
+
+const CAST_PALETTE = [
+  "#d97764",
+  "#7ca381",
+  "#8e7cc3",
+  "#d4a34b",
+  "#c97282",
+  "#6ba3cf",
+];
+
+function getCastAvatarSrc(member?: { references?: Array<{ image?: string }> }): string | undefined {
+  if (!member?.references?.[0]?.image) return undefined;
+  const raw = member.references[0].image;
+  return raw.startsWith("data:") ? raw : `data:image/jpeg;base64,${raw}`;
+}
 
 export interface MapLayerState {
   framing: boolean;
@@ -18,6 +42,121 @@ export interface MapLayerState {
   characters: boolean;
   audio: boolean;
   scenes: boolean;
+}
+
+export const DEFAULT_MAP_LAYERS: MapLayerState = {
+  framing: true,
+  pacing: true,
+  framingArc: true,
+  motion: true,
+  characters: true,
+  audio: true,
+  scenes: true,
+};
+
+export type StudioTrackId =
+  | "story"
+  | "shots"
+  | "pacing"
+  | "cutDensity"
+  | "framing"
+  | "motion"
+  | "palette"
+  | "cast"
+  | "sound";
+
+export const DEFAULT_STUDIO_LANE_HEIGHTS: Record<StudioTrackId, number> = {
+  story: 38,
+  shots: 50,
+  pacing: 42,
+  cutDensity: 42,
+  framing: 46,
+  motion: 42,
+  palette: 42,
+  cast: 54,
+  sound: 90,
+};
+
+export const MIN_STUDIO_LANE_HEIGHTS: Record<StudioTrackId, number> = {
+  story: 24,
+  shots: 28,
+  pacing: 24,
+  cutDensity: 24,
+  framing: 28,
+  motion: 24,
+  palette: 24,
+  cast: 36,
+  sound: 50,
+};
+
+export function generatePaletteWavePath(
+  shots: Shot[],
+  scale: number,
+  height: number,
+): string {
+  if (!shots || shots.length === 0 || height <= 8) return "";
+  const points = shots.map((s) => {
+    const cx = (s.startSeconds + s.duration / 2) * scale;
+    const luma = s.colorProfile?.luminance ?? 0.5;
+    const cy = Math.max(6, Math.min(height - 6, height * (0.75 - luma * 0.5)));
+    return [cx, cy] as [number, number];
+  });
+  if (points.length === 1) {
+    return `M ${(points[0][0] - 10).toFixed(1)} ${points[0][1].toFixed(1)} L ${(points[0][0] + 10).toFixed(1)} ${points[0][1].toFixed(1)}`;
+  }
+  let path = `M ${points[0][0].toFixed(1)} ${points[0][1].toFixed(1)}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[Math.max(0, i - 1)];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[Math.min(points.length - 1, i + 2)];
+    const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
+    const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
+    const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
+    path += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+  }
+  return path;
+}
+
+export function generateLoudnessCurvePath(
+  loudness: LoudnessAnalysis | undefined,
+  fallbackWaveform: number[] | undefined,
+  duration: number,
+  scale: number,
+  height: number,
+): string {
+  if (duration <= 0 || scale <= 0 || height <= 4) return "";
+  const totalW = duration * scale;
+  const padding = 2;
+  const usableH = height - padding * 2;
+
+  if (loudness && loudness.momentary && loudness.momentary.length > 1) {
+    const count = loudness.momentary.length;
+    let path = "";
+    for (let i = 0; i < count; i++) {
+      const x = (i / (count - 1)) * totalW;
+      const norm = lufsToNormalized(loudness.momentary[i], -60, 0);
+      const y = height - padding - norm * usableH;
+      path += `${i === 0 ? "M" : " L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
+    }
+    return path;
+  }
+
+  if (fallbackWaveform && fallbackWaveform.length > 1) {
+    const count = Math.min(200, fallbackWaveform.length);
+    const step = Math.max(1, Math.floor(fallbackWaveform.length / count));
+    let path = "";
+    for (let i = 0; i < count; i++) {
+      const x = (i / (count - 1)) * totalW;
+      const val = fallbackWaveform[i * step] ?? 0.2;
+      const y = height - padding - Math.min(1, Math.max(0.1, val)) * usableH;
+      path += `${i === 0 ? "M" : " L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
+    }
+    return path;
+  }
+
+  return `M 0 ${(height / 2).toFixed(1)} L ${totalW.toFixed(1)} ${(height / 2).toFixed(1)}`;
 }
 
 export default memo(function EditingMap({
@@ -34,6 +173,9 @@ export default memo(function EditingMap({
   onCut,
   range,
   onRangeChange,
+  selectedSequenceId,
+  onSelectSequence,
+  onUpdateSequences,
   waveform = [],
   speechAnalysis,
   loudnessAnalysis,
@@ -47,6 +189,8 @@ export default memo(function EditingMap({
   dmeSeparationStatus = "",
   hasVideo = false,
   workspaceMode = "studio",
+  expanded = false,
+  onToggleExpanded,
   showLayersControl = false,
   showMinimap = true,
   reviewFilter,
@@ -61,6 +205,18 @@ export default memo(function EditingMap({
   squintLevel = 4,
   onToggleSquint,
   onSquintLevelChange,
+  layers: propLayers,
+  onLayersChange,
+  zoom: propZoom,
+  onZoomChange,
+  scrollLeft: propScrollLeft,
+  onScrollChange,
+  onOpenFullscreen,
+  onOpenInspector,
+  activeTab,
+  drawerOpen,
+  onSelectTab,
+  onToggleDrawer,
 }: {
   project: Project;
   thumbnails: Record<string, string>;
@@ -72,9 +228,12 @@ export default memo(function EditingMap({
   onShot: (s: Shot) => void;
   onPlayShot: (s: Shot) => void;
   selectedCut?: string;
-  onCut: (incoming: Shot) => void;
-  range?: { start: number; end: number };
-  onRangeChange: (range?: { start: number; end: number }) => void;
+  onCut?: (shot: Shot) => void;
+  range?: { start?: number; end?: number };
+  onRangeChange: (range?: { start?: number; end?: number }) => void;
+  selectedSequenceId?: string | null;
+  onSelectSequence?: (seq: SequenceMarker) => void;
+  onUpdateSequences?: (sequences: SequenceMarker[]) => void;
   waveform?: number[];
   speechAnalysis?: SpeechAnalysis;
   loudnessAnalysis?: LoudnessAnalysis;
@@ -88,7 +247,9 @@ export default memo(function EditingMap({
   isDmeSeparating?: boolean;
   dmeSeparationStatus?: string;
   hasVideo?: boolean;
-  workspaceMode?: "studio" | "map" | "review";
+  workspaceMode?: "studio" | "explore" | "review";
+  expanded?: boolean;
+  onToggleExpanded?: () => void;
   showLayersControl?: boolean;
   showMinimap?: boolean;
   reviewFilter?: string;
@@ -103,8 +264,22 @@ export default memo(function EditingMap({
   squintLevel?: number;
   onToggleSquint?: (active?: boolean) => void;
   onSquintLevelChange?: (level: number) => void;
+  layers?: MapLayerState;
+  onLayersChange?: (layers: MapLayerState) => void;
+  zoom?: number;
+  onZoomChange?: (zoom: number) => void;
+  scrollLeft?: number;
+  onScrollChange?: (scrollLeft: number) => void;
+  onOpenFullscreen?: () => void;
+  onOpenInspector?: () => void;
+  activeTab?: StudioToolTab;
+  drawerOpen?: boolean;
+  onSelectTab?: (tab: StudioToolTab) => void;
+  onToggleDrawer?: () => void;
 }) {
+  const isStudio = workspaceMode === "studio";
   const viewport = useRef<HTMLDivElement>(null);
+  const trackHeaders = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLDivElement>(null);
   const minimapRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
@@ -118,18 +293,15 @@ export default memo(function EditingMap({
   );
 
   // Layers visibility state
-  const [layers, setLayers] = useState<MapLayerState>({
-    framing: true,
-    pacing: true,
-    framingArc: true,
-    motion: true,
-    characters: true,
-    audio: true,
-    scenes: true,
-  });
+  const [localLayers, setLocalLayers] = useState<MapLayerState>(
+    propLayers || DEFAULT_MAP_LAYERS
+  );
+  const layers = propLayers || localLayers;
 
   const toggleLayer = (layer: keyof MapLayerState) => {
-    setLayers((prev) => ({ ...prev, [layer]: !prev[layer] }));
+    const next = { ...layers, [layer]: !layers[layer] };
+    setLocalLayers(next);
+    onLayersChange?.(next);
   };
 
   useEffect(() => {
@@ -155,11 +327,150 @@ export default memo(function EditingMap({
     maxTime: number;
     hasMoved: boolean;
   } | null>(null);
-  const [snappedGuideTime, setSnappedGuideTime] = useState<number | null>(null);
 
-  const [width, setWidth] = useState(1000),
-    [zoom, setZoom] = useState(1),
-    [scrollLeft, setScrollLeft] = useState(0);
+  const [collapsedTracks, setCollapsedTracks] = useState<Record<StudioTrackId, boolean>>({
+    story: false,
+    shots: false,
+    pacing: false,
+    cutDensity: false,
+    framing: false,
+    motion: false,
+    palette: false,
+    cast: false,
+    sound: false,
+  });
+  const [soloTrack, setSoloTrack] = useState<StudioTrackId | null>(null);
+
+  const [laneHeights, setLaneHeights] = useState<Record<StudioTrackId, number>>({
+    ...DEFAULT_STUDIO_LANE_HEIGHTS,
+  });
+  const [resizingTrack, setResizingTrack] = useState<StudioTrackId | null>(null);
+  const resizingRef = useRef<{ trackId: StudioTrackId; startY: number; startHeight: number } | null>(null);
+
+  const handleResizePointerDown = useCallback(
+    (trackId: StudioTrackId, e: React.PointerEvent) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      suppressMapClick.current = true;
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {}
+      resizingRef.current = {
+        trackId,
+        startY: e.clientY,
+        startHeight: laneHeights[trackId],
+      };
+      setResizingTrack(trackId);
+    },
+    [laneHeights],
+  );
+
+  const handleResizePointerMove = useCallback((e: React.PointerEvent) => {
+    if (!resizingRef.current) return;
+    e.preventDefault();
+    const delta = e.clientY - resizingRef.current.startY;
+    const trackId = resizingRef.current.trackId;
+    const minH = MIN_STUDIO_LANE_HEIGHTS[trackId];
+    const newH = Math.max(minH, Math.round(resizingRef.current.startHeight + delta));
+    setLaneHeights((prev) => ({ ...prev, [trackId]: newH }));
+  }, []);
+
+  const handleResizePointerUp = useCallback((e: React.PointerEvent) => {
+    if (!resizingRef.current) return;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {}
+    resizingRef.current = null;
+    setResizingTrack(null);
+    setTimeout(() => {
+      suppressMapClick.current = false;
+    }, 100);
+  }, []);
+
+  const handleResizeDoubleClick = useCallback((trackId: StudioTrackId, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setLaneHeights((prev) => ({
+      ...prev,
+      [trackId]: DEFAULT_STUDIO_LANE_HEIGHTS[trackId],
+    }));
+  }, []);
+
+  const handleResizeKeyDown = useCallback(
+    (trackId: StudioTrackId, e: React.KeyboardEvent) => {
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        const step = e.shiftKey ? 15 : 5;
+        const minH = MIN_STUDIO_LANE_HEIGHTS[trackId];
+        setLaneHeights((prev) => ({
+          ...prev,
+          [trackId]: Math.max(minH, prev[trackId] - step),
+        }));
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        const step = e.shiftKey ? 15 : 5;
+        setLaneHeights((prev) => ({
+          ...prev,
+          [trackId]: prev[trackId] + step,
+        }));
+      } else if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        setLaneHeights((prev) => ({
+          ...prev,
+          [trackId]: DEFAULT_STUDIO_LANE_HEIGHTS[trackId],
+        }));
+      }
+    },
+    [],
+  );
+
+  const toggleTrackCollapse = useCallback((trackId: StudioTrackId) => {
+    setCollapsedTracks((prev) => ({
+      ...prev,
+      [trackId]: !prev[trackId],
+    }));
+  }, []);
+
+  const toggleTrackSolo = useCallback((trackId: StudioTrackId) => {
+    setSoloTrack((prev) => (prev === trackId ? null : trackId));
+  }, []);
+
+  const isTrackCollapsed = useCallback(
+    (trackId: StudioTrackId) => {
+      if (soloTrack !== null) {
+        return soloTrack !== trackId;
+      }
+      return Boolean(collapsedTracks[trackId]);
+    },
+    [collapsedTracks, soloTrack]
+  );
+
+  const [width, setWidth] = useState(1000);
+  const [localZoom, setLocalZoom] = useState(1);
+  const zoom = propZoom !== undefined ? propZoom : localZoom;
+
+  const setZoom = useCallback(
+    (action: number | ((prev: number) => number)) => {
+      const next = typeof action === "function" ? action(zoom) : action;
+      const clamped = Math.max(1, Math.min(128, next));
+      setLocalZoom(clamped);
+      onZoomChange?.(clamped);
+    },
+    [zoom, onZoomChange],
+  );
+
+  const [localScrollLeft, setLocalScrollLeft] = useState(0);
+  const scrollLeft = propScrollLeft !== undefined ? propScrollLeft : localScrollLeft;
+
+  useEffect(() => {
+    if (propScrollLeft !== undefined && viewport.current) {
+      if (Math.abs(viewport.current.scrollLeft - propScrollLeft) > 2) {
+        viewport.current.scrollLeft = propScrollLeft;
+      }
+    }
+  }, [propScrollLeft]);
+
   const duration = Math.max(project.duration, 1),
     canvasWidth = Math.max(width, width * zoom),
     scale = canvasWidth / duration;
@@ -175,18 +486,13 @@ export default memo(function EditingMap({
 
   const resolveSnap = (targetTime: number) => {
     if (!snapToCuts) {
-      if (snappedGuideTime !== null) setSnappedGuideTime(null);
       return targetTime;
     }
     const thresholdSec = 12 / scale;
     const snap = getSnapTime(targetTime, snapPoints, thresholdSec);
     if (snap.isSnapped && snap.snapTarget !== undefined) {
-      if (snappedGuideTime !== snap.snapTarget) {
-        setSnappedGuideTime(snap.snapTarget);
-      }
       return snap.snappedTime;
     }
-    if (snappedGuideTime !== null) setSnappedGuideTime(null);
     return targetTime;
   };
 
@@ -285,12 +591,30 @@ export default memo(function EditingMap({
   }, [project.shots, active, selected, time]);
 
   const currentMotion = currentShot?.motionProfile;
+  const currentMotionVelocity = currentMotion
+    ? classifyKineticVelocity(currentMotion.totalKineticEnergy)
+    : "";
+  const currentMotionMomentum =
+    currentMotion?.kineticDelta !== undefined
+      ? classifyMomentumTransition(currentMotion.kineticDelta)
+      : null;
   const motionReadout = currentMotion
-    ? `${currentMotion.totalKineticEnergy}% Kinetic (${currentShot?.cameraMovement || currentMotion.cameraMovement || "Dynamic"})`
+    ? `${currentMotion.totalKineticEnergy}% Flow · ${currentMotionVelocity}${
+        currentMotionMomentum && currentMotionMomentum.type !== "initial"
+          ? ` (${currentMotionMomentum.label})`
+          : ""
+      }`
     : "Ready to Scan";
 
   const cuts = useMemo(() => cutTimes(project.shots), [project.shots]);
   const cutShockData = useMemo(() => computeCutShockData(project.shots), [project.shots]);
+  const cutShockMap = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const c of cutShockData) {
+      map.set(Math.round(c.time * 1000), c.shockScore);
+    }
+    return map;
+  }, [cutShockData]);
   const pacingPoints = useMemo(
     () => pacingCurve(cuts, duration, 30),
     [cuts, duration]
@@ -340,11 +664,441 @@ export default memo(function EditingMap({
       .join(" ");
   }, [visibleShots, duration, scale]);
 
+  // Studio Mode rhythm calculations
+  const studioPacing = useMemo(() => {
+    return generatePacingPathAndArea(project.shots, duration, scale, laneHeights.pacing);
+  }, [project.shots, duration, scale, laneHeights.pacing]);
+
+  const studioMedianPacing = useMemo(() => {
+    if (!project.shots.length) return 8;
+    const cuts = cutTimes(project.shots);
+    const pts = pacingCurve(cuts, duration, 30);
+    if (!pts.length) return 8;
+    const rates = pts.map((p) => p.rate).sort((a, b) => a - b);
+    return rates[Math.floor(rates.length / 2)] || 8;
+  }, [project.shots, duration]);
+
+  const studioMotion = useMemo(() => {
+    return generateMotionFlowPathAndArea(project.shots, duration, scale, laneHeights.motion);
+  }, [project.shots, duration, scale, laneHeights.motion]);
+
+  const soundSubrowH = useMemo(() => {
+    return Math.max(10, Math.floor(laneHeights.sound / 5));
+  }, [laneHeights.sound]);
+
+  const studioDmePaths = useMemo(() => {
+    const dme = project.dmeWaveforms;
+    const speechLevels = dme?.dialogue ?? waveform;
+    const musicLevels = dme?.music ?? waveform;
+    const ambLevels = dme?.effects ?? waveform;
+    return {
+      speech: generateSymmetricalWaveformPath(speechLevels, duration, scale, soundSubrowH, true),
+      music: generateSymmetricalWaveformPath(musicLevels, duration, scale, soundSubrowH, false),
+      ambience: generateSymmetricalWaveformPath(ambLevels, duration, scale, soundSubrowH, true),
+      hasDme: Boolean(dme),
+    };
+  }, [project.dmeWaveforms, waveform, duration, scale, soundSubrowH]);
+
+  const studioLoudnessPath = useMemo(() => {
+    return generateLoudnessCurvePath(activeLoudness, waveform, duration, scale, soundSubrowH);
+  }, [activeLoudness, waveform, duration, scale, soundSubrowH]);
+
+  const activeCastMembers = useMemo(() => {
+    if (!project.cast || !project.cast.length) return [];
+    return project.cast.slice(0, 5);
+  }, [project.cast]);
+
+  const memberIntervalsMap = useMemo(() => {
+    const map = new Map<string, Array<{ start: number; end: number; shot: Shot }>>();
+    if (!project.cast || !project.cast.length) return map;
+    project.cast.forEach((m) => map.set(m.id, []));
+
+    for (const s of project.shots) {
+      const ca = s.characterAnalysis;
+      if (!ca) continue;
+      if (ca.manualReviewStatus === "Confirmed" && ca.manualMemberIds) {
+        for (const id of ca.manualMemberIds) {
+          map.get(id)?.push({ start: s.startSeconds, end: s.endSeconds, shot: s });
+        }
+      } else if (ca.intervals && ca.intervals.length > 0) {
+        for (const interval of ca.intervals) {
+          const start =
+            interval.endSeconds > interval.startSeconds + 0.05
+              ? interval.startSeconds
+              : s.startSeconds;
+          const end =
+            interval.endSeconds > interval.startSeconds + 0.05
+              ? interval.endSeconds
+              : s.endSeconds;
+          map.get(interval.memberId)?.push({
+            start,
+            end,
+            shot: s,
+          });
+        }
+      }
+    }
+    return map;
+  }, [project.cast, project.shots]);
+
+  const studioCastTokens = useMemo(() => {
+    if (!project.cast || !project.cast.length || !visibleShots.length) return [];
+    const castMap = new Map<string, { member: (typeof project.cast)[0]; color: string }>();
+    project.cast.forEach((m, idx) => {
+      castMap.set(m.id, { member: m, color: CAST_PALETTE[idx % CAST_PALETTE.length] });
+    });
+
+    const tokens: Array<{
+      shotId: string;
+      shotIndex: number;
+      startSeconds: number;
+      duration: number;
+      primaryMember: (typeof project.cast)[0];
+      primaryColor: string;
+      secondaryMembers: Array<{ member: (typeof project.cast)[0]; color: string }>;
+    }> = [];
+
+    for (const s of visibleShots) {
+      const ca = s.characterAnalysis;
+      if (!ca) continue;
+      let presentMemberIds: string[] = [];
+      if (ca.manualReviewStatus === "Confirmed" && ca.manualMemberIds?.length) {
+        presentMemberIds = ca.manualMemberIds;
+      } else if (ca.intervals?.length) {
+        presentMemberIds = Array.from(new Set(ca.intervals.map((i) => i.memberId)));
+      }
+      if (!presentMemberIds.length) continue;
+
+      const presentMembers = presentMemberIds
+        .map((id) => castMap.get(id))
+        .filter((item): item is { member: (typeof project.cast)[0]; color: string } => Boolean(item));
+
+      if (!presentMembers.length) continue;
+
+      tokens.push({
+        shotId: s.id,
+        shotIndex: s.index,
+        startSeconds: s.startSeconds,
+        duration: s.duration,
+        primaryMember: presentMembers[0].member,
+        primaryColor: presentMembers[0].color,
+        secondaryMembers: presentMembers.slice(1),
+      });
+    }
+    return tokens;
+  }, [project.cast, visibleShots]);
+
+  const memberShotIdsMap = useMemo(() => {
+    const map = new Map<string, string[]>();
+    if (!project.shots) return map;
+    for (const s of project.shots) {
+      const ca = s.characterAnalysis;
+      if (!ca) continue;
+      if (ca.manualMemberIds) {
+        for (const id of ca.manualMemberIds) {
+          let list = map.get(id);
+          if (!list) { list = []; map.set(id, list); }
+          list.push(s.id);
+        }
+      }
+      if (ca.intervals) {
+        for (const interval of ca.intervals) {
+          let list = map.get(interval.memberId);
+          if (!list) { list = []; map.set(interval.memberId, list); }
+          list.push(s.id);
+        }
+      }
+    }
+    return map;
+  }, [project.shots]);
+
+  const visibleRange = dragRange ?? range;
+
+  const rangeInfo = useMemo(() => {
+    if (!visibleRange || visibleRange.start === undefined || visibleRange.end === undefined || visibleRange.end <= visibleRange.start) {
+      return null;
+    }
+    const start = visibleRange.start;
+    const end = visibleRange.end;
+    const rangeShots = visibleShots.filter((s) => s.endSeconds > start && s.startSeconds < end);
+    const matchingScene = (project.sequences || []).find(
+      (sc) => (sc.kind ?? "passage") === "passage" && Math.abs(sc.startSeconds - start) < 1.0 && Math.abs(sc.endSeconds - end) < 1.0
+    );
+
+    let descriptor = "balanced rhythm";
+    if (rangeShots.length > 0) {
+      const energies = rangeShots
+        .map((s) => s.motionProfile?.totalKineticEnergy)
+        .filter((e): e is number => typeof e === "number");
+      if (energies.length >= 2) {
+        const half = Math.ceil(energies.length / 2);
+        const e1 = energies.slice(0, half).reduce((a, b) => a + b, 0) / half;
+        const e2 = energies.slice(half).reduce((a, b) => a + b, 0) / (energies.length - half);
+        if (e2 - e1 <= -10) descriptor = "energy falls";
+        else if (e2 - e1 >= 10) descriptor = "energy surges";
+      }
+      if (descriptor === "balanced rhythm") {
+        const avgDur = rangeShots.reduce((a, s) => a + s.duration, 0) / rangeShots.length;
+        if (avgDur < 1.8) descriptor = "rapid cutting";
+        else if (avgDur > 5.5) descriptor = "contemplative hold";
+        else {
+          const closeCount = rangeShots.filter((s) => {
+            const r = framingRank(s);
+            return r !== null && r >= 5;
+          }).length;
+          if (closeCount / rangeShots.length >= 0.6) descriptor = "intimate dialogue";
+        }
+      }
+    }
+
+    return {
+      title: matchingScene ? matchingScene.name : (rangeShots.length ? `Scene ${rangeShots[0].index}` : "A quiet turn"),
+      start,
+      end,
+      shotCount: rangeShots.length,
+      descriptor,
+    };
+  }, [visibleRange, visibleShots, project.sequences]);
+
+  const sortedStoryEntries = useMemo(() => {
+    return [...(project.sequences || [])].sort(
+      (a, b) => a.startSeconds - b.startSeconds || a.endSeconds - b.endSeconds,
+    );
+  }, [project.sequences]);
+
+  const layoutStoryEntries = useMemo(() => {
+    const minSpacingPx = 18;
+    const minSpacingSec = scale > 0 ? minSpacingPx / scale : 1;
+    const subrowsEnd: number[] = [];
+    const result: Array<{ sequence: SequenceMarker; subrow: number }> = [];
+
+    for (const seq of sortedStoryEntries) {
+      const isMoment = (seq.kind ?? "passage") === "moment";
+      const start = seq.startSeconds;
+      const end = isMoment
+        ? seq.startSeconds + minSpacingSec
+        : Math.max(seq.endSeconds, seq.startSeconds + minSpacingSec);
+
+      let assignedSubrow = -1;
+      for (let r = 0; r < subrowsEnd.length; r++) {
+        if (start >= subrowsEnd[r]) {
+          assignedSubrow = r;
+          subrowsEnd[r] = end;
+          break;
+        }
+      }
+      if (assignedSubrow === -1) {
+        assignedSubrow = subrowsEnd.length;
+        subrowsEnd.push(end);
+      }
+      result.push({ sequence: seq, subrow: assignedSubrow });
+    }
+    return {
+      entries: result,
+      totalSubrows: Math.max(1, subrowsEnd.length),
+    };
+  }, [sortedStoryEntries, scale]);
+
+  const storyLaneHeight = Math.max(34, layoutStoryEntries.totalSubrows * 26 + 8);
+  const effectiveStoryHeight = Math.max(laneHeights.story, storyLaneHeight);
+
+  const [activeStoryDrag, setActiveStoryDrag] = useState<{
+    sequenceId: string;
+    kind: "moment" | "passage-in" | "passage-out" | "passage-move";
+    initialStart: number;
+    initialEnd: number;
+    currentStart: number;
+    currentEnd: number;
+    startX: number;
+    hasMoved: boolean;
+  } | null>(null);
+  const storyDragRef = useRef<typeof activeStoryDrag>(null);
+  storyDragRef.current = activeStoryDrag;
+
+  const handleMomentPointerDown = (e: React.PointerEvent, seq: SequenceMarker) => {
+    if (e.button !== 0 || e.shiftKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    suppressMapClick.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const dragObj = {
+      sequenceId: seq.id,
+      kind: "moment" as const,
+      initialStart: seq.startSeconds,
+      initialEnd: seq.endSeconds,
+      currentStart: seq.startSeconds,
+      currentEnd: seq.endSeconds,
+      startX: e.clientX,
+      hasMoved: false,
+    };
+    storyDragRef.current = dragObj;
+    setActiveStoryDrag(dragObj);
+  };
+
+  const handlePassageInPointerDown = (e: React.PointerEvent, seq: SequenceMarker) => {
+    if (e.button !== 0 || e.shiftKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    suppressMapClick.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const dragObj = {
+      sequenceId: seq.id,
+      kind: "passage-in" as const,
+      initialStart: seq.startSeconds,
+      initialEnd: seq.endSeconds,
+      currentStart: seq.startSeconds,
+      currentEnd: seq.endSeconds,
+      startX: e.clientX,
+      hasMoved: false,
+    };
+    storyDragRef.current = dragObj;
+    setActiveStoryDrag(dragObj);
+  };
+
+  const handlePassageOutPointerDown = (e: React.PointerEvent, seq: SequenceMarker) => {
+    if (e.button !== 0 || e.shiftKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    suppressMapClick.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const dragObj = {
+      sequenceId: seq.id,
+      kind: "passage-out" as const,
+      initialStart: seq.startSeconds,
+      initialEnd: seq.endSeconds,
+      currentStart: seq.startSeconds,
+      currentEnd: seq.endSeconds,
+      startX: e.clientX,
+      hasMoved: false,
+    };
+    storyDragRef.current = dragObj;
+    setActiveStoryDrag(dragObj);
+  };
+
+  const handlePassageBodyPointerDown = (e: React.PointerEvent, seq: SequenceMarker) => {
+    if (e.button !== 0 || e.shiftKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    suppressMapClick.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const dragObj = {
+      sequenceId: seq.id,
+      kind: "passage-move" as const,
+      initialStart: seq.startSeconds,
+      initialEnd: seq.endSeconds,
+      currentStart: seq.startSeconds,
+      currentEnd: seq.endSeconds,
+      startX: e.clientX,
+      hasMoved: false,
+    };
+    storyDragRef.current = dragObj;
+    setActiveStoryDrag(dragObj);
+  };
+
+  const handleStoryPointerMove = (e: React.PointerEvent) => {
+    const drag = storyDragRef.current;
+    if (!drag) return;
+    if (Math.abs(e.clientX - drag.startX) > 3) {
+      drag.hasMoved = true;
+    }
+    const deltaSec = (e.clientX - drag.startX) / scale;
+    const minDur = 1 / actualRate(project.frameRate);
+
+    let nextStart = drag.currentStart;
+    let nextEnd = drag.currentEnd;
+
+    if (drag.kind === "moment") {
+      let t = Math.max(0, Math.min(duration, drag.initialStart + deltaSec));
+      if (snapToCuts && !e.altKey) {
+        const snap = getSnapTime(t, snapPoints, 10 / scale);
+        if (snap.isSnapped && snap.snapTarget !== undefined) t = snap.snapTarget;
+      }
+      t = quantizeToFrame(t, project.frameRate);
+      nextStart = t;
+      nextEnd = t;
+    } else if (drag.kind === "passage-in") {
+      let t = Math.max(0, Math.min(drag.initialEnd - minDur, drag.initialStart + deltaSec));
+      if (snapToCuts && !e.altKey) {
+        const snap = getSnapTime(t, snapPoints, 10 / scale);
+        if (snap.isSnapped && snap.snapTarget !== undefined && snap.snapTarget < drag.initialEnd) {
+          t = snap.snapTarget;
+        }
+      }
+      t = quantizeToFrame(t, project.frameRate);
+      nextStart = t;
+    } else if (drag.kind === "passage-out") {
+      let t = Math.max(drag.initialStart + minDur, Math.min(duration, drag.initialEnd + deltaSec));
+      if (snapToCuts && !e.altKey) {
+        const snap = getSnapTime(t, snapPoints, 10 / scale);
+        if (snap.isSnapped && snap.snapTarget !== undefined && snap.snapTarget > drag.initialStart) {
+          t = snap.snapTarget;
+        }
+      }
+      t = quantizeToFrame(t, project.frameRate);
+      nextEnd = t;
+    } else if (drag.kind === "passage-move") {
+      const dur = drag.initialEnd - drag.initialStart;
+      let t = Math.max(0, Math.min(duration - dur, drag.initialStart + deltaSec));
+      if (snapToCuts && !e.altKey) {
+        const snap = getSnapTime(t, snapPoints, 10 / scale);
+        if (snap.isSnapped && snap.snapTarget !== undefined) t = snap.snapTarget;
+      }
+      t = quantizeToFrame(t, project.frameRate);
+      nextStart = t;
+      nextEnd = t + dur;
+    }
+
+    drag.currentStart = nextStart;
+    drag.currentEnd = nextEnd;
+    setActiveStoryDrag({ ...drag });
+  };
+
+  const handleStoryPointerUp = (e: React.PointerEvent, seq: SequenceMarker) => {
+    const drag = storyDragRef.current;
+    if (!drag) return;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {}
+
+    if (drag.hasMoved) {
+      const updated = (project.sequences || []).map((s) =>
+        s.id === drag.sequenceId
+          ? { ...s, startSeconds: drag.currentStart, endSeconds: drag.currentEnd }
+          : s,
+      );
+      onUpdateSequences?.(updated);
+      const updatedSeq = updated.find((s) => s.id === drag.sequenceId);
+      if (updatedSeq) {
+        onSelectSequence?.(updatedSeq);
+      }
+      if ((seq.kind ?? "passage") === "passage") {
+        onRangeChange?.({ start: drag.currentStart, end: drag.currentEnd });
+      }
+    } else {
+      onSelectSequence?.(seq);
+      if ((seq.kind ?? "passage") === "passage") {
+        onRangeChange?.({ start: seq.startSeconds, end: seq.endSeconds });
+      }
+      onSeek?.(seq.startSeconds);
+    }
+
+    storyDragRef.current = null;
+    setActiveStoryDrag(null);
+  };
+
+  const getFramingTier = useCallback((shot: Shot): "Close" | "Medium" | "Wide" => {
+    const rank = framingRank(shot);
+    if (rank === null) return "Medium";
+    if (rank >= 5) return "Close";
+    if (rank >= 3) return "Medium";
+    return "Wide";
+  }, []);
+
   const allRiversOn = layers.pacing && layers.framingArc && layers.motion && layers.characters && layers.audio && layers.scenes;
 
   const toggleAllRivers = () => {
     const target = !allRiversOn;
-    setLayers({
+    const next = {
       framing: true,
       pacing: target,
       framingArc: target,
@@ -352,7 +1106,9 @@ export default memo(function EditingMap({
       characters: target,
       audio: target,
       scenes: target,
-    });
+    };
+    setLocalLayers(next);
+    onLayersChange?.(next);
   };
 
   useEffect(() => {
@@ -373,7 +1129,39 @@ export default memo(function EditingMap({
   }, [time, scale]);
 
   const changeZoom = (factor: number) =>
-    setZoom((z) => Math.max(1, Math.min(128, z * factor)));
+    setZoom((z: number) => Math.max(1, Math.min(128, z * factor)));
+
+  const handleMark = useCallback(() => {
+    const frameRate = project?.frameRate || 24;
+    const exactFrameTime = quantizeToFrame(time, frameRate);
+    const currentSequences = project.sequences || [];
+    const isPassage =
+      range?.start !== undefined &&
+      range?.end !== undefined &&
+      range.end > range.start;
+    const start = isPassage ? range.start! : exactFrameTime;
+    const end = isPassage ? range.end! : exactFrameTime;
+    const kind = isPassage ? "passage" : "moment";
+    const count = currentSequences.filter(
+      (s) => (s.kind ?? "passage") === kind,
+    ).length;
+
+    const newMarker: SequenceMarker = {
+      id: `seq-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      name: isPassage ? `Passage ${count + 1}` : `Marker ${count + 1}`,
+      startSeconds: start,
+      endSeconds: end,
+      kind,
+    };
+    onUpdateSequences?.([...currentSequences, newMarker]);
+    onSelectSequence?.(newMarker);
+    if (isPassage) {
+      onRangeChange?.({ start, end });
+    }
+    if (isTrackCollapsed("story")) {
+      toggleTrackCollapse("story");
+    }
+  }, [time, range, project, onUpdateSequences, onSelectSequence, onRangeChange, isTrackCollapsed, toggleTrackCollapse]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -385,6 +1173,12 @@ export default memo(function EditingMap({
           "input,textarea,select,[contenteditable=true]"
         )
       ) {
+        return;
+      }
+      if (e.key === "Escape" && storyDragRef.current) {
+        e.preventDefault();
+        storyDragRef.current = null;
+        setActiveStoryDrag(null);
         return;
       }
       if (e.key === "q" || e.key === "Q") {
@@ -400,9 +1194,18 @@ export default memo(function EditingMap({
       } else if (e.key === "c" || e.key === "C") {
         e.preventDefault();
         onSplitShot?.(time);
+      } else if (e.key === "m" || e.key === "M") {
+        e.preventDefault();
+        handleMark();
       } else if (e.key === "s" || e.key === "S") {
         e.preventDefault();
         onToggleSnap?.();
+      } else if (selectedSequenceId && (e.key === "Delete" || e.key === "Backspace")) {
+        e.preventDefault();
+        const updated = (project.sequences || []).filter((s) => s.id !== selectedSequenceId);
+        onUpdateSequences?.(updated);
+        onSelectSequence?.(null as any);
+        onRangeChange?.(undefined);
       } else if (selectedCut && (e.key === "Delete" || e.key === "Backspace")) {
         e.preventDefault();
         onDeleteCut?.(selectedCut);
@@ -416,11 +1219,10 @@ export default memo(function EditingMap({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [time, selectedCut, onSplitShot, onDeleteCut, onToggleSnap, onNudgeCut]);
+  }, [time, selectedCut, onSplitShot, onDeleteCut, onToggleSnap, onNudgeCut, handleMark]);
 
   const pointAt = (clientX: number) =>
     Math.max(0, Math.min(project.duration, (clientX - canvas.current!.getBoundingClientRect().left) / scale));
-  const visibleRange = dragRange ?? range;
 
   // Minimap interactions
   const handleMinimapInteraction = (clientX: number) => {
@@ -435,201 +1237,814 @@ export default memo(function EditingMap({
 
   return (
     <section className={`map panel mode-${workspaceMode}`}>
-      <div className="section-head">
-        <div className="map-title-group">
-          <span className="eyebrow">EDITING MAP</span>
-          <span className="muted">
-            {project.shots.length} shots · duration-scaled
-          </span>
-        </div>
-
-        {/* Toolbar: Color Mode & Layer Toggles & Zoom/Fit */}
-        <div className="tools">
-          {/* Rivers of Data Visibility Controls */}
-          {(showLayersControl || workspaceMode === "map") && (
-            <div className="map-layers-group map-rivers-toolbar" role="group" aria-label="Timeline Layer Visibility">
-              <span className="layers-label">Rivers:</span>
-              <button
-                type="button"
-                className={`river-toggle-chip ${layers.scenes ? "active" : ""}`}
-                onClick={() => toggleLayer("scenes")}
-                title="Dramatic Scenes & Sequences River"
-              >
-                🎬 Scenes
-              </button>
-              <button
-                type="button"
-                className={`river-toggle-chip ${layers.framing ? "active" : ""}`}
-                onClick={() => toggleLayer("framing")}
-                title="V1 Film Shot Track"
-              >
-                🎞️ Film
-              </button>
-              <button
-                type="button"
-                className={`river-toggle-chip ${layers.pacing ? "active" : ""}`}
-                onClick={() => toggleLayer("pacing")}
-                title="Cutting Pacing & Rhythm Velocity River"
-              >
-                🌊 Pacing
-              </button>
-              <button
-                type="button"
-                className={`river-toggle-chip ${layers.framingArc ? "active" : ""}`}
-                onClick={() => toggleLayer("framingArc")}
-                title="Framing Scale Elevation River"
-              >
-                📐 Framing
-              </button>
-              <button
-                type="button"
-                className={`river-toggle-chip ${layers.motion ? "active" : ""}`}
-                onClick={() => toggleLayer("motion")}
-                title="Motion & Kinetic Energy River"
-              >
-                ⚡ Motion
-              </button>
-              <button
-                type="button"
-                className={`river-toggle-chip ${layers.characters ? "active" : ""}`}
-                onClick={() => toggleLayer("characters")}
-                title="Cast & Character Presence River"
-              >
-                👥 Characters
-              </button>
-              <button
-                type="button"
-                className={`river-toggle-chip ${layers.audio ? "active" : ""}`}
-                onClick={() => toggleLayer("audio")}
-                title="Soundtrack & Sonic Rivers (DME / Loudness / Speech)"
-              >
-                🔊 Audio
-              </button>
-              <button
-                type="button"
-                className={`river-flow-all-btn ${allRiversOn ? "active" : ""}`}
-                onClick={toggleAllRivers}
-                title={allRiversOn ? "Collapse secondary data rivers" : "Flow all data rivers synchronously"}
-              >
-                {allRiversOn ? "Collapse" : "🌊 Flow All"}
-              </button>
-            </div>
-          )}
-
-          {/* Editorial Cut Tools (Split, Merge, Snap) */}
-          <div className="view-toggle-group timeline-edit-group" role="group" aria-label="Timeline Editorial Tools">
-            {onSplitShot && (
-              <button
-                type="button"
-                className="split-shot-btn"
-                onClick={() => onSplitShot(time)}
-                title="Add Cut / Split shot at current frame (C)"
-              >
-                ✂️ Split (C)
-              </button>
-            )}
-            {selectedCut && onDeleteCut && (
-              <button
-                type="button"
-                className="merge-cut-btn"
-                onClick={() => onDeleteCut(selectedCut)}
-                title="Merge adjacent shots by deleting this cut (Delete/Backspace)"
-              >
-                ⌫ Merge Cut (Del)
-              </button>
-            )}
-            {onToggleSnap && (
-              <button
-                type="button"
-                className={`snap-toggle-btn ${snapToCuts ? "active" : ""}`}
-                onClick={onToggleSnap}
-                title={`Playhead snapping to cut boundaries: ${snapToCuts ? "ON" : "OFF"} (S)`}
-              >
-                🧲 Snap {snapToCuts ? "ON" : "OFF"}
-              </button>
-            )}
+      {isStudio ? (
+        <StudioToolbar
+          activeTab={activeTab}
+          drawerOpen={drawerOpen}
+          onSelectTab={onSelectTab}
+          onToggleDrawer={onToggleDrawer}
+          expanded={expanded}
+          onSplit={() => onSplitShot?.(time)}
+          onMark={handleMark}
+          snapToCuts={Boolean(snapToCuts)}
+          onToggleSnap={() => onToggleSnap?.()}
+          squintMode={Boolean(squintMode)}
+          onToggleSquint={(active) => onToggleSquint?.(active)}
+          zoom={zoom}
+          onZoomChange={setZoom}
+          onZoomIn={() => changeZoom(1.5)}
+          onZoomOut={() => changeZoom(1 / 1.5)}
+          onFit={() => {
+            setZoom(1);
+            if (viewport.current) viewport.current.scrollLeft = 0;
+          }}
+          onFullscreen={onOpenFullscreen}
+        />
+      ) : (
+        <div className="section-head">
+          <div className="map-title-group">
+            <span className="eyebrow">{expanded ? "FILM MAP" : "EDITING MAP"}</span>
+            <span className="muted">
+              {project.shots.length} shots · duration-scaled
+            </span>
           </div>
 
-          {/* Color & Squint Mode Toggle */}
-          <div className="view-toggle-group" role="group" aria-label="Timeline Color Mode">
-            <button
-              type="button"
-              className={project.colorMode !== "palette" && !squintMode ? "active" : ""}
-              onClick={() => {
-                if (squintMode) onToggleSquint?.(false);
-                onColorModeChange?.("shotSize");
-              }}
-              title="Color timeline blocks by shot framing size"
-            >
-              Framing Colors
+          {onToggleExpanded && (
+            <button type="button" className="studio-expand-map-btn" aria-pressed={expanded} onClick={onToggleExpanded}>
+              {expanded ? "Restore Studio" : "Expand map"}
             </button>
-            <button
-              type="button"
-              className={project.colorMode === "palette" && !squintMode ? "active" : ""}
-              onClick={() => {
-                if (squintMode) onToggleSquint?.(false);
-                onColorModeChange?.("palette");
-              }}
-              title="Color timeline blocks by extracted film palette"
-            >
-              Footage Palette
-            </button>
-            <button
-              type="button"
-              className={`timeline-squint-btn ${squintMode ? "active" : ""}`}
-              onClick={() => onToggleSquint?.(!squintMode)}
-              title="Toggle Squint Mode (Multi-effect Notan / Chiaroscuro tonal blur on timeline shots)"
-            >
-              😑 Squint {squintMode ? `(L${squintLevel})` : ""}
-            </button>
-          </div>
-
-          {/* Inline Squint Depth Slider on Timeline */}
-          {squintMode && onSquintLevelChange && (
-            <div className="timeline-squint-slider-wrap" title="Squint Depth: controls diffraction blur, rod desaturation, highlight bloom & chiaroscuro value massing">
-              <span className="squint-slider-label">Depth: <b>L{squintLevel}</b></span>
-              <input
-                type="range"
-                min="1"
-                max="10"
-                step="1"
-                value={squintLevel}
-                onChange={(e) => onSquintLevelChange(Number(e.target.value))}
-                className="timeline-squint-slider"
-              />
-            </div>
           )}
-
-          {/* Active Review Filter Indicator & Reset */}
-          {reviewFilter && reviewFilter !== "all" && (
-            <div className="map-active-filter-badge" title="Active review filter dims non-matching shots">
-              <span>Filter: {reviewFilter} ({reviewMatchIds?.length ?? 0})</span>
-              {onClearReviewFilter && (
+          {expanded && (
+            <details className="studio-layer-menu">
+              <summary>Layers</summary>
+              <div role="group" aria-label="Expanded map layers">
+                {([['story', 'Story'], ['shots', 'Shots'], ['pacing', 'Pacing'], ['cutDensity', 'Cut density'], ['framing', 'Framing'], ['motion', 'Motion'], ['cast', 'Cast'], ['sound', 'Sound']] as const).map(([id, label]) => (
+                  <button key={id} type="button" aria-pressed={!isTrackCollapsed(id)} onClick={() => { setSoloTrack(null); toggleTrackCollapse(id); }}>{label}</button>
+                ))}
+              </div>
+            </details>
+          )}
+          {/* Toolbar: Color Mode & Layer Toggles & Zoom/Fit */}
+          <div className="tools">
+            {/* Rivers of Data Visibility Controls */}
+            {showLayersControl && (
+              <div className="map-layers-group map-rivers-toolbar" role="group" aria-label="Timeline Layer Visibility">
+                <span className="layers-label">Rivers:</span>
                 <button
                   type="button"
-                  className="clear-filter-btn"
-                  onClick={onClearReviewFilter}
-                  title="Clear review filter and restore all shots"
+                  className={`river-toggle-chip ${layers.scenes ? "active" : ""}`}
+                  onClick={() => toggleLayer("scenes")}
+                  title="Dramatic Scenes & Sequences River"
                 >
-                  ✕ Clear
+                  🎬 Scenes
+                </button>
+                <button
+                  type="button"
+                  className={`river-toggle-chip ${layers.framing ? "active" : ""}`}
+                  onClick={() => toggleLayer("framing")}
+                  title="V1 Film Shot Track"
+                >
+                  🎞️ Film
+                </button>
+                <button
+                  type="button"
+                  className={`river-toggle-chip ${layers.pacing ? "active" : ""}`}
+                  onClick={() => toggleLayer("pacing")}
+                  title="Cutting Pacing & Rhythm Velocity River"
+                >
+                  🌊 Pacing
+                </button>
+                <button
+                  type="button"
+                  className={`river-toggle-chip ${layers.framingArc ? "active" : ""}`}
+                  onClick={() => toggleLayer("framingArc")}
+                  title="Framing Scale Elevation River"
+                >
+                  📐 Framing
+                </button>
+                <button
+                  type="button"
+                  className={`river-toggle-chip ${layers.motion ? "active" : ""}`}
+                  onClick={() => toggleLayer("motion")}
+                  title="Motion & Kinetic Energy River"
+                >
+                  ⚡ Motion
+                </button>
+                <button
+                  type="button"
+                  className={`river-toggle-chip ${layers.characters ? "active" : ""}`}
+                  onClick={() => toggleLayer("characters")}
+                  title="Cast & Character Presence River"
+                >
+                  👥 Characters
+                </button>
+                <button
+                  type="button"
+                  className={`river-toggle-chip ${layers.audio ? "active" : ""}`}
+                  onClick={() => toggleLayer("audio")}
+                  title="Soundtrack & Sonic Rivers (DME / Loudness / Speech)"
+                >
+                  🔊 Audio
+                </button>
+                <button
+                  type="button"
+                  className={`river-flow-all-btn ${allRiversOn ? "active" : ""}`}
+                  onClick={toggleAllRivers}
+                  title={allRiversOn ? "Collapse secondary data rivers" : "Flow all data rivers synchronously"}
+                >
+                  {allRiversOn ? "Collapse" : "🌊 Flow All"}
+                </button>
+              </div>
+            )}
+
+            {/* Editorial Cut Tools (Split, Merge, Snap) */}
+            <div className="view-toggle-group timeline-edit-group" role="group" aria-label="Timeline Editorial Tools">
+              {onSplitShot && (
+                <button
+                  type="button"
+                  className="split-shot-btn"
+                  onClick={() => onSplitShot(time)}
+                  title="Add Cut / Split shot at current frame (C)"
+                >
+                  ✂️ Split (C)
+                </button>
+              )}
+              {selectedCut && onDeleteCut && (
+                <button
+                  type="button"
+                  className="merge-cut-btn"
+                  onClick={() => onDeleteCut(selectedCut)}
+                  title="Merge adjacent shots by deleting this cut (Delete/Backspace)"
+                >
+                  ⌫ Merge Cut (Del)
+                </button>
+              )}
+              {onToggleSnap && (
+                <button
+                  type="button"
+                  className={`snap-toggle-btn ${snapToCuts ? "active" : ""}`}
+                  onClick={onToggleSnap}
+                  title={`Playhead snapping to cut boundaries: ${snapToCuts ? "ON" : "OFF"} (S)`}
+                >
+                  🧲 Snap {snapToCuts ? "ON" : "OFF"}
                 </button>
               )}
             </div>
-          )}
 
-          <span className="mono zoom-label" title={`Timeline Zoom: ${zoom.toFixed(1)}×`}>
-            {zoom.toFixed(1)}×
-          </span>
+            {/* Squint Mode Toggle */}
+            <div className="view-toggle-group" role="group" aria-label="Squint Mode">
+              <button
+                type="button"
+                className={`timeline-squint-btn ${squintMode ? "active" : ""}`}
+                onClick={() => onToggleSquint?.(!squintMode)}
+                title="Toggle Squint Mode (Multi-effect Notan / Chiaroscuro tonal blur on timeline shots)"
+              >
+                😑 Squint {squintMode ? `(L${squintLevel})` : ""}
+              </button>
+            </div>
+
+            {/* Inline Squint Depth Slider on Timeline */}
+            {squintMode && onSquintLevelChange && (
+              <div className="timeline-squint-slider-wrap" title="Squint Depth: controls diffraction blur, rod desaturation, highlight bloom & chiaroscuro value massing">
+                <span className="squint-slider-label">Depth: <b>L{squintLevel}</b></span>
+                <input
+                  type="range"
+                  min="1"
+                  max="10"
+                  step="1"
+                  value={squintLevel}
+                  onChange={(e) => onSquintLevelChange(Number(e.target.value))}
+                  className="timeline-squint-slider"
+                />
+              </div>
+            )}
+
+            {/* Active Review Filter Indicator & Reset */}
+            {reviewFilter && reviewFilter !== "all" && (
+              <div className="map-active-filter-badge" title="Active review filter dims non-matching shots">
+                <span>Filter: {reviewFilter} ({reviewMatchIds?.length ?? 0})</span>
+                {onClearReviewFilter && (
+                  <button
+                    type="button"
+                    className="clear-filter-btn"
+                    onClick={onClearReviewFilter}
+                    title="Clear review filter and restore all shots"
+                  >
+                    ✕ Clear
+                  </button>
+                )}
+              </div>
+            )}
+
+            <span className="mono zoom-label" title={`Timeline Zoom: ${zoom.toFixed(1)}×`}>
+              {zoom.toFixed(1)}×
+            </span>
+
+            {onOpenFullscreen && (
+              <button
+                type="button"
+                className="map-fullscreen-btn"
+                onClick={onOpenFullscreen}
+                title="Fullscreen Graph Visualization (Wordless Score)"
+                aria-label="Fullscreen Graph Visualization"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                <span>Score</span>
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
-      {tagBar && <div className="map-top-bar">{tagBar}</div>}
+      {!isStudio && tagBar && <div className="map-top-bar">{tagBar}</div>}
 
-      {/* Main Scrollable Canvas */}
-      <div
-        className="map-scroll"
-        ref={viewport}
-        onScroll={(e) => setScrollLeft(e.currentTarget.scrollLeft)}
+      {/* Studio Mode: Top Overview Scrubber Minimap */}
+      {isStudio && project.shots.length > 0 && (
+        <div className="studio-top-overview">
+          <div
+            className="studio-overview-track"
+            ref={minimapRef}
+            onClick={(e) => handleMinimapInteraction(e.clientX)}
+            onPointerDown={(e) => {
+              if (e.button !== 0) return;
+              minimapDragging.current = true;
+              handleMinimapInteraction(e.clientX);
+              e.currentTarget.setPointerCapture(e.pointerId);
+            }}
+            onPointerMove={(e) => {
+              if (minimapDragging.current) handleMinimapInteraction(e.clientX);
+            }}
+            onPointerUp={(e) => {
+              minimapDragging.current = false;
+              e.currentTarget.releasePointerCapture(e.pointerId);
+            }}
+            title="Click or drag to scroll timeline window"
+          >
+            {project.shots.map((s) => (
+              <div
+                key={`studio-mini-${s.id}`}
+                className="studio-overview-shot"
+                style={{
+                  left: `${(s.startSeconds / duration) * 100}%`,
+                  width: `${Math.max(0.2, (s.duration / duration) * 100)}%`,
+                }}
+              />
+            ))}
+            <div
+              className="studio-overview-viewport"
+              style={{
+                left: `${(scrollLeft / canvasWidth) * 100}%`,
+                width: `${Math.min(100, (width / canvasWidth) * 100)}%`,
+              }}
+            >
+              <div className="studio-viewport-handle left" />
+              <div className="studio-viewport-handle right" />
+            </div>
+            <div
+              className="studio-overview-playhead"
+              style={{ left: `${Math.min(100, (time / duration) * 100)}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Main Studio Timeline Workbench or Map Viewport */}
+      <div className={isStudio ? "studio-timeline-workbench" : "map-viewport-wrapper"}>
+        {isStudio && (
+          <div ref={trackHeaders} className="studio-track-headers" role="region" aria-label="Timeline track controls">
+            <div className="studio-header-cell ruler-spacer" />
+
+            {/* 1. Story Header */}
+            <div
+              className={`studio-header-cell story-header ${isTrackCollapsed("story") ? "collapsed" : ""}`}
+              style={{ height: isTrackCollapsed("story") ? 0 : effectiveStoryHeight }}
+            >
+              <div className="studio-header-row">
+                <div className="studio-header-left">
+                  <button
+                    type="button"
+                    className="studio-track-fold-btn"
+                    onClick={() => toggleTrackCollapse("story")}
+                    title={isTrackCollapsed("story") ? "Expand Story track" : "Collapse Story track"}
+                    aria-label={isTrackCollapsed("story") ? "Expand Story track" : "Collapse Story track"}
+                  >
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points={isTrackCollapsed("story") ? "9 18 15 12 9 6" : "6 9 12 15 18 9"} />
+                    </svg>
+                  </button>
+                  <span className="studio-track-title">Story</span>
+                </div>
+                <button
+                  type="button"
+                  className={`studio-track-solo-btn ${soloTrack === "story" ? "active" : ""}`}
+                  onClick={() => toggleTrackSolo("story")}
+                  title={soloTrack === "story" ? "Unsolo Story track" : "Solo Story track"}
+                  aria-label={soloTrack === "story" ? "Unsolo Story track" : "Solo Story track"}
+                >
+                  S
+                </button>
+              </div>
+              <div
+                className={`studio-lane-resizer ${resizingTrack === "story" ? "resizing" : ""}`}
+                role="separator"
+                tabIndex={0}
+                aria-orientation="horizontal"
+                aria-label="Resize Story lane"
+                aria-valuenow={laneHeights.story}
+                aria-valuemin={MIN_STUDIO_LANE_HEIGHTS.story}
+                onPointerDown={(e) => handleResizePointerDown("story", e)}
+                onPointerMove={handleResizePointerMove}
+                onPointerUp={handleResizePointerUp}
+                onPointerCancel={handleResizePointerUp}
+                onDoubleClick={(e) => handleResizeDoubleClick("story", e)}
+                onKeyDown={(e) => handleResizeKeyDown("story", e)}
+              >
+                <div className="studio-lane-resizer-line" />
+              </div>
+            </div>
+
+            {/* 2. Shots Header */}
+            <div
+              className={`studio-header-cell shots-header ${isTrackCollapsed("shots") ? "collapsed" : ""}`}
+              style={{ height: isTrackCollapsed("shots") ? 0 : laneHeights.shots }}
+            >
+              <div className="studio-header-row">
+                <div className="studio-header-left">
+                  <button
+                    type="button"
+                    className="studio-track-fold-btn"
+                    onClick={() => toggleTrackCollapse("shots")}
+                    title={isTrackCollapsed("shots") ? "Expand Shots track" : "Collapse Shots track"}
+                    aria-label={isTrackCollapsed("shots") ? "Expand Shots track" : "Collapse Shots track"}
+                  >
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points={isTrackCollapsed("shots") ? "9 18 15 12 9 6" : "6 9 12 15 18 9"} />
+                    </svg>
+                  </button>
+                  <span className="studio-track-title">Shots</span>
+                </div>
+                <button
+                  type="button"
+                  className={`studio-track-solo-btn ${soloTrack === "shots" ? "active" : ""}`}
+                  onClick={() => toggleTrackSolo("shots")}
+                  title={soloTrack === "shots" ? "Unsolo Shots track" : "Solo Shots track"}
+                  aria-label={soloTrack === "shots" ? "Unsolo Shots track" : "Solo Shots track"}
+                >
+                  S
+                </button>
+              </div>
+              <div
+                className={`studio-lane-resizer ${resizingTrack === "shots" ? "resizing" : ""}`}
+                role="separator"
+                tabIndex={0}
+                aria-orientation="horizontal"
+                aria-label="Resize Shots lane"
+                aria-valuenow={laneHeights.shots}
+                aria-valuemin={MIN_STUDIO_LANE_HEIGHTS.shots}
+                onPointerDown={(e) => handleResizePointerDown("shots", e)}
+                onPointerMove={handleResizePointerMove}
+                onPointerUp={handleResizePointerUp}
+                onPointerCancel={handleResizePointerUp}
+                onDoubleClick={(e) => handleResizeDoubleClick("shots", e)}
+                onKeyDown={(e) => handleResizeKeyDown("shots", e)}
+              >
+                <div className="studio-lane-resizer-line" />
+              </div>
+            </div>
+
+            {/* 3. Pacing Header */}
+            <div
+              className={`studio-header-cell pacing-header ${isTrackCollapsed("pacing") ? "collapsed" : ""}`}
+              style={{ height: isTrackCollapsed("pacing") ? 0 : laneHeights.pacing }}
+            >
+              <div className="studio-header-row">
+                <div className="studio-header-left">
+                  <button
+                    type="button"
+                    className="studio-track-fold-btn"
+                    onClick={() => toggleTrackCollapse("pacing")}
+                    title={isTrackCollapsed("pacing") ? "Expand Pacing track" : "Collapse Pacing track"}
+                    aria-label={isTrackCollapsed("pacing") ? "Expand Pacing track" : "Collapse Pacing track"}
+                  >
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points={isTrackCollapsed("pacing") ? "9 18 15 12 9 6" : "6 9 12 15 18 9"} />
+                    </svg>
+                  </button>
+                  <span className="studio-track-title">Pacing</span>
+                </div>
+                <button
+                  type="button"
+                  className={`studio-track-solo-btn ${soloTrack === "pacing" ? "active" : ""}`}
+                  onClick={() => toggleTrackSolo("pacing")}
+                  title={soloTrack === "pacing" ? "Unsolo Pacing track" : "Solo Pacing track"}
+                  aria-label={soloTrack === "pacing" ? "Unsolo Pacing track" : "Solo Pacing track"}
+                >
+                  S
+                </button>
+              </div>
+              <div
+                className={`studio-lane-resizer ${resizingTrack === "pacing" ? "resizing" : ""}`}
+                role="separator"
+                tabIndex={0}
+                aria-orientation="horizontal"
+                aria-label="Resize Pacing lane"
+                aria-valuenow={laneHeights.pacing}
+                aria-valuemin={MIN_STUDIO_LANE_HEIGHTS.pacing}
+                onPointerDown={(e) => handleResizePointerDown("pacing", e)}
+                onPointerMove={handleResizePointerMove}
+                onPointerUp={handleResizePointerUp}
+                onPointerCancel={handleResizePointerUp}
+                onDoubleClick={(e) => handleResizeDoubleClick("pacing", e)}
+                onKeyDown={(e) => handleResizeKeyDown("pacing", e)}
+              >
+                <div className="studio-lane-resizer-line" />
+              </div>
+            </div>
+
+            {/* 4. Cut density Header */}
+            <div
+              className={`studio-header-cell cut-density-header ${isTrackCollapsed("cutDensity") ? "collapsed" : ""}`}
+              style={{ height: isTrackCollapsed("cutDensity") ? 0 : laneHeights.cutDensity }}
+            >
+              <div className="studio-header-row">
+                <div className="studio-header-left">
+                  <button
+                    type="button"
+                    className="studio-track-fold-btn"
+                    onClick={() => toggleTrackCollapse("cutDensity")}
+                    title={isTrackCollapsed("cutDensity") ? "Expand Cut Density track" : "Collapse Cut Density track"}
+                    aria-label={isTrackCollapsed("cutDensity") ? "Expand Cut Density track" : "Collapse Cut Density track"}
+                  >
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points={isTrackCollapsed("cutDensity") ? "9 18 15 12 9 6" : "6 9 12 15 18 9"} />
+                    </svg>
+                  </button>
+                  <span className="studio-track-title">Cut density</span>
+                </div>
+                <button
+                  type="button"
+                  className={`studio-track-solo-btn ${soloTrack === "cutDensity" ? "active" : ""}`}
+                  onClick={() => toggleTrackSolo("cutDensity")}
+                  title={soloTrack === "cutDensity" ? "Unsolo Cut Density track" : "Solo Cut Density track"}
+                  aria-label={soloTrack === "cutDensity" ? "Unsolo Cut Density track" : "Solo Cut Density track"}
+                >
+                  S
+                </button>
+              </div>
+              <div
+                className={`studio-lane-resizer ${resizingTrack === "cutDensity" ? "resizing" : ""}`}
+                role="separator"
+                tabIndex={0}
+                aria-orientation="horizontal"
+                aria-label="Resize Cut density lane"
+                aria-valuenow={laneHeights.cutDensity}
+                aria-valuemin={MIN_STUDIO_LANE_HEIGHTS.cutDensity}
+                onPointerDown={(e) => handleResizePointerDown("cutDensity", e)}
+                onPointerMove={handleResizePointerMove}
+                onPointerUp={handleResizePointerUp}
+                onPointerCancel={handleResizePointerUp}
+                onDoubleClick={(e) => handleResizeDoubleClick("cutDensity", e)}
+                onKeyDown={(e) => handleResizeKeyDown("cutDensity", e)}
+              >
+                <div className="studio-lane-resizer-line" />
+              </div>
+            </div>
+
+            {/* 5. Framing Header */}
+            <div
+              className={`studio-header-cell framing-header ${isTrackCollapsed("framing") ? "collapsed" : ""}`}
+              style={{ height: isTrackCollapsed("framing") ? 0 : laneHeights.framing }}
+            >
+              <div className="studio-header-row studio-framing-header-row">
+                <div className="studio-header-left">
+                  <button
+                    type="button"
+                    className="studio-track-fold-btn"
+                    onClick={() => toggleTrackCollapse("framing")}
+                    title={isTrackCollapsed("framing") ? "Expand Framing track" : "Collapse Framing track"}
+                    aria-label={isTrackCollapsed("framing") ? "Expand Framing track" : "Collapse Framing track"}
+                  >
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points={isTrackCollapsed("framing") ? "9 18 15 12 9 6" : "6 9 12 15 18 9"} />
+                    </svg>
+                  </button>
+                  <span className="studio-track-title">Framing</span>
+                </div>
+                {!isTrackCollapsed("framing") && (
+                  <div className="studio-header-sublabels studio-framing-sublabels">
+                    <span className="studio-subrow-label">Wide</span>
+                    <span className="studio-subrow-label">Medium</span>
+                    <span className="studio-subrow-label">Close</span>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className={`studio-track-solo-btn ${soloTrack === "framing" ? "active" : ""}`}
+                  onClick={() => toggleTrackSolo("framing")}
+                  title={soloTrack === "framing" ? "Unsolo Framing track" : "Solo Framing track"}
+                  aria-label={soloTrack === "framing" ? "Unsolo Framing track" : "Solo Framing track"}
+                >
+                  S
+                </button>
+              </div>
+              <div
+                className={`studio-lane-resizer ${resizingTrack === "framing" ? "resizing" : ""}`}
+                role="separator"
+                tabIndex={0}
+                aria-orientation="horizontal"
+                aria-label="Resize Framing lane"
+                aria-valuenow={laneHeights.framing}
+                aria-valuemin={MIN_STUDIO_LANE_HEIGHTS.framing}
+                onPointerDown={(e) => handleResizePointerDown("framing", e)}
+                onPointerMove={handleResizePointerMove}
+                onPointerUp={handleResizePointerUp}
+                onPointerCancel={handleResizePointerUp}
+                onDoubleClick={(e) => handleResizeDoubleClick("framing", e)}
+                onKeyDown={(e) => handleResizeKeyDown("framing", e)}
+              >
+                <div className="studio-lane-resizer-line" />
+              </div>
+            </div>
+
+            {/* 6. Motion Header */}
+            <div
+              className={`studio-header-cell motion-header ${isTrackCollapsed("motion") ? "collapsed" : ""}`}
+              style={{ height: isTrackCollapsed("motion") ? 0 : laneHeights.motion }}
+            >
+              <div className="studio-header-row">
+                <div className="studio-header-left">
+                  <button
+                    type="button"
+                    className="studio-track-fold-btn"
+                    onClick={() => toggleTrackCollapse("motion")}
+                    title={isTrackCollapsed("motion") ? "Expand Motion track" : "Collapse Motion track"}
+                    aria-label={isTrackCollapsed("motion") ? "Expand Motion track" : "Collapse Motion track"}
+                  >
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points={isTrackCollapsed("motion") ? "9 18 15 12 9 6" : "6 9 12 15 18 9"} />
+                    </svg>
+                  </button>
+                  <span className="studio-track-title">Motion</span>
+                </div>
+                <button
+                  type="button"
+                  className={`studio-track-solo-btn ${soloTrack === "motion" ? "active" : ""}`}
+                  onClick={() => toggleTrackSolo("motion")}
+                  title={soloTrack === "motion" ? "Unsolo Motion track" : "Solo Motion track"}
+                  aria-label={soloTrack === "motion" ? "Unsolo Motion track" : "Solo Motion track"}
+                >
+                  S
+                </button>
+              </div>
+              <div
+                className={`studio-lane-resizer ${resizingTrack === "motion" ? "resizing" : ""}`}
+                role="separator"
+                tabIndex={0}
+                aria-orientation="horizontal"
+                aria-label="Resize Motion lane"
+                aria-valuenow={laneHeights.motion}
+                aria-valuemin={MIN_STUDIO_LANE_HEIGHTS.motion}
+                onPointerDown={(e) => handleResizePointerDown("motion", e)}
+                onPointerMove={handleResizePointerMove}
+                onPointerUp={handleResizePointerUp}
+                onPointerCancel={handleResizePointerUp}
+                onDoubleClick={(e) => handleResizeDoubleClick("motion", e)}
+                onKeyDown={(e) => handleResizeKeyDown("motion", e)}
+              >
+                <div className="studio-lane-resizer-line" />
+              </div>
+            </div>
+
+            {/* 7. Palette Header (Watercolor Chromatic River) */}
+            <div
+              className={`studio-header-cell palette-header ${isTrackCollapsed("palette") ? "collapsed" : ""}`}
+              style={{ height: isTrackCollapsed("palette") ? 0 : laneHeights.palette }}
+            >
+              <div className="studio-header-row studio-palette-header-row">
+                <div className="studio-header-left">
+                  <button
+                    type="button"
+                    className="studio-track-fold-btn"
+                    onClick={() => toggleTrackCollapse("palette")}
+                    title={isTrackCollapsed("palette") ? "Expand Palette track" : "Collapse Palette track"}
+                    aria-label={isTrackCollapsed("palette") ? "Expand Palette track" : "Collapse Palette track"}
+                  >
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points={isTrackCollapsed("palette") ? "9 18 15 12 9 6" : "6 9 12 15 18 9"} />
+                    </svg>
+                  </button>
+                  <span className="studio-track-title">Palette</span>
+                </div>
+                {!isTrackCollapsed("palette") && currentShot && (
+                  <div
+                    className="studio-header-sublabels studio-palette-sublabels"
+                    title={`Active shot ${currentShot.index}: ${currentShot.colorProfile?.mood || currentShot.shotSize || "Palette"} · ${Math.round((currentShot.colorProfile?.luminance ?? 0.5) * 100)}% luma`}
+                  >
+                    <span
+                      className="studio-palette-dot"
+                      style={{
+                        backgroundColor:
+                          currentShot.colorProfile?.palette?.[0] ||
+                          sizeColors[currentShot.shotSize] ||
+                          "#94a3b8",
+                      }}
+                    />
+                    <span className="studio-subrow-label">
+                      {currentShot.colorProfile?.mood || "River"}
+                    </span>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className={`studio-track-solo-btn ${soloTrack === "palette" ? "active" : ""}`}
+                  onClick={() => toggleTrackSolo("palette")}
+                  title={soloTrack === "palette" ? "Unsolo Palette track" : "Solo Palette track"}
+                  aria-label={soloTrack === "palette" ? "Unsolo Palette track" : "Solo Palette track"}
+                >
+                  S
+                </button>
+              </div>
+              <div
+                className={`studio-lane-resizer ${resizingTrack === "palette" ? "resizing" : ""}`}
+                role="separator"
+                tabIndex={0}
+                aria-orientation="horizontal"
+                aria-label="Resize Palette lane"
+                aria-valuenow={laneHeights.palette}
+                aria-valuemin={MIN_STUDIO_LANE_HEIGHTS.palette}
+                onPointerDown={(e) => handleResizePointerDown("palette", e)}
+                onPointerMove={handleResizePointerMove}
+                onPointerUp={handleResizePointerUp}
+                onPointerCancel={handleResizePointerUp}
+                onDoubleClick={(e) => handleResizeDoubleClick("palette", e)}
+                onKeyDown={(e) => handleResizeKeyDown("palette", e)}
+              >
+                <div className="studio-lane-resizer-line" />
+              </div>
+            </div>
+
+            {/* 8. Cast Header */}
+            <div
+              className={`studio-header-cell cast-header ${isTrackCollapsed("cast") ? "collapsed" : ""}`}
+              style={{ height: isTrackCollapsed("cast") ? 0 : laneHeights.cast }}
+            >
+              <div className="studio-header-row studio-cast-header-row">
+                <div className="studio-header-left">
+                  <button
+                    type="button"
+                    className="studio-track-fold-btn"
+                    onClick={() => toggleTrackCollapse("cast")}
+                    title={isTrackCollapsed("cast") ? "Expand Cast track" : "Collapse Cast track"}
+                    aria-label={isTrackCollapsed("cast") ? "Expand Cast track" : "Collapse Cast track"}
+                  >
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points={isTrackCollapsed("cast") ? "9 18 15 12 9 6" : "6 9 12 15 18 9"} />
+                    </svg>
+                  </button>
+                  <span className="studio-track-title">Cast</span>
+                </div>
+                {!isTrackCollapsed("cast") && activeCastMembers.length > 0 && (
+                  <div className="studio-subrow-labels-column studio-cast-sublabels">
+                    {activeCastMembers.map((m, idx) => {
+                      const subrowH = laneHeights.cast / activeCastMembers.length;
+                      return (
+                        <div
+                          key={m.id}
+                          className="studio-subrow-label-slot"
+                          style={{ height: `${subrowH}px` }}
+                          title={m.name}
+                        >
+                          <span
+                            className="studio-subrow-label"
+                            style={{
+                              color: CAST_PALETTE[idx % CAST_PALETTE.length],
+                              fontSize: subrowH < 12 ? "8px" : "9px",
+                            }}
+                          >
+                            {m.name}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className={`studio-track-solo-btn ${soloTrack === "cast" ? "active" : ""}`}
+                  onClick={() => toggleTrackSolo("cast")}
+                  title={soloTrack === "cast" ? "Unsolo Cast track" : "Solo Cast track"}
+                  aria-label={soloTrack === "cast" ? "Unsolo Cast track" : "Solo Cast track"}
+                >
+                  S
+                </button>
+              </div>
+              <div
+                className={`studio-lane-resizer ${resizingTrack === "cast" ? "resizing" : ""}`}
+                role="separator"
+                tabIndex={0}
+                aria-orientation="horizontal"
+                aria-label="Resize Cast lane"
+                aria-valuenow={laneHeights.cast}
+                aria-valuemin={MIN_STUDIO_LANE_HEIGHTS.cast}
+                onPointerDown={(e) => handleResizePointerDown("cast", e)}
+                onPointerMove={handleResizePointerMove}
+                onPointerUp={handleResizePointerUp}
+                onPointerCancel={handleResizePointerUp}
+                onDoubleClick={(e) => handleResizeDoubleClick("cast", e)}
+                onKeyDown={(e) => handleResizeKeyDown("cast", e)}
+              >
+                <div className="studio-lane-resizer-line" />
+              </div>
+            </div>
+
+            {/* 8. Sound Header */}
+            <div
+              className={`studio-header-cell sound-header ${isTrackCollapsed("sound") ? "collapsed" : ""}`}
+              style={{ height: isTrackCollapsed("sound") ? 0 : laneHeights.sound }}
+            >
+              <div className="studio-header-row studio-sound-header-row">
+                <div className="studio-header-left">
+                  <button
+                    type="button"
+                    className="studio-track-fold-btn"
+                    onClick={() => toggleTrackCollapse("sound")}
+                    title={isTrackCollapsed("sound") ? "Expand Sound track" : "Collapse Sound track"}
+                    aria-label={isTrackCollapsed("sound") ? "Expand Sound track" : "Collapse Sound track"}
+                  >
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points={isTrackCollapsed("sound") ? "9 18 15 12 9 6" : "6 9 12 15 18 9"} />
+                    </svg>
+                  </button>
+                  <span className="studio-track-title">Sound</span>
+                </div>
+                {!isTrackCollapsed("sound") && (
+                  <div className="studio-subrow-labels-column studio-sound-sublabels">
+                    {[
+                      { key: "dialogue", label: "Dialogue" },
+                      { key: "music", label: "Music" },
+                      { key: "effects", label: "Effects" },
+                      { key: "loudness", label: "Loudness" },
+                      { key: "speech", label: "Speech" },
+                    ].map((stem) => (
+                      <div
+                        key={stem.key}
+                        className="studio-subrow-label-slot"
+                        style={{ height: `${soundSubrowH}px` }}
+                        title={stem.label}
+                      >
+                        <span
+                          className="studio-subrow-label"
+                          style={{
+                            fontSize: soundSubrowH < 14 ? "8px" : "9px",
+                          }}
+                        >
+                          {stem.label}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className={`studio-track-solo-btn ${soloTrack === "sound" ? "active" : ""}`}
+                  onClick={() => toggleTrackSolo("sound")}
+                  title={soloTrack === "sound" ? "Unsolo Sound track" : "Solo Sound track"}
+                  aria-label={soloTrack === "sound" ? "Unsolo Sound track" : "Solo Sound track"}
+                >
+                  S
+                </button>
+              </div>
+              <div
+                className={`studio-lane-resizer ${resizingTrack === "sound" ? "resizing" : ""}`}
+                role="separator"
+                tabIndex={0}
+                aria-orientation="horizontal"
+                aria-label="Resize Sound lane"
+                aria-valuenow={laneHeights.sound}
+                aria-valuemin={MIN_STUDIO_LANE_HEIGHTS.sound}
+                onPointerDown={(e) => handleResizePointerDown("sound", e)}
+                onPointerMove={handleResizePointerMove}
+                onPointerUp={handleResizePointerUp}
+                onPointerCancel={handleResizePointerUp}
+                onDoubleClick={(e) => handleResizeDoubleClick("sound", e)}
+                onKeyDown={(e) => handleResizeKeyDown("sound", e)}
+              >
+                <div className="studio-lane-resizer-line" />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Main Scrollable Canvas */}
+        <div
+          className={`map-scroll ${isStudio ? "studio-scroll-area" : ""}`}
+          ref={viewport}
+        onScroll={(e) => {
+          if (trackHeaders.current) trackHeaders.current.style.transform = `translateY(${-e.currentTarget.scrollTop}px)`;
+          const sl = e.currentTarget.scrollLeft;
+          setLocalScrollLeft(sl);
+          onScrollChange?.(sl);
+        }}
         onWheel={(e) => {
           if (e.ctrlKey || e.metaKey) {
             e.preventDefault();
@@ -674,7 +2089,6 @@ export default memo(function EditingMap({
             }
             const raw = (e.clientX - e.currentTarget.getBoundingClientRect().left) / scale;
             const target = resolveSnap(raw);
-            setSnappedGuideTime(null);
             onSeek(target);
           }}
         >
@@ -699,12 +2113,10 @@ export default memo(function EditingMap({
               if (!dragging.current) return;
               scrubAt(e.clientX);
               dragging.current = false;
-              if (snappedGuideTime !== null) setSnappedGuideTime(null);
               e.currentTarget.releasePointerCapture(e.pointerId);
             }}
             onPointerCancel={() => {
               dragging.current = false;
-              if (snappedGuideTime !== null) setSnappedGuideTime(null);
             }}
           >
             {rulerTicks.map(({ i, t, x }) => (
@@ -714,42 +2126,1000 @@ export default memo(function EditingMap({
             ))}
           </div>
 
-          {/* River 1: Scenes & Dramatic Arc River (when enabled) */}
-          {layers.scenes && visibleSequences.length > 0 && (
+          {/* STUDIO MODE MULTI-TRACK RHYTHM WORKSTATION */}
+          {isStudio ? (
+            <div className="studio-tracks-stack" aria-label="Studio rhythm timeline tracks">
+              {/* Story Lane (Moments & Passages, Draft In/Out, Adjustments) */}
+              <div
+                className={`studio-lane studio-story-lane ${isTrackCollapsed("story") ? "collapsed" : ""}`}
+                aria-label="Story structure track"
+                style={{
+                  height: isTrackCollapsed("story") ? 0 : `${effectiveStoryHeight}px`,
+                }}
+              >
+                {/* Subtle shading for current draft range */}
+                {range?.start !== undefined && range?.end !== undefined && range.end > range.start && (
+                  <div
+                    className="story-draft-shading"
+                    style={{
+                      left: range.start * scale,
+                      width: Math.max(2, (range.end - range.start) * scale),
+                    }}
+                  />
+                )}
+
+                {/* Draft In Flag */}
+                {range?.start !== undefined && (
+                  <div
+                    className="story-draft-flag story-in-flag"
+                    style={{ left: range.start * scale }}
+                    title={`Draft In: ${formatTimecode(range.start, project.frameRate, project.dropFrame)}`}
+                  >
+                    <span className="story-flag-tag">IN</span>
+                  </div>
+                )}
+
+                {/* Draft Out Flag */}
+                {range?.end !== undefined && (
+                  <div
+                    className="story-draft-flag story-out-flag"
+                    style={{ left: range.end * scale }}
+                    title={`Draft Out: ${formatTimecode(range.end, project.frameRate, project.dropFrame)}`}
+                  >
+                    <span className="story-flag-tag">OUT</span>
+                  </div>
+                )}
+
+                {/* Saved Story Markers */}
+                {!isTrackCollapsed("story") &&
+                  layoutStoryEntries.entries.map((entry) => {
+                    const seq = entry.sequence;
+                    const isMoment = (seq.kind ?? "passage") === "moment";
+                    const isSelected = selectedSequenceId === seq.id;
+                    const isDraggingThis = activeStoryDrag?.sequenceId === seq.id;
+
+                    const startSec = (isDraggingThis && activeStoryDrag) ? activeStoryDrag.currentStart : seq.startSeconds;
+                    const endSec = (isDraggingThis && activeStoryDrag) ? activeStoryDrag.currentEnd : seq.endSeconds;
+                    const topPx = entry.subrow * 26 + 4;
+
+                    if (isMoment) {
+                      return (
+                        <div
+                          key={`story-moment-${seq.id}`}
+                          className={`story-lane-moment ${isSelected ? "selected" : ""} ${isDraggingThis ? "dragging" : ""}`}
+                          style={{
+                            left: startSec * scale,
+                            top: `${topPx}px`,
+                          }}
+                          onPointerDown={(e) => handleMomentPointerDown(e, seq)}
+                          onPointerMove={handleStoryPointerMove}
+                          onPointerUp={(e) => handleStoryPointerUp(e, seq)}
+                          onPointerCancel={(e) => handleStoryPointerUp(e, seq)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onSelectSequence?.(seq);
+                            onSeek?.(seq.startSeconds);
+                          }}
+                          title={`Moment: ${seq.name} (${formatTimecode(startSec, project.frameRate, project.dropFrame)}) - Click to select, drag to move`}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`Moment ${seq.name}`}
+                        >
+                          <div className="story-moment-diamond" />
+                          <span className="story-moment-label">
+                            {seq.beat && <span className="story-beat-badge">{seq.beat}</span>}
+                            <span className="story-title">{seq.name}</span>
+                          </span>
+                        </div>
+                      );
+                    }
+
+                    // Passage
+                    const widthPx = Math.max(16, (endSec - startSec) * scale);
+                    const isDraggingIn = isDraggingThis && activeStoryDrag?.kind === "passage-in";
+                    const isDraggingOut = isDraggingThis && activeStoryDrag?.kind === "passage-out";
+                    const isDraggingBody = isDraggingThis && activeStoryDrag?.kind === "passage-move";
+
+                    return (
+                      <div
+                        key={`story-passage-${seq.id}`}
+                        className={`story-lane-passage ${isSelected ? "selected" : ""} ${isDraggingThis ? "dragging" : ""}`}
+                        style={{
+                          left: startSec * scale,
+                          width: `${widthPx}px`,
+                          top: `${topPx}px`,
+                        }}
+                        role="region"
+                        aria-label={`Passage ${seq.name}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectSequence?.(seq);
+                          onRangeChange?.({ start: seq.startSeconds, end: seq.endSeconds });
+                        }}
+                      >
+                        {/* In Handle */}
+                        <div
+                          className={`story-passage-handle handle-in left-handle ${isDraggingIn ? "dragging" : ""}`}
+                          onPointerDown={(e) => handlePassageInPointerDown(e, seq)}
+                          onPointerMove={handleStoryPointerMove}
+                          onPointerUp={(e) => handleStoryPointerUp(e, seq)}
+                          onPointerCancel={(e) => handleStoryPointerUp(e, seq)}
+                          title="Drag to extend or shrink In point"
+                        >
+                          <span className="handle-grip-line" />
+                        </div>
+                        {/* Body */}
+                        <div
+                          className={`story-passage-body ${isDraggingBody ? "dragging" : ""}`}
+                          onPointerDown={(e) => handlePassageBodyPointerDown(e, seq)}
+                          onPointerMove={handleStoryPointerMove}
+                          onPointerUp={(e) => handleStoryPointerUp(e, seq)}
+                          onPointerCancel={(e) => handleStoryPointerUp(e, seq)}
+                          title={`Passage: ${seq.name} (${formatTimecode(startSec, project.frameRate, project.dropFrame)} to ${formatTimecode(endSec, project.frameRate, project.dropFrame)}) - Drag to move`}
+                        >
+                          <span className="story-passage-content">
+                            {seq.beat && <span className="story-beat-badge">{seq.beat}</span>}
+                            <span className="story-title">{seq.name}</span>
+                          </span>
+                        </div>
+                        {/* Out Handle */}
+                        <div
+                          className={`story-passage-handle handle-out right-handle ${isDraggingOut ? "dragging" : ""}`}
+                          onPointerDown={(e) => handlePassageOutPointerDown(e, seq)}
+                          onPointerMove={handleStoryPointerMove}
+                          onPointerUp={(e) => handleStoryPointerUp(e, seq)}
+                          onPointerCancel={(e) => handleStoryPointerUp(e, seq)}
+                          title="Drag to extend or shrink Out point"
+                        >
+                          <span className="handle-grip-line" />
+                        </div>
+                      </div>
+                    );
+                  })}
+                <div
+                  className={`studio-lane-resizer ${resizingTrack === "story" ? "resizing" : ""}`}
+                  role="separator"
+                  tabIndex={0}
+                  aria-orientation="horizontal"
+                  aria-label="Resize Story lane"
+                  aria-valuenow={laneHeights.story}
+                  aria-valuemin={MIN_STUDIO_LANE_HEIGHTS.story}
+                  onPointerDown={(e) => handleResizePointerDown("story", e)}
+                  onPointerMove={handleResizePointerMove}
+                  onPointerUp={handleResizePointerUp}
+                  onPointerCancel={handleResizePointerUp}
+                  onDoubleClick={(e) => handleResizeDoubleClick("story", e)}
+                  onKeyDown={(e) => handleResizeKeyDown("story", e)}
+                >
+                  <div className="studio-lane-resizer-line" />
+                </div>
+              </div>
+
+              {/* Track 2: Filmstrip Shots (Visual Keyframes + Interactive Cut Drag) */}
+              <div
+                className={`studio-lane studio-filmstrip-lane studio-shots-lane shot-track ${isTrackCollapsed("shots") ? "collapsed" : ""}`}
+                aria-label="Shot visual filmstrip track"
+                style={{
+                  height: isTrackCollapsed("shots") ? 0 : `${laneHeights.shots}px`,
+                }}
+              >
+                {visibleShots.map((s) => {
+                  let startSec = s.startSeconds;
+                  let endSec = s.endSeconds;
+                  if (activeCutDrag) {
+                    if (s.id === activeCutDrag.outgoingId) {
+                      endSec = activeCutDrag.currentTime;
+                    } else if (s.id === activeCutDrag.incomingId) {
+                      startSec = activeCutDrag.currentTime;
+                    }
+                  }
+                  const effDur = Math.max(0, endSec - startSec);
+                  const w = effDur * scale;
+                  const isSelected = selected === s.id;
+                  const isPlaying = time >= startSec && time <= endSec;
+                  const isHighlighted = highlightedShotIds?.includes(s.id);
+                  const hasHighlightFilter = Boolean(highlightedShotIds && highlightedShotIds.length > 0);
+                  const characterClass = hasHighlightFilter
+                    ? isHighlighted
+                      ? "character-highlight"
+                      : "character-dimmed"
+                    : "";
+                  const isCoveredByStory = Boolean(
+                    (visibleRange && visibleRange.start !== undefined && visibleRange.end !== undefined && visibleRange.end > visibleRange.start && s.endSeconds > visibleRange.start && s.startSeconds < visibleRange.end) ||
+                    (selectedSequenceId && project.sequences?.some((seq) => seq.id === selectedSequenceId && (seq.kind ?? "passage") === "passage" && s.endSeconds > seq.startSeconds && s.startSeconds < seq.endSeconds))
+                  );
+                  const thumb = thumbnails[s.id];
+
+                  return (
+                    <button
+                      type="button"
+                      key={`filmstrip-${s.id}`}
+                      className={`studio-filmstrip-shot shot ${isSelected ? "selected" : ""} ${isPlaying ? "active" : ""} ${characterClass} ${isCoveredByStory ? "shot-in-story-range" : ""}`}
+                      style={{
+                        left: startSec * scale,
+                        width: w,
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onShot(s);
+                      }}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        onPlayShot(s);
+                      }}
+                      title={`Shot ${s.index} · ${s.shotSize} · ${effDur.toFixed(2)}s`}
+                      aria-label={`Shot ${s.index}`}
+                    >
+                      {thumb && w >= 32 ? (
+                        <>
+                          <div className="studio-shot-head-frame">
+                            <img src={thumb} alt="" className="studio-shot-img" draggable={false} />
+                            {s.shotSize && s.shotSize !== "Unknown" && w >= 44 && (
+                              <span
+                                className="studio-shot-tag-badge"
+                                style={{
+                                  borderLeft: sizeColors[s.shotSize] ? `2px solid ${sizeColors[s.shotSize]}` : undefined,
+                                }}
+                              >
+                                {s.shotSize}
+                              </span>
+                            )}
+                          </div>
+                          <div className="studio-shot-body">
+                            {w >= 100 && (
+                              <span className="studio-shot-body-index">Shot {s.index}</span>
+                            )}
+                            {w >= 150 && (
+                              <span className="studio-shot-body-dur">{effDur.toFixed(1)}s</span>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="studio-shot-placeholder">
+                          <span>{String(s.index).padStart(3, "0")}</span>
+                          {s.shotSize && s.shotSize !== "Unknown" && w >= 48 && (
+                            <span className="shot-size-label">{s.shotSize}</span>
+                          )}
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+
+                {/* Interactive Cut Points between shots */}
+                {visibleCuts.map(({ incoming, outgoing }) => {
+                  const isBeingDragged = activeCutDrag?.incomingId === incoming.id;
+                  const cutPos = isBeingDragged
+                    ? activeCutDrag.currentTime * scale
+                    : incoming.startSeconds * scale;
+                  return (
+                    <div
+                      key={`studio-cut-${incoming.id}`}
+                      role="separator"
+                      tabIndex={0}
+                      aria-orientation="vertical"
+                      aria-label={`Cut between Shot ${outgoing.index} and Shot ${incoming.index}`}
+                      aria-valuenow={incoming.startSeconds}
+                      aria-valuemin={outgoing.startSeconds}
+                      aria-valuemax={incoming.endSeconds}
+                      className={`studio-cut-boundary cut-boundary ${selectedCut === incoming.id ? "selected" : ""} ${isBeingDragged ? "dragging" : ""}`}
+                      style={{ left: cutPos }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onCut?.(incoming);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          onCut?.(incoming);
+                        } else if (e.key === "ArrowLeft") {
+                          e.preventDefault();
+                          const step = (e.shiftKey ? 5 : 1) / actualRate(project.frameRate);
+                          if (onRollCut) {
+                            const minDur = Math.max(1 / actualRate(project.frameRate), 0.08);
+                            const newTime = Math.max(outgoing.startSeconds + minDur, incoming.startSeconds - step);
+                            onRollCut(incoming.id, newTime);
+                            onScrub(newTime);
+                          } else if (onNudgeCut) {
+                            onNudgeCut(incoming.id, -step);
+                          }
+                        } else if (e.key === "ArrowRight") {
+                          e.preventDefault();
+                          const step = (e.shiftKey ? 5 : 1) / actualRate(project.frameRate);
+                          if (onRollCut) {
+                            const minDur = Math.max(1 / actualRate(project.frameRate), 0.08);
+                            const newTime = Math.min(incoming.endSeconds - minDur, incoming.startSeconds + step);
+                            onRollCut(incoming.id, newTime);
+                            onScrub(newTime);
+                          } else if (onNudgeCut) {
+                            onNudgeCut(incoming.id, step);
+                          }
+                        }
+                      }}
+                      onPointerDown={(event) => {
+                        if (event.button !== 0 || event.shiftKey) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        suppressMapClick.current = true;
+                        event.currentTarget.setPointerCapture(event.pointerId);
+                        const minDur = Math.max(1 / actualRate(project.frameRate), 0.08);
+                        dragCutRef.current = {
+                          incomingId: incoming.id,
+                          outgoingId: outgoing.id,
+                          startX: event.clientX,
+                          originalTime: incoming.startSeconds,
+                          minTime: outgoing.startSeconds + minDur,
+                          maxTime: incoming.endSeconds - minDur,
+                          hasMoved: false,
+                        };
+                        setActiveCutDrag({
+                          incomingId: incoming.id,
+                          outgoingId: outgoing.id,
+                          originalTime: incoming.startSeconds,
+                          currentTime: incoming.startSeconds,
+                        });
+                      }}
+                      onPointerMove={(event) => {
+                        const drag = dragCutRef.current;
+                        if (!drag) return;
+                        if (Math.abs(event.clientX - drag.startX) > 2) {
+                          drag.hasMoved = true;
+                        }
+                        const rawTime = drag.originalTime + (event.clientX - drag.startX) / scale;
+                        let clamped = Math.max(drag.minTime, Math.min(drag.maxTime, rawTime));
+                        if (snapToCuts) {
+                          const thresholdSec = 10 / scale;
+                          const snap = getSnapTime(clamped, snapPoints, thresholdSec);
+                          if (snap.isSnapped && snap.snapTarget !== undefined && snap.snapTarget >= drag.minTime && snap.snapTarget <= drag.maxTime) {
+                            clamped = snap.snapTarget;
+                          }
+                        }
+                        const quantized = quantizeToFrame(clamped, project.frameRate);
+                        setActiveCutDrag((prev) => prev ? { ...prev, currentTime: quantized } : null);
+                        onScrub(quantized);
+                      }}
+                      onPointerUp={(event) => {
+                        const drag = dragCutRef.current;
+                        if (!drag) return;
+                        event.currentTarget.releasePointerCapture(event.pointerId);
+                        if (drag.hasMoved && activeCutDrag) {
+                          onRollCut?.(drag.incomingId, activeCutDrag.currentTime);
+                        } else if (!drag.hasMoved) {
+                          onCut?.(incoming);
+                        }
+                        dragCutRef.current = null;
+                        setActiveCutDrag(null);
+                      }}
+                      title="Drag to roll cut"
+                    >
+                      {isBeingDragged && <div className="studio-cut-line" />}
+                      {isBeingDragged && (
+                        <div className="studio-cut-delta-badge">
+                          <small>
+                            {(() => {
+                              const deltaSec = activeCutDrag.currentTime - activeCutDrag.originalTime;
+                              const deltaFrames = Math.round(deltaSec * actualRate(project.frameRate));
+                              const sign = deltaFrames > 0 ? "+" : "";
+                              return `${sign}${deltaFrames}f (${sign}${deltaSec.toFixed(2)}s)`;
+                            })()}
+                          </small>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                <div
+                  className={`studio-lane-resizer ${resizingTrack === "shots" ? "resizing" : ""}`}
+                  role="separator"
+                  tabIndex={0}
+                  aria-orientation="horizontal"
+                  aria-label="Resize Shots lane"
+                  aria-valuenow={laneHeights.shots}
+                  aria-valuemin={MIN_STUDIO_LANE_HEIGHTS.shots}
+                  onPointerDown={(e) => handleResizePointerDown("shots", e)}
+                  onPointerMove={handleResizePointerMove}
+                  onPointerUp={handleResizePointerUp}
+                  onPointerCancel={handleResizePointerUp}
+                  onDoubleClick={(e) => handleResizeDoubleClick("shots", e)}
+                  onKeyDown={(e) => handleResizeKeyDown("shots", e)}
+                >
+                  <div className="studio-lane-resizer-line" />
+                </div>
+              </div>
+
+              {/* Track 3: Pacing (Dedicated Smooth Rhythm Curve) */}
+              <div
+                className={`studio-lane studio-pacing-lane ${isTrackCollapsed("pacing") ? "collapsed" : ""}`}
+                aria-label="Pacing rhythm track"
+                style={{ height: isTrackCollapsed("pacing") ? 0 : `${laneHeights.pacing}px` }}
+              >
+                <svg className="studio-lane-svg" width={canvasWidth} height={laneHeights.pacing} aria-hidden="true">
+                  <defs>
+                    <linearGradient id="studioPacingGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                      <stop offset="0%" stopColor="#eae6df" stopOpacity="0.08" />
+                      <stop offset="100%" stopColor="#eae6df" stopOpacity="0.00" />
+                    </linearGradient>
+                  </defs>
+                  {studioPacing.area && (
+                    <path d={studioPacing.area} fill="url(#studioPacingGrad)" />
+                  )}
+                  {studioPacing.path && (
+                    <path d={studioPacing.path} fill="none" stroke="#eae6df" strokeWidth="1.5" strokeLinecap="round" />
+                  )}
+                  {/* Playhead indicator dot riding curve */}
+                  <circle
+                    cx={time * scale}
+                    cy={Math.max(4, Math.min(laneHeights.pacing - 4, laneHeights.pacing - (currentPacing.rate / maxPacingRate) * (laneHeights.pacing - 8)))}
+                    r="3"
+                    fill="#eae6df"
+                    stroke="#0c0e11"
+                    strokeWidth="1.5"
+                  />
+                </svg>
+                <div
+                  className={`studio-lane-resizer ${resizingTrack === "pacing" ? "resizing" : ""}`}
+                  role="separator"
+                  tabIndex={0}
+                  aria-orientation="horizontal"
+                  aria-label="Resize Pacing lane"
+                  aria-valuenow={laneHeights.pacing}
+                  aria-valuemin={MIN_STUDIO_LANE_HEIGHTS.pacing}
+                  onPointerDown={(e) => handleResizePointerDown("pacing", e)}
+                  onPointerMove={handleResizePointerMove}
+                  onPointerUp={handleResizePointerUp}
+                  onPointerCancel={handleResizePointerUp}
+                  onDoubleClick={(e) => handleResizeDoubleClick("pacing", e)}
+                  onKeyDown={(e) => handleResizeKeyDown("pacing", e)}
+                >
+                  <div className="studio-lane-resizer-line" />
+                </div>
+              </div>
+
+              {/* Track 4: Cut Density (Slender Stems along baseline + Shock Markers) */}
+              <div
+                className={`studio-lane studio-cut-density-lane ${isTrackCollapsed("cutDensity") ? "collapsed" : ""}`}
+                aria-label="Cut density rhythm track"
+                style={{ height: isTrackCollapsed("cutDensity") ? 0 : `${laneHeights.cutDensity}px` }}
+              >
+                <svg className="studio-lane-svg" width={canvasWidth} height={laneHeights.cutDensity} aria-hidden="true">
+                  {/* Faint median baseline */}
+                  <line
+                    x1="0"
+                    y1={laneHeights.cutDensity - Math.min(1, studioMedianPacing / maxPacingRate) * (laneHeights.cutDensity - 8)}
+                    x2={canvasWidth}
+                    y2={laneHeights.cutDensity - Math.min(1, studioMedianPacing / maxPacingRate) * (laneHeights.cutDensity - 8)}
+                    stroke="rgba(234, 230, 223, 0.12)"
+                    strokeDasharray="4,4"
+                    strokeWidth="1"
+                  />
+                  {/* Slender cut stems along baseline */}
+                  {visibleCuts.map(({ incoming }, idx) => {
+                    const cutX = incoming.startSeconds * scale;
+                    const shock = cutShockMap.get(Math.round(incoming.startSeconds * 1000)) ?? 20;
+                    const maxStemH = laneHeights.cutDensity - 6;
+                    const stemH = Math.min(maxStemH, Math.max(5, (shock / 100) * maxStemH));
+                    return (
+                      <line
+                        key={`stem-${incoming.id}-${idx}`}
+                        x1={cutX}
+                        y1={laneHeights.cutDensity}
+                        x2={cutX}
+                        y2={laneHeights.cutDensity - stemH}
+                        stroke="rgba(154, 160, 166, 0.55)"
+                        strokeWidth="1"
+                      />
+                    );
+                  })}
+                  {/* Cut shock spike markers */}
+                  {cutShockData.filter((c) => c.shockScore >= 42).map((c, idx) => (
+                    <g key={`studio-shock-${idx}`} transform={`translate(${c.time * scale}, 0)`}>
+                      <line y1="4" y2={laneHeights.cutDensity} stroke="rgba(217, 119, 100, 0.65)" strokeWidth="1" strokeDasharray="2,2" />
+                      <circle cx="0" cy="6" r="2" fill="#d97764" />
+                    </g>
+                  ))}
+                </svg>
+                <div
+                  className={`studio-lane-resizer ${resizingTrack === "cutDensity" ? "resizing" : ""}`}
+                  role="separator"
+                  tabIndex={0}
+                  aria-orientation="horizontal"
+                  aria-label="Resize Cut density lane"
+                  aria-valuenow={laneHeights.cutDensity}
+                  aria-valuemin={MIN_STUDIO_LANE_HEIGHTS.cutDensity}
+                  onPointerDown={(e) => handleResizePointerDown("cutDensity", e)}
+                  onPointerMove={handleResizePointerMove}
+                  onPointerUp={handleResizePointerUp}
+                  onPointerCancel={handleResizePointerUp}
+                  onDoubleClick={(e) => handleResizeDoubleClick("cutDensity", e)}
+                  onKeyDown={(e) => handleResizeKeyDown("cutDensity", e)}
+                >
+                  <div className="studio-lane-resizer-line" />
+                </div>
+              </div>
+
+              {/* Track 5: Framing (Stepped Graph in Slate-Blue: Wide, Medium, Close) */}
+              <div
+                className={`studio-lane studio-framing-lane ${isTrackCollapsed("framing") ? "collapsed" : ""}`}
+                aria-label="Framing scale stepped track"
+                style={{ height: isTrackCollapsed("framing") ? 0 : `${laneHeights.framing}px` }}
+              >
+                <div className="studio-framing-guideline" style={{ top: `${laneHeights.framing * 0.22}px` }} />
+                <div className="studio-framing-guideline" style={{ top: `${laneHeights.framing * 0.5}px` }} />
+                <div className="studio-framing-guideline" style={{ top: `${laneHeights.framing * 0.78}px` }} />
+                <svg className="studio-lane-svg" width={canvasWidth} height={laneHeights.framing} aria-hidden="true">
+                  {generateSteppedFramingPath(visibleShots, scale, laneHeights.framing) && (
+                    <path
+                      d={generateSteppedFramingPath(visibleShots, scale, laneHeights.framing)}
+                      fill="none"
+                      stroke="rgba(107, 163, 207, 0.45)"
+                      strokeWidth="1.5"
+                      strokeLinecap="square"
+                    />
+                  )}
+                </svg>
+                {visibleShots.map((s) => {
+                  const tier = getFramingTier(s);
+                  const top = tier === "Close"
+                    ? laneHeights.framing * 0.12
+                    : tier === "Medium"
+                      ? laneHeights.framing * 0.42
+                      : laneHeights.framing * 0.72;
+                  const isSelected = selected === s.id;
+                  const isPlaying = time >= s.startSeconds && time <= s.endSeconds;
+                  const shotW = Math.max(2, s.duration * scale);
+                  const shotX = s.startSeconds * scale;
+                  const framingColor = sizeColors[s.shotSize] || "#64748b";
+                  return (
+                    <button
+                      key={`studio-framing-${s.id}`}
+                      type="button"
+                      className={`studio-framing-bar tier-${tier.toLowerCase()} ${isSelected ? "selected" : ""} ${isPlaying ? "active" : ""}`}
+                      style={{
+                        left: shotX,
+                        width: shotW,
+                        top: `${top}px`,
+                        height: `${Math.max(4, Math.min(10, laneHeights.framing * 0.2))}px`,
+                        backgroundColor: framingColor,
+                      }}
+                      title={`Shot ${s.index}: ${s.shotSize} (${s.duration.toFixed(2)}s)`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onShot(s);
+                        onSeek(s.startSeconds);
+                      }}
+                    />
+                  );
+                })}
+                <div
+                  className={`studio-lane-resizer ${resizingTrack === "framing" ? "resizing" : ""}`}
+                  role="separator"
+                  tabIndex={0}
+                  aria-orientation="horizontal"
+                  aria-label="Resize Framing lane"
+                  aria-valuenow={laneHeights.framing}
+                  aria-valuemin={MIN_STUDIO_LANE_HEIGHTS.framing}
+                  onPointerDown={(e) => handleResizePointerDown("framing", e)}
+                  onPointerMove={handleResizePointerMove}
+                  onPointerUp={handleResizePointerUp}
+                  onPointerCancel={handleResizePointerUp}
+                  onDoubleClick={(e) => handleResizeDoubleClick("framing", e)}
+                  onKeyDown={(e) => handleResizeKeyDown("framing", e)}
+                >
+                  <div className="studio-lane-resizer-line" />
+                </div>
+              </div>
+
+              {/* Track 6: Motion (Continuous Cyan Kinetic Wave) */}
+              <div
+                className={`studio-lane studio-motion-lane ${isTrackCollapsed("motion") ? "collapsed" : ""}`}
+                aria-label="Motion flow energy track"
+                style={{ height: isTrackCollapsed("motion") ? 0 : `${laneHeights.motion}px` }}
+              >
+                <svg className="studio-lane-svg" width={canvasWidth} height={laneHeights.motion} aria-hidden="true">
+                  <defs>
+                    <linearGradient id="studioMotionGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                      <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.20" />
+                      <stop offset="70%" stopColor="#38bdf8" stopOpacity="0.06" />
+                      <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.00" />
+                    </linearGradient>
+                  </defs>
+                  {studioMotion.area && (
+                    <path d={studioMotion.area} fill="url(#studioMotionGrad)" />
+                  )}
+                  {studioMotion.path && (
+                    <path d={studioMotion.path} fill="none" stroke="#38bdf8" strokeWidth="1.5" strokeLinecap="round" />
+                  )}
+                  {/* Playhead indicator dot riding wave */}
+                  <circle
+                    cx={time * scale}
+                    cy={Math.max(4, Math.min(laneHeights.motion - 4, laneHeights.motion - ((currentShot?.motionProfile?.totalKineticEnergy ?? 40) / 100) * (laneHeights.motion - 8)))}
+                    r="3"
+                    fill="#38bdf8"
+                    stroke="#0c0e11"
+                    strokeWidth="1.5"
+                  />
+                </svg>
+                <div
+                  className={`studio-lane-resizer ${resizingTrack === "motion" ? "resizing" : ""}`}
+                  role="separator"
+                  tabIndex={0}
+                  aria-orientation="horizontal"
+                  aria-label="Resize Motion lane"
+                  aria-valuenow={laneHeights.motion}
+                  aria-valuemin={MIN_STUDIO_LANE_HEIGHTS.motion}
+                  onPointerDown={(e) => handleResizePointerDown("motion", e)}
+                  onPointerMove={handleResizePointerMove}
+                  onPointerUp={handleResizePointerUp}
+                  onPointerCancel={handleResizePointerUp}
+                  onDoubleClick={(e) => handleResizeDoubleClick("motion", e)}
+                  onKeyDown={(e) => handleResizeKeyDown("motion", e)}
+                >
+                  <div className="studio-lane-resizer-line" />
+                </div>
+              </div>
+
+              {/* Track 7: Palette (Continuous Watercolor Chromatic River) */}
+              <div
+                className={`studio-lane studio-palette-lane ${isTrackCollapsed("palette") ? "collapsed" : ""}`}
+                aria-label="Watercolor chromatic palette river track"
+                style={{ height: isTrackCollapsed("palette") ? 0 : `${laneHeights.palette}px` }}
+              >
+                <svg className="studio-lane-svg studio-palette-svg" width={canvasWidth} height={laneHeights.palette} aria-hidden="true">
+                  <defs>
+                    <filter id="studioWatercolorFilter" x="-10%" y="-20%" width="120%" height="140%">
+                      <feTurbulence type="fractalNoise" baseFrequency="0.04 0.12" numOctaves="2" result="noise" />
+                      <feDisplacementMap in="SourceGraphic" in2="noise" scale="3" xChannelSelector="R" yChannelSelector="G" result="displaced" />
+                      <feGaussianBlur in="displaced" stdDeviation="2.5" result="blurred" />
+                      <feMerge>
+                        <feMergeNode in="blurred" opacity="0.85" />
+                        <feMergeNode in="SourceGraphic" opacity="0.55" />
+                      </feMerge>
+                    </filter>
+                  </defs>
+
+                  {/* Flowing Watercolor Shot Segments with Organic Soft Bleed */}
+                  <g filter="url(#studioWatercolorFilter)">
+                    {visibleShots.map((s) => {
+                      const shotX = s.startSeconds * scale;
+                      const shotW = Math.max(4, s.duration * scale);
+                      const luma = s.colorProfile?.luminance ?? 0.5;
+                      const domColor = s.colorProfile?.palette?.[0] || sizeColors[s.shotSize] || "#3b4856";
+                      const topPad = Math.max(3, (1 - luma) * (laneHeights.palette * 0.28));
+                      const segH = Math.max(12, laneHeights.palette - topPad * 2);
+                      return (
+                        <rect
+                          key={`palette-wash-${s.id}`}
+                          x={shotX}
+                          y={topPad}
+                          width={shotW + 2}
+                          height={segH}
+                          rx={Math.min(8, shotW / 2)}
+                          fill={domColor}
+                          opacity={0.82}
+                        />
+                      );
+                    })}
+                  </g>
+
+                  {/* Luminous Central Wave Current riding the film's tonal temperature */}
+                  {generatePaletteWavePath(visibleShots, scale, laneHeights.palette) && (
+                    <path
+                      d={generatePaletteWavePath(visibleShots, scale, laneHeights.palette)}
+                      fill="none"
+                      stroke="rgba(255, 255, 255, 0.45)"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                    />
+                  )}
+
+                  {/* Playhead indicator droplet riding the color current */}
+                  {currentShot && (
+                    <circle
+                      cx={time * scale}
+                      cy={Math.max(
+                        6,
+                        Math.min(
+                          laneHeights.palette - 6,
+                          laneHeights.palette * (0.75 - (currentShot.colorProfile?.luminance ?? 0.5) * 0.5)
+                        )
+                      )}
+                      r="3.5"
+                      fill={currentShot.colorProfile?.palette?.[0] || sizeColors[currentShot.shotSize] || "#fcd34d"}
+                      stroke="#0c0e11"
+                      strokeWidth="1.5"
+                    />
+                  )}
+                </svg>
+
+                {/* Interactive Shot Overlays for click selection & rich palette tooltips */}
+                {visibleShots.map((s) => {
+                  const shotX = s.startSeconds * scale;
+                  const shotW = Math.max(4, s.duration * scale);
+                  const isSelected = selected === s.id;
+                  const isPlaying = time >= s.startSeconds && time <= s.endSeconds;
+                  const lumaPercent = Math.round((s.colorProfile?.luminance ?? 0.5) * 100);
+                  const mood = s.colorProfile?.mood || s.shotSize;
+                  const paletteColors = s.colorProfile?.palette?.slice(0, 5).join(", ") || "Framing scale fallback";
+                  return (
+                    <button
+                      key={`studio-palette-${s.id}`}
+                      type="button"
+                      className={`studio-palette-shot-btn ${isSelected ? "selected" : ""} ${isPlaying ? "active" : ""}`}
+                      style={{
+                        left: shotX,
+                        width: shotW,
+                      }}
+                      title={`Shot ${s.index}: ${mood} · ${lumaPercent}% luma · Palette: ${paletteColors}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onShot(s);
+                        onSeek(s.startSeconds);
+                      }}
+                    />
+                  );
+                })}
+
+                <div
+                  className={`studio-lane-resizer ${resizingTrack === "palette" ? "resizing" : ""}`}
+                  role="separator"
+                  tabIndex={0}
+                  aria-orientation="horizontal"
+                  aria-label="Resize Palette lane"
+                  aria-valuenow={laneHeights.palette}
+                  aria-valuemin={MIN_STUDIO_LANE_HEIGHTS.palette}
+                  onPointerDown={(e) => handleResizePointerDown("palette", e)}
+                  onPointerMove={handleResizePointerMove}
+                  onPointerUp={handleResizePointerUp}
+                  onPointerCancel={handleResizePointerUp}
+                  onDoubleClick={(e) => handleResizeDoubleClick("palette", e)}
+                  onKeyDown={(e) => handleResizeKeyDown("palette", e)}
+                >
+                  <div className="studio-lane-resizer-line" />
+                </div>
+              </div>
+
+              {/* Track 8: Cast (Multi-row Character Swimlanes) */}
+              <div
+                className={`studio-lane studio-cast-lane ${isTrackCollapsed("cast") ? "collapsed" : ""}`}
+                aria-label="Cast presence track"
+                style={{ height: isTrackCollapsed("cast") ? 0 : `${laneHeights.cast}px` }}
+              >
+                {activeCastMembers.length > 0 ? (
+                  activeCastMembers.map((member, idx) => {
+                    const subrowH = laneHeights.cast / activeCastMembers.length;
+                    const color = CAST_PALETTE[idx % CAST_PALETTE.length];
+                    const intervals = memberIntervalsMap.get(member.id) ?? [];
+                    const barH = Math.max(4, Math.min(10, subrowH - 4));
+                    const barTop = Math.max(0, (subrowH - barH) / 2);
+
+                    return (
+                      <div
+                        key={`cast-subrow-${member.id}`}
+                        className="studio-cast-subrow"
+                        style={{
+                          height: `${subrowH}px`,
+                        }}
+                      >
+                        {intervals.map((item, i) => (
+                          <button
+                            key={`cast-bar-${member.id}-${i}-${item.start}`}
+                            type="button"
+                            className="studio-cast-bar"
+                            style={{
+                              left: item.start * scale,
+                              width: Math.max(4, (item.end - item.start) * scale),
+                              top: `${barTop}px`,
+                              height: `${barH}px`,
+                              backgroundColor: color,
+                            }}
+                            title={`${member.name} · Shot ${item.shot.index} (${(item.end - item.start).toFixed(2)}s)`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onShot(item.shot);
+                              onSeek(item.start);
+                            }}
+                          />
+                        ))}
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="studio-cast-empty">
+                    <span>No cast data</span>
+                  </div>
+                )}
+                <div
+                  className={`studio-lane-resizer ${resizingTrack === "cast" ? "resizing" : ""}`}
+                  role="separator"
+                  tabIndex={0}
+                  aria-orientation="horizontal"
+                  aria-label="Resize Cast lane"
+                  aria-valuenow={laneHeights.cast}
+                  aria-valuemin={MIN_STUDIO_LANE_HEIGHTS.cast}
+                  onPointerDown={(e) => handleResizePointerDown("cast", e)}
+                  onPointerMove={handleResizePointerMove}
+                  onPointerUp={handleResizePointerUp}
+                  onPointerCancel={handleResizePointerUp}
+                  onDoubleClick={(e) => handleResizeDoubleClick("cast", e)}
+                  onKeyDown={(e) => handleResizeKeyDown("cast", e)}
+                >
+                  <div className="studio-lane-resizer-line" />
+                </div>
+              </div>
+
+              {/* Track 8: Sound (5-Subrow DME Soundtrack: Dialogue, Music, Effects, Loudness, Speech) */}
+              <div
+                className={`studio-lane studio-sound-lane ${isTrackCollapsed("sound") ? "collapsed" : ""}`}
+                aria-label="Soundtrack 5-subrow DME track"
+                style={{ height: isTrackCollapsed("sound") ? 0 : `${laneHeights.sound}px` }}
+              >
+                {/* Subrow 1: Dialogue Waveform */}
+                <div
+                  className="studio-sound-stem dialogue-stem"
+                  title="Dialogue Waveform"
+                  style={{ height: `${soundSubrowH}px` }}
+                >
+                  <svg className="studio-stem-svg" width={canvasWidth} height={soundSubrowH} aria-hidden="true">
+                    {studioDmePaths.speech && (
+                      <path d={studioDmePaths.speech} fill="rgba(107, 163, 207, 0.65)" />
+                    )}
+                  </svg>
+                </div>
+
+                {/* Subrow 2: Music Waveform */}
+                <div
+                  className="studio-sound-stem music-stem"
+                  title="Music Waveform"
+                  style={{ height: `${soundSubrowH}px` }}
+                >
+                  <svg className="studio-stem-svg" width={canvasWidth} height={soundSubrowH} aria-hidden="true">
+                    {studioDmePaths.music && (
+                      <path d={studioDmePaths.music} fill="rgba(124, 163, 129, 0.65)" />
+                    )}
+                  </svg>
+                </div>
+
+                {/* Subrow 3: Effects Waveform */}
+                <div
+                  className="studio-sound-stem effects-stem"
+                  title="Effects Waveform"
+                  style={{ height: `${soundSubrowH}px` }}
+                >
+                  <svg className="studio-stem-svg" width={canvasWidth} height={soundSubrowH} aria-hidden="true">
+                    {studioDmePaths.ambience && (
+                      <path d={studioDmePaths.ambience} fill="rgba(142, 124, 195, 0.65)" />
+                    )}
+                  </svg>
+                </div>
+
+                {/* Subrow 4: Loudness Curve */}
+                <div
+                  className="studio-sound-stem loudness-stem"
+                  title="Loudness Curve"
+                  style={{ height: `${soundSubrowH}px` }}
+                >
+                  <svg className="studio-stem-svg" width={canvasWidth} height={soundSubrowH} aria-hidden="true">
+                    {studioLoudnessPath && (
+                      <path d={studioLoudnessPath} fill="none" stroke="#eae6df" strokeWidth="1.2" strokeLinecap="round" />
+                    )}
+                  </svg>
+                </div>
+
+                {/* Subrow 5: Speech Blocks */}
+                <div
+                  className="studio-sound-stem speech-blocks-stem"
+                  title="Speech Activity"
+                  style={{ height: `${soundSubrowH}px` }}
+                >
+                  {speechAnalysis && speechAnalysis.regions.map((reg, idx) => {
+                    const barH = Math.max(6, Math.min(10, soundSubrowH - 6));
+                    const barTop = (soundSubrowH - barH) / 2;
+                    return (
+                      <div
+                        key={`speech-bar-${idx}-${reg.startSeconds}`}
+                        className="studio-speech-block"
+                        style={{
+                          left: reg.startSeconds * scale,
+                          width: Math.max(3, (reg.endSeconds - reg.startSeconds) * scale),
+                          top: `${barTop}px`,
+                          height: `${barH}px`,
+                        }}
+                        title={`Speech: ${formatTimecode(reg.startSeconds, project.frameRate, project.dropFrame)} - ${formatTimecode(reg.endSeconds, project.frameRate, project.dropFrame)}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSeek(reg.startSeconds);
+                        }}
+                      />
+                    );
+                  })}
+                </div>
+
+                {/* Sound Bottom Resize Handle */}
+                <div
+                  className={`studio-lane-resizer ${resizingTrack === "sound" ? "resizing" : ""}`}
+                  role="separator"
+                  tabIndex={0}
+                  aria-orientation="horizontal"
+                  aria-label="Resize Sound lane"
+                  aria-valuenow={laneHeights.sound}
+                  aria-valuemin={MIN_STUDIO_LANE_HEIGHTS.sound}
+                  onPointerDown={(e) => handleResizePointerDown("sound", e)}
+                  onPointerMove={handleResizePointerMove}
+                  onPointerUp={handleResizePointerUp}
+                  onPointerCancel={handleResizePointerUp}
+                  onDoubleClick={(e) => handleResizeDoubleClick("sound", e)}
+                  onKeyDown={(e) => handleResizeKeyDown("sound", e)}
+                >
+                  <div className="studio-lane-resizer-line" />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* River 1: Scenes & Dramatic Arc River (when enabled) */}
+              {layers.scenes && visibleSequences.length > 0 && (
             <div className="lane-track scenes-river" aria-label="Dramatic scenes & sequences river">
               <div className="river-sticky-badge scenes-badge">
                 <span className="river-badge-icon">🎬</span>
                 <span className="river-badge-title">SCENES</span>
                 <span className="river-badge-detail mono">{visibleSequences.length}</span>
               </div>
-              {visibleSequences.map((scene, idx) => (
-                <button
-                  type="button"
-                  key={scene.id || `scene-${idx}`}
-                  className="scene-marker"
-                  title={`${scene.name}: ${(scene.endSeconds - scene.startSeconds).toFixed(1)}s`}
-                  style={{
-                    left: scene.startSeconds * scale,
-                    width: Math.max(2, (scene.endSeconds - scene.startSeconds) * scale),
-                  }}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onRangeChange({ start: scene.startSeconds, end: scene.endSeconds });
-                  }}
-                >
-                  <span className="scene-marker-text">{scene.name}</span>
-                </button>
-              ))}
+              {visibleSequences.map((scene, idx) => {
+                const isMoment = (scene.kind ?? "passage") === "moment";
+                const isSelected = selectedSequenceId === scene.id;
+                if (isMoment) {
+                  return (
+                    <button
+                      type="button"
+                      key={scene.id || `scene-${idx}`}
+                      className={`scene-marker scene-moment-marker ${isSelected ? "selected" : ""}`}
+                      title={`Moment: ${scene.name} (${formatTimecode(scene.startSeconds, project.frameRate, project.dropFrame)})`}
+                      style={{
+                        left: scene.startSeconds * scale,
+                      }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onSelectSequence?.(scene);
+                        onSeek(scene.startSeconds);
+                      }}
+                    >
+                      <span className="scene-moment-diamond">◇</span>
+                      <span className="scene-marker-text">{scene.name}</span>
+                    </button>
+                  );
+                }
+                return (
+                  <button
+                    type="button"
+                    key={scene.id || `scene-${idx}`}
+                    className={`scene-marker ${isSelected ? "selected" : ""}`}
+                    title={`${scene.name}: ${(scene.endSeconds - scene.startSeconds).toFixed(1)}s`}
+                    style={{
+                      left: scene.startSeconds * scale,
+                      width: Math.max(2, (scene.endSeconds - scene.startSeconds) * scale),
+                    }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onSelectSequence?.(scene);
+                      onRangeChange({ start: scene.startSeconds, end: scene.endSeconds });
+                    }}
+                  >
+                    <span className="scene-marker-text">{scene.name}</span>
+                  </button>
+                );
+              })}
             </div>
           )}
 
           {/* River 2: Film Shot Track (V1) */}
           <div className="shot-track" aria-label="Video shot track">
-            <div className="river-sticky-badge v1-badge">
-              <span className="river-badge-icon">🎞️</span>
-              <span className="river-badge-title">V1 FILM</span>
-              <span className="river-badge-detail mono">{project.shots.length} shots</span>
-            </div>
+            {!isStudio && (
+              <div className="river-sticky-badge v1-badge">
+                <span className="river-badge-icon">🎞️</span>
+                <span className="river-badge-title">V1 FILM</span>
+                <span className="river-badge-detail mono">{project.shots.length} shots</span>
+              </div>
+            )}
             {visibleShots.map((s) => {
               let startSec = s.startSeconds;
               let endSec = s.endSeconds;
@@ -766,13 +3136,17 @@ export default memo(function EditingMap({
               const colorGetter = (colorMappings[project.colorMode] || colorMappings.shotSize).color;
               const lumaVal = s.colorProfile?.luminance ?? 0.5;
               const lumaColor = `rgb(${Math.round(255 * lumaVal)}, ${Math.round(255 * lumaVal)}, ${Math.round(255 * lumaVal)})`;
+              const isCoveredByStory = Boolean(
+                (visibleRange && visibleRange.start !== undefined && visibleRange.end !== undefined && visibleRange.end > visibleRange.start && s.endSeconds > visibleRange.start && s.startSeconds < visibleRange.end) ||
+                (selectedSequenceId && project.sequences?.some((seq) => seq.id === selectedSequenceId && (seq.kind ?? "passage") === "passage" && s.endSeconds > seq.startSeconds && s.startSeconds < seq.endSeconds))
+              );
               return (
                 <button
                   type="button"
                   key={s.id}
                   title={`${reviewReasonLabel(reviewReasons(s))} · Shot ${s.index} · ${s.shotSize} · ${effDur.toFixed(3)}s`}
                   aria-label={`Shot ${s.index}${reviewMatch ? "" : ", outside active review filter"}`}
-                  className={`shot ${selected === s.id ? "selected" : ""} ${active === s.id ? "active" : ""} ${highlightedShotIds?.includes(s.id) ? "character-highlight" : ""} ${reviewMatch ? "review-match" : "review-dimmed"} ${squintMode ? "timeline-squint-shot" : ""}`}
+                  className={`shot ${selected === s.id ? "selected" : ""} ${active === s.id ? "active" : ""} ${highlightedShotIds?.includes(s.id) ? "character-highlight" : ""} ${reviewMatch ? "review-match" : "review-dimmed"} ${squintMode ? "timeline-squint-shot" : ""} ${isCoveredByStory ? "shot-in-story-range" : ""}`}
                   style={
                     {
                       left: startSec * scale,
@@ -825,7 +3199,7 @@ export default memo(function EditingMap({
                   className={`cut-boundary ${selectedCut === incoming.id ? "selected" : ""} ${isBeingDragged ? "dragging" : ""}`}
                   style={{ left: cutPos }}
                   onPointerDown={(event) => {
-                    if (event.button !== 0) return;
+                    if (event.button !== 0 || event.shiftKey) return;
                     event.preventDefault();
                     event.stopPropagation();
                     suppressMapClick.current = true;
@@ -873,7 +3247,7 @@ export default memo(function EditingMap({
                     if (drag.hasMoved && activeCutDrag) {
                       onRollCut?.(drag.incomingId, activeCutDrag.currentTime);
                     } else {
-                      onCut(incoming);
+                      onCut?.(incoming);
                     }
                     dragCutRef.current = null;
                     setActiveCutDrag(null);
@@ -889,7 +3263,7 @@ export default memo(function EditingMap({
                   onClick={(event) => {
                     event.stopPropagation();
                     if (!dragCutRef.current?.hasMoved) {
-                      onCut(incoming);
+                      onCut?.(incoming);
                     }
                   }}
                   role="slider"
@@ -916,11 +3290,11 @@ export default memo(function EditingMap({
                     }
                   }}
                 >
-                  <div className="cut-grip-handle">
-                    <span className="cut-bracket left">]</span>
-                    <span className="cut-indicator-line" />
-                    <span className="cut-bracket right">[</span>
-                  </div>
+                  {isBeingDragged && (
+                    <div className="cut-grip-handle">
+                      <span className="cut-indicator-line" />
+                    </div>
+                  )}
 
                   {isBeingDragged && activeCutDrag && (
                     <div className="cut-rolling-badge">
@@ -942,7 +3316,7 @@ export default memo(function EditingMap({
           </div>
 
           {/* River 3: Pacing & Cutting Rhythm River (when enabled) */}
-          {layers.pacing && project.shots.length > 0 && (
+          {!isStudio && layers.pacing && project.shots.length > 0 && (
             <div className="lane-track pacing-river" aria-label="Pacing and cutting rhythm river">
               <div className="river-sticky-badge pacing-badge">
                 <span className="river-badge-icon">🌊</span>
@@ -995,7 +3369,7 @@ export default memo(function EditingMap({
           )}
 
           {/* River 4: Framing Scale Elevation River (when enabled) */}
-          {layers.framingArc && project.shots.length > 0 && (
+          {!isStudio && layers.framingArc && project.shots.length > 0 && (
             <div className="lane-track framing-arc-river" aria-label="Framing scale elevation river">
               <div className="river-sticky-badge framing-badge">
                 <span className="river-badge-icon">📐</span>
@@ -1042,7 +3416,7 @@ export default memo(function EditingMap({
           )}
 
           {/* River 5: Motion Energy River (when enabled) */}
-          {layers.motion && project.shots.length > 0 && (
+          {!isStudio && layers.motion && project.shots.length > 0 && (
             <div className="lane-track motion-river" aria-label="Motion energy river">
               <div className="river-sticky-badge motion-badge">
                 <span className="river-badge-icon">⚡</span>
@@ -1059,9 +3433,9 @@ export default memo(function EditingMap({
 
                   const hasProfile = Boolean(profile);
                   const totalEnergy = profile?.totalKineticEnergy ?? Math.max(12, Math.min(80, Math.round(65 - Math.min(s.duration, 12) * 4)));
-                  const camEnergy = profile?.cameraEnergy ?? Math.round(totalEnergy * 0.45);
-                  const subEnergy = profile?.subjectEnergy ?? Math.round(totalEnergy * 0.55);
                   const barH = Math.max(6, (totalEnergy / 100) * 36);
+                  const tier = classifyKineticVelocity(totalEnergy);
+                  const momentum = profile?.kineticDelta !== undefined ? classifyMomentumTransition(profile.kineticDelta) : null;
 
                   return (
                     <button
@@ -1073,15 +3447,26 @@ export default memo(function EditingMap({
                         width: shotW,
                         height: barH,
                       }}
-                      title={`Shot ${s.index}: ${hasProfile ? `${s.cameraMovement || "Motion"}: ${totalEnergy}% (Cam: ${camEnergy}%, Sub: ${subEnergy}%)` : `Est. dynamic baseline: ~${totalEnergy}%`}`}
+                      title={
+                        hasProfile
+                          ? `Shot ${s.index}: ${totalEnergy}% Flow (${tier})${
+                              momentum && momentum.type !== "initial" ? ` · ${momentum.label}` : ""
+                            }`
+                          : `Shot ${s.index}: Est. dynamic baseline ~${totalEnergy}%`
+                      }
                       onClick={(e) => {
                         e.stopPropagation();
                         onShot(s);
                         onSeek(s.startSeconds);
                       }}
                     >
-                      <div className="motion-layer subject" style={{ height: `${(subEnergy / (totalEnergy || 1)) * 100}%` }} />
-                      <div className="motion-layer camera" style={{ height: `${(camEnergy / (totalEnergy || 1)) * 100}%` }} />
+                      <div className="motion-layer flow-fill" style={{ height: "100%" }} />
+                      {profile?.kineticDelta !== undefined && Math.abs(profile.kineticDelta) >= 25 && (
+                        <div
+                          className={`motion-momentum-indicator ${profile.kineticDelta > 0 ? "surge" : "drop"}`}
+                          title={`Momentum: ${profile.kineticDelta > 0 ? "+" : ""}${profile.kineticDelta}%`}
+                        />
+                      )}
                     </button>
                   );
                 })}
@@ -1090,7 +3475,7 @@ export default memo(function EditingMap({
           )}
 
           {/* River 6: Cast & Character Presence River (when enabled) */}
-          {layers.characters && project.cast && project.cast.length > 0 && (
+          {!isStudio && layers.characters && project.cast && project.cast.length > 0 && (
             <div className="lane-track cast-presence-river" aria-label="Cast presence river">
               <div className="river-sticky-badge cast-badge">
                 <span className="river-badge-icon">👥</span>
@@ -1128,10 +3513,12 @@ export default memo(function EditingMap({
                       const memberIntervals = ca.intervals?.filter((i) => i.memberId === member.id) ?? [];
                       for (const mi of memberIntervals) {
                         const isConfirmed = mi.reviewStatus === "Confirmed" || ca.reviewStatus === "Confirmed";
+                        const start = mi.endSeconds > mi.startSeconds + 0.05 ? mi.startSeconds : s.startSeconds;
+                        const end = mi.endSeconds > mi.startSeconds + 0.05 ? mi.endSeconds : s.endSeconds;
                         intervals.push({
                           id: `${s.id}-${member.id}-${mi.startSeconds}`,
-                          start: mi.startSeconds,
-                          end: mi.endSeconds,
+                          start,
+                          end,
                           type: isConfirmed ? "verified" : "suggested",
                           shot: s,
                           label: `Shot ${s.index} (${isConfirmed ? "Confirmed" : "Suggested"})`,
@@ -1146,7 +3533,7 @@ export default memo(function EditingMap({
                     (item) => time >= item.start && time <= item.end
                   );
 
-                  const avatarImg = member.references?.[0]?.image;
+                  const avatarImg = getCastAvatarSrc(member);
 
                   return (
                     <div key={`cast-lane-${member.id}`} className={`cast-swimlane-row ${isCurrentActive ? "active" : ""}`}>
@@ -1191,7 +3578,7 @@ export default memo(function EditingMap({
           )}
 
           {/* River 7: Soundtrack & Sonic Rivers (when enabled) */}
-          {layers.audio && (
+          {!isStudio && layers.audio && (
             <div
               className={`audio-track sonic-river ${audioMode === "dme" && project.dmeWaveforms ? "dme-mode" : audioMode === "loudness" && activeLoudness ? "loudness-mode" : ""}`}
               aria-label="Soundtrack and sonic rivers"
@@ -1459,16 +3846,43 @@ export default memo(function EditingMap({
               </div>
             </div>
           )}
+        </>
+      )}
 
           {/* Selected Time Range overlay */}
-          {visibleRange && (
+          {visibleRange && visibleRange.start !== undefined && visibleRange.end !== undefined && visibleRange.end > visibleRange.start && (
             <div
-              className="map-range"
+              className={`map-range ${isStudio ? "studio-range-overlay" : ""}`}
               style={{
                 left: visibleRange.start * scale,
                 width: Math.max(2, (visibleRange.end - visibleRange.start) * scale),
               }}
-            />
+            >
+              {isStudio && rangeInfo && (
+                <div className="studio-range-card" onClick={(e) => e.stopPropagation()}>
+                  <div className="studio-range-card-main">
+                    <span className="studio-range-title">{rangeInfo.title}</span>
+                    <span className="studio-range-meta">
+                      {formatTimecode(rangeInfo.start, project.frameRate, project.dropFrame).slice(3, 8)} - {formatTimecode(rangeInfo.end, project.frameRate, project.dropFrame).slice(3, 8)} · {rangeInfo.shotCount} shots · {rangeInfo.descriptor}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="studio-range-compare-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (visibleRange.start !== undefined && visibleRange.end !== undefined) {
+                        onRangeChange({ start: visibleRange.start, end: visibleRange.end });
+                      }
+                    }}
+                    title="Compare sequence rhythm"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="18" rx="1"/><rect x="14" y="3" width="7" height="18" rx="1"/></svg>
+                    <span>Compare</span>
+                  </button>
+                </div>
+              )}
+            </div>
           )}
 
           {!project.shots.length && (
@@ -1477,18 +3891,9 @@ export default memo(function EditingMap({
             </div>
           )}
 
-          {/* Magnetic Snap Guide Line */}
-          {snappedGuideTime !== null && (
-            <div
-              className="snap-guide-line"
-              style={{ left: snappedGuideTime * scale }}
-              title={`Snapped to cut at ${formatTimecode(snappedGuideTime, project.frameRate, project.dropFrame)}`}
-            />
-          )}
-
           {/* Playhead */}
           <div
-            className={`playhead ${snappedGuideTime !== null ? "snapped" : ""}`}
+            className="playhead"
             role="slider"
             tabIndex={0}
             aria-label="Timeline playhead"
@@ -1521,16 +3926,13 @@ export default memo(function EditingMap({
               if (!dragging.current) return;
               scrubAt(e.clientX);
               dragging.current = false;
-              if (snappedGuideTime !== null) setSnappedGuideTime(null);
               e.currentTarget.releasePointerCapture(e.pointerId);
             }}
             onPointerCancel={() => {
               dragging.current = false;
-              if (snappedGuideTime !== null) setSnappedGuideTime(null);
             }}
             onLostPointerCapture={() => {
               dragging.current = false;
-              if (snappedGuideTime !== null) setSnappedGuideTime(null);
             }}
             onKeyDown={(e) => {
               const delta = 1 / actualRate(project.frameRate);
@@ -1555,9 +3957,10 @@ export default memo(function EditingMap({
           </div>
         </div>
       </div>
+    </div>
 
-      {/* Whole-Film Overview Minimap (Prominent in Map Focus and Studio) */}
-      {showMinimap && project.shots.length > 0 && (
+      {/* Whole-Film Overview Minimap (Prominent in Map Focus) */}
+      {!isStudio && showMinimap && project.shots.length > 0 && (
         <div className={`minimap-section ${squintMode ? "minimap-squint-active" : ""}`}>
           <div className="minimap-header">
             <span className="eyebrow">FILM OVERVIEW (ENTIRE TIMELINE)</span>
@@ -1621,89 +4024,94 @@ export default memo(function EditingMap({
         </div>
       )}
 
-      {/* Timeline Footer: Zoom Controls & Legend */}
-      <div className="timeline-footer">
-        <div className="timeline-zoom-controls">
-          <button
-            type="button"
-            className="zoom-btn"
-            onClick={() => changeZoom(1 / 1.5)}
-            aria-label="Zoom out"
-            title="Zoom out (Q)"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-              <line x1="8" y1="11" x2="14" y2="11"></line>
-            </svg>
-          </button>
-          <input
-            type="range"
-            className="zoom-slider"
-            min="0"
-            max="6"
-            step="0.05"
-            value={Math.log2(zoom)}
-            onChange={(e) => setZoom(Math.pow(2, Number(e.target.value)))}
-            aria-label="Timeline zoom slider"
-            title={`Timeline Zoom: ${zoom.toFixed(1)}×`}
-          />
-          <button
-            type="button"
-            className="zoom-btn"
-            onClick={() => changeZoom(1.5)}
-            aria-label="Zoom in"
-            title="Zoom in (W)"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-              <line x1="11" y1="8" x2="11" y2="14"></line>
-              <line x1="8" y1="11" x2="14" y2="11"></line>
-            </svg>
-          </button>
-          <span className="mono zoom-label">{zoom.toFixed(1)}×</span>
-          <div className="zoom-shortcuts" title="Keyboard shortcuts: Q to zoom out, W to zoom in, F to fit">
-            <span className="shortcut-pill"><kbd>Q</kbd> Out</span>
-            <span className="shortcut-pill"><kbd>W</kbd> In</span>
-            <span className="shortcut-pill"><kbd>F</kbd> Fit</span>
+      {/* Timeline Footer: Zoom Controls & Legend (non-Studio only; Studio has right-aligned navigation in toolbar) */}
+      {!isStudio && (
+        <div className="timeline-footer">
+          <div className="timeline-zoom-controls">
+            <button
+              type="button"
+              className="zoom-btn"
+              onClick={() => changeZoom(1 / 1.5)}
+              aria-label="Zoom out"
+              title="Zoom out (Q)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                <line x1="8" y1="11" x2="14" y2="11"></line>
+              </svg>
+            </button>
+            <input
+              type="range"
+              className="zoom-slider"
+              min="0"
+              max="6"
+              step="0.05"
+              value={Math.log2(zoom)}
+              onChange={(e) => setZoom(Math.pow(2, Number(e.target.value)))}
+              aria-label="Timeline zoom slider"
+              title={`Timeline Zoom: ${zoom.toFixed(1)}×`}
+            />
+            <button
+              type="button"
+              className="zoom-btn"
+              onClick={() => changeZoom(1.5)}
+              aria-label="Zoom in"
+              title="Zoom in (W)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                <line x1="11" y1="8" x2="11" y2="14"></line>
+                <line x1="8" y1="11" x2="14" y2="11"></line>
+              </svg>
+            </button>
+            <span className="mono zoom-label">{zoom.toFixed(1)}×</span>
+            <div className="zoom-shortcuts" title="Keyboard shortcuts: Q to zoom out, W to zoom in, F to fit">
+              <span className="shortcut-pill"><kbd>Q</kbd> Out</span>
+              <span className="shortcut-pill"><kbd>W</kbd> In</span>
+              <span className="shortcut-pill"><kbd>F</kbd> Fit</span>
+            </div>
+            <button
+              type="button"
+              className="zoom-fit-btn"
+              onClick={() => {
+                setZoom(1);
+                if (viewport.current) viewport.current.scrollLeft = 0;
+              }}
+              aria-label="Fit film"
+              title="Fit timeline to view full film (F)"
+            >
+              Fit
+            </button>
           </div>
-          <button
-            type="button"
-            className="zoom-fit-btn"
-            onClick={() => {
-              setZoom(1);
-              if (viewport.current) viewport.current.scrollLeft = 0;
-            }}
-            aria-label="Fit film"
-            title="Fit timeline to view full film (F)"
-          >
-            Fit
-          </button>
-        </div>
 
-        <div className="legend">
-          <span className="legend-hint">
-            Click shot to inspect · Drag cut to roll edit · C to split shot · S to snap · Shift-drag for sequence
-          </span>
-          {Object.entries(sizeColors)
-            .filter(([name]) =>
-              [
-                "Wide",
-                "Full",
-                "Medium",
-                "Close",
-                "Extreme close",
-              ].includes(name),
-            )
-            .map(([name, color]) => (
-              <span key={name}>
-                <i style={{ background: color }} />
-                {name}
-              </span>
-            ))}
+          <div className="legend">
+            <span className="legend-hint">
+              Click shot to inspect · Drag cut to roll edit · C to split shot · S to snap · Shift-drag for sequence
+            </span>
+            {Object.entries(sizeColors)
+              .filter(([name]) =>
+                [
+                  "Extreme wide",
+                  "Wide",
+                  "Full",
+                  "American",
+                  "Medium",
+                  "Medium close-up",
+                  "Close",
+                  "Extreme close",
+                ].includes(name),
+              )
+              .map(([name, color]) => (
+                <span key={name}>
+                  <i style={{ background: color }} />
+                  {name}
+                </span>
+              ))}
+          </div>
         </div>
-      </div>
+      )}
     </section>
   );
 });

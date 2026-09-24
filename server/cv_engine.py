@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from PIL import Image
+from cinemaclip_verification import verify_loaded_cinemaclip
 from shot_engine import ShotBoundaryDetector
 
 logger = logging.getLogger("editmap.cv")
@@ -66,7 +67,9 @@ COCO_OBJECTS = {
     "mouse", "remote", "keyboard", "cell phone"
 }
 
-ACTIVE_FRAMING_SIZES = ("Wide", "Full", "Medium", "Close", "Extreme close")
+ACTIVE_FRAMING_SIZES = (
+    "Extreme wide", "Wide", "Full", "American", "Medium", "Medium close-up", "Close", "Extreme close",
+)
 
 
 class CinemaShotScaleClassifier:
@@ -75,12 +78,12 @@ class CinemaShotScaleClassifier:
     model_id = "OZU-Technology/CinemaCLIP"
     model_name = "CinemaCLIP-1.0.0:shot.framing"
     _LABEL_TO_SIZE = {
-        "extreme-wide": "Wide",
+        "extreme-wide": "Extreme wide",
         "wide": "Wide",
         "full": "Full",
-        "medium-wide": "Medium",
+        "medium-wide": "American",
         "medium": "Medium",
-        "medium-closeup": "Medium",
+        "medium-closeup": "Medium close-up",
         "closeup": "Close",
         "extreme-closeup-face": "Extreme close",
         "extreme-closeup-face-macro-eyes-dual": "Extreme close",
@@ -101,11 +104,12 @@ class CinemaShotScaleClassifier:
                 import torch
                 from cinemaclip import CinemaCLIP
 
-                model = CinemaCLIP.from_pretrained(self.model_id).eval()
+                model = CinemaCLIP.from_pretrained(self.model_id, local_files_only=True).eval()
+                verification = verify_loaded_cinemaclip(model)
                 if torch.backends.mps.is_available():
                     model = model.to("mps")
                 self._model = model
-                logger.info("Loaded %s", self.model_name)
+                logger.info("Loaded %s with verified checkpoint %s", self.model_name, verification["checkpoint_sha256"])
             except Exception as error:
                 self.last_error = str(error)
                 raise ModelUnavailableError(
@@ -478,7 +482,7 @@ class CharacterRecognizer:
         try:
             from insightface.app import FaceAnalysis
             app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
-            app.prepare(ctx_id=0, det_size=(640, 640))
+            app.prepare(ctx_id=0, det_size=(640, 640), det_thresh=0.50)
             self._engine = app
             self._engine_type = "insightface"
             logger.info("Initialized InsightFace engine (512-dim ArcFace)")
@@ -630,11 +634,47 @@ class CharacterRecognizer:
                     continue
                 norm_embedding = (embedding / norm).tolist()
                 score = float(face.det_score) if hasattr(face, "det_score") else 1.0
+                if score < 0.65:
+                    continue
                 bbox = [int(v) for v in face.bbox]
 
                 x1, y1, x2, y2 = bbox
                 bw = max(1, x2 - x1)
                 bh = max(1, y2 - y1)
+                if bw < 36 or bh < 36:
+                    continue
+
+                # 1. Pose filter: Ignore backs of heads and severe downward looking angles (scalp/floor)
+                if hasattr(face, "pose") and face.pose is not None:
+                    try:
+                        pitch, yaw, roll = face.pose
+                        if abs(float(yaw)) > 50.0:
+                            continue
+                        if float(pitch) > 30.0 or float(pitch) < -30.0:
+                            continue
+                    except Exception:
+                        pass
+
+                # 2. Keypoints / anatomical plausibility check (weed out distorted non-faces like hands/hair/background)
+                if hasattr(face, "kps") and face.kps is not None:
+                    try:
+                        kps = face.kps
+                        eye_dist = np.linalg.norm(kps[0] - kps[1])
+                        if eye_dist < (bw * 0.18):
+                            continue
+                        eye_mid = (kps[0] + kps[1]) / 2.0
+                        mouth_mid = (kps[3] + kps[4]) / 2.0
+                        face_vec = mouth_mid - eye_mid
+                        face_height = np.linalg.norm(face_vec)
+                        if face_height < (bh * 0.22):
+                            continue
+                        # Nose must lie between eyes and mouth along face vertical axis
+                        nose_proj = float(np.dot(kps[2] - eye_mid, face_vec) / max(1e-6, face_height ** 2))
+                        if nose_proj < 0.12 or nose_proj > 0.88:
+                            continue
+                    except Exception:
+                        pass
+
                 cx = (x1 + x2) // 2
                 cy = (y1 + y2) // 2
                 crop_size = int(max(bw, bh) * 1.5)
@@ -645,6 +685,19 @@ class CharacterRecognizer:
                 crop_y2 = min(h, cy + crop_size // 2)
 
                 face_crop = img.crop((crop_x1, crop_y1, crop_x2, crop_y2))
+
+                # 3. Motion blur check: Laplacian variance on face region
+                blur_var = 100.0
+                try:
+                    import cv2
+                    crop_np = np.array(face_crop)
+                    gray = cv2.cvtColor(crop_np, cv2.COLOR_RGB2GRAY) if crop_np.ndim == 3 else crop_np
+                    blur_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+                    if blur_var < 50.0:
+                        continue
+                except Exception:
+                    pass
+
                 face_crop.thumbnail((160, 160))
                 crop_b64 = encode_image_to_base64(face_crop)
 
@@ -654,6 +707,7 @@ class CharacterRecognizer:
                     "score": score,
                     "crop": crop_b64,
                     "area": bw * bh,
+                    "sharpness": blur_var,
                 })
 
         elif self._engine_type == "face_recognition":
@@ -668,6 +722,8 @@ class CharacterRecognizer:
                     bbox = [int(left), int(top), int(right), int(bottom)]
                     bw = max(1, right - left)
                     bh = max(1, bottom - top)
+                    if bw < 36 or bh < 36:
+                        continue
                     cx = (left + right) // 2
                     cy = (top + bottom) // 2
                     crop_size = int(max(bw, bh) * 1.5)
@@ -678,6 +734,18 @@ class CharacterRecognizer:
                     crop_y2 = min(h, cy + crop_size // 2)
 
                     face_crop = img.crop((crop_x1, crop_y1, crop_x2, crop_y2))
+
+                    blur_var = 100.0
+                    try:
+                        import cv2
+                        crop_np = np.array(face_crop)
+                        gray = cv2.cvtColor(crop_np, cv2.COLOR_RGB2GRAY) if crop_np.ndim == 3 else crop_np
+                        blur_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+                        if blur_var < 50.0:
+                            continue
+                    except Exception:
+                        pass
+
                     face_crop.thumbnail((160, 160))
                     crop_b64 = encode_image_to_base64(face_crop)
 
@@ -687,9 +755,63 @@ class CharacterRecognizer:
                         "score": 1.0,
                         "crop": crop_b64,
                         "area": bw * bh,
+                        "sharpness": blur_var,
                     })
 
         return faces_data
+
+    @staticmethod
+    def _bbox_iou(first: List[int], second: List[int]) -> float:
+        ax1, ay1, ax2, ay2 = first
+        bx1, by1, bx2, by2 = second
+        left, top = max(ax1, bx1), max(ay1, by1)
+        right, bottom = min(ax2, bx2), min(ay2, by2)
+        overlap = max(0, right - left) * max(0, bottom - top)
+        if overlap <= 0:
+            return 0.0
+        area_a = max(1, ax2 - ax1) * max(1, ay2 - ay1)
+        area_b = max(1, bx2 - bx1) * max(1, by2 - by1)
+        return overlap / max(1, area_a + area_b - overlap)
+
+    def track_faces_across_frames(self, frames: List[Tuple[Image.Image, float]]) -> List[Dict[str, Any]]:
+        """Track face evidence within one shot, without making a cast identity claim."""
+        tracks: List[Dict[str, Any]] = []
+        tracked_faces: List[Dict[str, Any]] = []
+        next_track = 1
+        for image, time in frames:
+            detections = self.extract_faces_with_crops(image)
+            assigned: set[int] = set()
+            for face in sorted(detections, key=lambda item: item.get("score", 0), reverse=True):
+                embedding = np.asarray(face["embedding"], dtype=np.float32)
+                best_index, best_score = None, -1.0
+                for index, track in enumerate(tracks):
+                    if index in assigned or track["embedding"].shape != embedding.shape:
+                        continue
+                    similarity = float(np.dot(embedding, track["embedding"]))
+                    overlap = self._bbox_iou(face["bbox"], track["bbox"])
+                    # Fast movement requires a strong embedding match; lower
+                    # matches also need screen-position continuity.
+                    if similarity < 0.42 or (similarity < 0.62 and overlap < 0.04):
+                        continue
+                    score = similarity * 0.85 + overlap * 0.15
+                    if score > best_score:
+                        best_index, best_score = index, score
+                if best_index is None:
+                    track = {"id": f"track-{next_track}", "embedding": embedding, "bbox": face["bbox"]}
+                    tracks.append(track)
+                    # A second face in this same sampled frame cannot be the
+                    # same track, including one we just created above.
+                    assigned.add(len(tracks) - 1)
+                    next_track += 1
+                else:
+                    track = tracks[best_index]
+                    assigned.add(best_index)
+                    blended = track["embedding"] * 0.6 + embedding * 0.4
+                    norm = np.linalg.norm(blended)
+                    track["embedding"] = blended / norm if norm > 0 else embedding
+                    track["bbox"] = face["bbox"]
+                tracked_faces.append({**face, "time": time, "trackId": track["id"]})
+        return tracked_faces
 
     def cluster_faces(
         self,
@@ -718,16 +840,16 @@ class CharacterRecognizer:
         # which was fragmenting one cast member into several "Character N"
         # entries.  Keep an explicitly supplied threshold authoritative, but
         # use conservative engine-aware defaults for automatic discovery.
+        embedding_dimensions = len(faces_data[0].get("embedding", []))
         if similarity_threshold is not None:
             thresh = similarity_threshold
         else:
-            embedding_dimensions = len(faces_data[0].get("embedding", []))
             thresh = 0.38 if embedding_dimensions == 512 else 0.72
 
-        # Sort faces by quality (area * score) descending so clearest, biggest faces establish initial cluster anchors
+        # Sort faces by quality (area * score * sharpness) descending so clearest, sharpest faces establish initial cluster anchors
         sorted_faces = sorted(
             faces_data,
-            key=lambda f: f.get("score", 1.0) * np.sqrt(f.get("area", 100)),
+            key=lambda f: f.get("score", 1.0) * np.sqrt(f.get("area", 100)) * np.log1p(f.get("sharpness", 50.0)),
             reverse=True,
         )
 
@@ -746,11 +868,15 @@ class CharacterRecognizer:
 
             for c in clusters:
                 centroid = c["centroid"]
-                sim = float(np.dot(emb, centroid))
+                sim_centroid = float(np.dot(emb, centroid))
+                member_sims = [float(np.dot(emb, np.asarray(f["embedding"], dtype=np.float32))) for f in c["faces"]]
+                sim_best_member = max(member_sims) if member_sims else sim_centroid
+                sim = max(sim_centroid, sim_best_member * 0.95)
                 if sim > best_sim:
                     best_sim = sim
                     best_cluster = c
 
+            face_qual = face.get("score", 1.0) * np.sqrt(face.get("area", 100)) * np.log1p(face.get("sharpness", 50.0))
             if best_cluster is not None and best_sim >= thresh:
                 best_cluster["faces"].append(face)
                 # Recompute centroid
@@ -761,14 +887,12 @@ class CharacterRecognizer:
                     best_cluster["centroid"] = mean_emb / norm_mean
 
                 # Update best avatar if this face is higher quality
-                face_qual = face.get("score", 1.0) * np.sqrt(face.get("area", 100))
                 if face_qual > best_cluster["best_quality"]:
                     best_cluster["best_quality"] = face_qual
                     best_cluster["avatar"] = face.get("crop", "")
                     best_cluster["shotId"] = face.get("shotId", "")
                     best_cluster["time"] = face.get("time", 0.0)
             else:
-                face_qual = face.get("score", 1.0) * np.sqrt(face.get("area", 100))
                 clusters.append({
                     "centroid": emb,
                     "faces": [face],
@@ -778,21 +902,42 @@ class CharacterRecognizer:
                     "time": face.get("time", 0.0),
                 })
 
-        # Separate clusters that meet min_appearances
-        valid_clusters = []
-        unassigned_count = 0
-        for c in clusters:
-            unique_shots = set(f.get("shotId", "") for f in c["faces"] if f.get("shotId"))
-            if len(unique_shots) >= min_appearances:
-                valid_clusters.append(c)
-            else:
-                unassigned_count += len(c["faces"])
+        # In auto-discovery mode, merge secondary clusters that have strong exemplar continuity with a primary cluster
+        if similarity_threshold is None:
+            merged = True
+            while merged:
+                merged = False
+                for i in range(len(clusters)):
+                    for j in range(i + 1, len(clusters)):
+                        c1, c2 = clusters[i], clusters[j]
+                        sim_centroids = float(np.dot(c1["centroid"], c2["centroid"]))
+                        if sim_centroids >= thresh:
+                            should_merge = True
+                        else:
+                            cross_sims = [
+                                float(np.dot(np.asarray(f1["embedding"], dtype=np.float32), np.asarray(f2["embedding"], dtype=np.float32)))
+                                for f1 in c1["faces"] for f2 in c2["faces"]
+                            ]
+                            max_cross = max(cross_sims) if cross_sims else 0.0
+                            should_merge = max_cross >= max(0.38, thresh)
 
-        # Sort characters by number of distinct shot appearances, then total face instances
-        valid_clusters.sort(
-            key=lambda c: (len(set(f.get("shotId", "") for f in c["faces"] if f.get("shotId"))), len(c["faces"])),
-            reverse=True,
-        )
+                        if should_merge:
+                            c1["faces"].extend(c2["faces"])
+                            all_embs = [np.asarray(f["embedding"], dtype=np.float32) for f in c1["faces"]]
+                            mean_emb = np.mean(all_embs, axis=0)
+                            norm_mean = np.linalg.norm(mean_emb)
+                            if norm_mean > 0:
+                                c1["centroid"] = mean_emb / norm_mean
+                            if c2["best_quality"] > c1["best_quality"]:
+                                c1["best_quality"] = c2["best_quality"]
+                                c1["avatar"] = c2["avatar"]
+                                c1["shotId"] = c2["shotId"]
+                                c1["time"] = c2["time"]
+                            clusters.pop(j)
+                            merged = True
+                            break
+                    if merged:
+                        break
 
         existing_cast = existing_cast or []
         reference_embeddings = {}
@@ -802,6 +947,47 @@ class CharacterRecognizer:
                 refs.extend(self._get_reference_embeddings(ref["id"], ref["image"]))
             if refs:
                 reference_embeddings[member["id"]] = refs
+
+        match_cutoff = self.similarity_threshold if embedding_dimensions == 512 else 0.60
+
+        # Separate clusters that meet min_appearances or match confirmed cast
+        valid_clusters = []
+        unassigned_count = 0
+        for c in clusters:
+            unique_shots = set(f.get("shotId", "") for f in c["faces"] if f.get("shotId"))
+            best_score = max((f.get("score", 0) for f in c["faces"]), default=0)
+            total_faces = len(c["faces"])
+
+            # 1. Matches a confirmed existing cast member
+            matches_existing = False
+            for member in existing_cast:
+                for emb in reference_embeddings.get(member["id"], []):
+                    if emb.shape == c["centroid"].shape and float(np.dot(c["centroid"], emb)) >= match_cutoff:
+                        matches_existing = True
+                        break
+                if matches_existing:
+                    break
+
+            # 2. Or meets discovery recurrence requirements
+            if matches_existing:
+                valid_clusters.append(c)
+            elif min_appearances > 1:
+                if len(unique_shots) >= min_appearances or total_faces >= (min_appearances * 2):
+                    valid_clusters.append(c)
+                else:
+                    unassigned_count += total_faces
+            else:
+                if len(unique_shots) >= 1 and best_score >= 0.60:
+                    valid_clusters.append(c)
+                else:
+                    unassigned_count += total_faces
+
+        # Sort characters by number of distinct shot appearances, then total face instances
+        valid_clusters.sort(
+            key=lambda c: (len(set(f.get("shotId", "") for f in c["faces"] if f.get("shotId"))), len(c["faces"])),
+            reverse=True,
+        )
+
         characters = []
         used_ids = set()
         for idx, c in enumerate(valid_clusters, start=1):
@@ -813,7 +999,7 @@ class CharacterRecognizer:
                 if scores: matches.append((max(scores), member))
             matches.sort(key=lambda item: item[0], reverse=True)
             # Ambiguous clusters remain new suggestions; never reassign a confirmed identity.
-            if matches and matches[0][0] >= .60 and (len(matches) == 1 or matches[0][0] - matches[1][0] >= .08):
+            if matches and matches[0][0] >= match_cutoff and (len(matches) == 1 or matches[0][0] - matches[1][0] >= .08):
                 member = matches[0][1]
                 if member["id"] not in used_ids:
                     char_id, name = member["id"], member["name"]
@@ -1372,14 +1558,21 @@ class MotionAnalyzer:
                 outlier_motion += residual
             outlier_motion /= outlier_count
 
-        subject_energy = min(100, int(round(outlier_ratio * 40 + outlier_motion * 18)))
-        total_kinetic_energy = min(100, int(round(camera_energy * 0.55 + subject_energy * 0.45)))
+        # Direct visual momentum across all tracked features
+        displacements = np.linalg.norm(good_b - good_a, axis=1)
+        mean_disp = float(np.mean(displacements)) if len(displacements) > 0 else 0.0
+        p85_disp = float(np.percentile(displacements, 85)) if len(displacements) > 0 else 0.0
+        aggregate_kinetic = min(100, int(round(mean_disp * 18 + p85_disp * 12)))
 
-        if camera_energy < 8:
+        subject_energy = min(100, int(round(outlier_ratio * 40 + outlier_motion * 18)))
+        decomposed_energy = min(100, int(round(camera_energy * 0.55 + subject_energy * 0.45)))
+        total_kinetic_energy = min(100, max(aggregate_kinetic, decomposed_energy))
+
+        if camera_energy < 8 and total_kinetic_energy < 12:
             camera_movement = "Static"
         elif scale_delta > 0.035:
             camera_movement = "Zoom"
-        elif camera_energy > 48:
+        elif total_kinetic_energy > 50:
             camera_movement = "Dynamic / Action"
         elif abs(dx) > 1.8 * max(0.4, abs(dy)):
             camera_movement = "Pan"

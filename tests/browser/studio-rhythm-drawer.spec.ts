@@ -33,8 +33,9 @@ test("Studio Rhythm drawer design, interactions, seeking, tabs, and layout prese
   const monitorInitialBox = await monitor.boundingBox();
   expect(monitorInitialBox).not.toBeNull();
 
-  const rhythmRibbon = page.locator(".studio-rhythm-ribbon");
-  await expect(rhythmRibbon).toBeVisible();
+  await expect(page.locator(".studio-rhythm-ribbon")).toHaveCount(0);
+  const shotTrack = page.locator(".shot-track");
+  await expect(shotTrack).toBeVisible();
 
   // 3. Open Rhythm drawer via Rhythm rail button
   const rhythmRailBtn = page.locator('.studio-rail-btn[aria-label="Rhythm"]');
@@ -49,14 +50,15 @@ test("Studio Rhythm drawer design, interactions, seeking, tabs, and layout prese
   expect(drawerBox).not.toBeNull();
   expect(drawerBox!.width).toBeGreaterThanOrEqual(460);
   expect(drawerBox!.width).toBeLessThanOrEqual(520);
-  const railBox = await toolRail.boundingBox(); expect(drawerBox!.x).toBeCloseTo(railBox!.x + railBox!.width, 1); // Anchored immediately right of 58px rail
+  const railBox = await toolRail.boundingBox();
+  expect(drawerBox!.x).toBeCloseTo(railBox!.x, 1);
 
-  // Monitor has not shrunk or reflowed
+  // Monitor resizes cleanly when in-flow drawer opens
   const monitorBoxWhileOpen = await monitor.boundingBox();
-  expect(monitorBoxWhileOpen!.width).toBeCloseTo(monitorInitialBox!.width, 5);
+  expect(monitorBoxWhileOpen!.width).toBeLessThanOrEqual(monitorInitialBox!.width);
 
-  // Ribbon below monitor remains visible
-  await expect(rhythmRibbon).toBeVisible();
+  // Timeline below monitor remains visible
+  await expect(shotTrack).toBeVisible();
 
   // 4. Verify Drawer Header and Title
   const drawerTitle = page.locator(".rhythm-drawer-title");
@@ -68,20 +70,15 @@ test("Studio Rhythm drawer design, interactions, seeking, tabs, and layout prese
   await closeBtn.click();
   await expect(drawer).not.toBeVisible();
 
-  // 6. Re-open via Rhythm rail button, test close via Escape key
-  await rhythmRailBtn.click();
+  // 6. Re-open via collapse button, test close via Escape key
+  await page.locator(".resize-handle-left .resize-collapse-btn").click();
   await expect(drawer).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(drawer).not.toBeVisible();
 
-  // 7. Re-open and test close via clicking Rhythm rail button again
-  await rhythmRailBtn.click();
+  // 7. Re-open for chart & subview tests
+  await page.locator(".resize-handle-left .resize-collapse-btn").click();
   await expect(drawer).toBeVisible();
-  await rhythmRailBtn.click();
-  await expect(drawer).not.toBeVisible();
-
-  // Re-open for chart & subview tests
-  await rhythmRailBtn.click();
   await expect(drawer).toBeVisible();
 
   // 8. Shot duration subview: Default view
@@ -119,7 +116,7 @@ test("Studio Rhythm drawer design, interactions, seeking, tabs, and layout prese
   await expect(shot2Bar).toHaveClass(/chosen/);
 
   // Video sought to shot 2 (start time ~ 1.0s)
-  await expect.poll(() => page.locator("video").evaluate((v: HTMLVideoElement) => v.currentTime)).toBeCloseTo(1, 1);
+  await expect.poll(() => page.locator(".monitor video").evaluate((v: HTMLVideoElement) => v.currentTime)).toBeCloseTo(1, 1);
 
   // Selected shot detail footer card shows shot 2 info
   const detailCard = page.locator(".rhythm-selected-shot-card");
@@ -127,25 +124,30 @@ test("Studio Rhythm drawer design, interactions, seeking, tabs, and layout prese
   await expect(detailCard).toContainText("Shot 002");
 
   // Inspector also reflects Shot 002
+  await page.getByRole("button", { name: "Inspect Shot" }).click();
   await expect(page.locator(".shot-inspector-panel")).toContainText("Shot 002");
+  await page.locator(".drawer-close-btn").click();
 
   // 10. Subtabs navigation and state preservation
   const subtabs = [
     { name: "Local pacing", checkSelector: ".pacing" },
+    { name: "Compare", checkSelector: ".comparison-view" },
     { name: "Audiovisual", checkSelector: ".audiovisual-rhythm" },
     { name: "Motion energy", checkSelector: ".motion-energy-arc" },
-    { name: "Framing summary", checkSelector: ".framing-summary" },
-    { name: "Framing arc", checkSelector: ".framing-arc" },
     { name: "Shot duration", checkSelector: ".rhythm-chart-section" },
   ];
 
   for (const tab of subtabs) {
-    const tabBtn = page.getByRole("tab", { name: tab.name, exact: true });
+    const tabBtn = page.locator(".editing-rhythm-drawer").getByRole("tab", { name: tab.name, exact: true });
     await expect(tabBtn).toBeVisible();
     await tabBtn.click();
     await expect(tabBtn).toHaveClass(/active/);
     await expect(page.locator(tab.checkSelector)).toBeVisible();
   }
+
+  // Ensure framing views are removed from Rhythm
+  await expect(page.locator(".editing-rhythm-drawer").getByRole("tab", { name: "Framing summary" })).toHaveCount(0);
+  await expect(page.locator(".editing-rhythm-drawer").getByRole("tab", { name: "Framing arc" })).toHaveCount(0);
 
   // Returning to Shot duration still has shot 2 selected and highlighted
   await expect(shot2Bar).toHaveClass(/chosen/);
@@ -160,16 +162,15 @@ test("Studio Rhythm drawer design, interactions, seeking, tabs, and layout prese
   // Restore viewport
   await page.setViewportSize({ width: 1440, height: 1000 });
 
-  // 12. Unchanged Map Focus and Review Desk modes
-  // Switch to Map Focus
-  await page.getByRole("tab", { name: "Map" }).click();
-  await expect(page.locator(".workspace")).toHaveClass(/mode-map/);
-  await expect(page.locator(".studio-detail-drawer")).not.toBeVisible();
+  // 12. Expanded map in Studio mode
+  await page.locator(".studio-expand-map-toggle-btn").click();
+  await expect(page.locator(".workspace")).toHaveClass(/studio-map-expanded/);
+  await page.locator(".studio-expand-map-toggle-btn").click();
+  await expect(page.locator(".workspace")).not.toHaveClass(/studio-map-expanded/);
 
-  // Switch to Review Desk
-  await page.getByRole("tab", { name: "Review" }).click();
-  await expect(page.locator(".workspace")).toHaveClass(/mode-review/);
-  await expect(page.locator(".review-queue-panel")).toBeVisible();
+  // Switch to Explore
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await expect(page.locator(".workspace")).toHaveClass(/mode-explore/);
   await expect(page.locator(".studio-detail-drawer")).not.toBeVisible();
 
   // Switch back to Studio

@@ -76,6 +76,26 @@ export interface CutVisualDeltaResult {
   shockScore: number;
 }
 
+export function colorMatchAtCut(outgoing: Shot, incoming: Shot) {
+  const outgoingSample = outgoing.colorProfile?.temporal?.boundary?.end;
+  const incomingSample = incoming.colorProfile?.temporal?.boundary?.start;
+  const before = outgoingSample ?? outgoing.colorProfile;
+  const after = incomingSample ?? incoming.colorProfile;
+  if (!before || !after) return { label: "Awaiting colour evidence", score: null };
+  const deltaLuminance = Math.abs(after.luminance - before.luminance);
+  const deltaTemperature = Math.abs(after.temperature - before.temperature);
+  const deltaSaturation = Math.abs(after.saturation - before.saturation);
+  const deltaPalette = calculateColorDistance(before.palette, after.palette);
+  const score = Math.min(1, .35 * deltaLuminance + .2 * (deltaTemperature / 2) + .2 * deltaSaturation + .25 * deltaPalette);
+  const label = score <= .10 ? "Close colour match"
+    : deltaLuminance >= .16 ? "Luminance jump"
+    : deltaTemperature >= .28 ? "Temperature contrast"
+    : deltaSaturation >= .18 ? "Saturation shift"
+    : deltaPalette >= .22 ? "Palette discontinuity"
+    : "Measured colour shift";
+  return { label, score: Number(score.toFixed(3)), nearBoundary: Boolean(outgoingSample && incomingSample) };
+}
+
 /**
  * Calculates Cut Visual Delta (ΔV) and Sensory Shock Index across a cut boundary.
  * ΔLuma = |Y_B - Y_A|

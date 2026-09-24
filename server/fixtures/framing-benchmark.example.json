@@ -1,0 +1,10 @@
+{
+  "shots": [
+    {
+      "id": "film-a-001",
+      "film": "Film A (reviewer-supplied)",
+      "expected": "Medium",
+      "frames": ["frames/film-a-001-20.jpg", "frames/film-a-001-50.jpg", "frames/film-a-001-80.jpg"]
+    }
+  ]
+}

@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import type { Project } from "../models/project";
 import { formatTimecode } from "../utils/timecode";
 
-export type WorkspaceMode = "studio" | "map" | "review";
+export type WorkspaceMode = "studio" | "explore";
 
 export default function ProjectHeader({
   project,
@@ -96,7 +96,6 @@ export default function ProjectHeader({
           title="EDITMAP: Return to Welcome Screen"
           aria-label="EDITMAP Home"
         >
-          <span className="brand-mark" aria-hidden="true">▥</span>
           <span className="brand-text">EDITMAP</span>
         </a>
 
@@ -116,7 +115,7 @@ export default function ProjectHeader({
             aria-haspopup="true"
             title="Project management menu"
           >
-            <span className="header-project-label">Project</span>
+            <span className="header-project-label">{project ? project.name || "Untitled film" : "Project"}</span>
             <span className="dropdown-arrow">▾</span>
           </button>
 
@@ -127,7 +126,7 @@ export default function ProjectHeader({
                 className="header-project-input"
                 value={project.name}
                 onChange={(e) => onProjectNameChange?.(e.target.value)}
-                placeholder="Untitled Film"
+                placeholder="Untitled film"
               />
               <span className="header-project-edit-icon" aria-hidden="true" title="Click to rename project">✎</span>
               <span
@@ -139,7 +138,8 @@ export default function ProjectHeader({
             </div>
           )}
 
-          <div className="header-file-actions" role="group" aria-label="Project actions">
+          {project && (
+            <div className="header-file-actions" role="group" aria-label="Project actions">
             <button
               type="button"
               className="header-action-btn"
@@ -162,7 +162,7 @@ export default function ProjectHeader({
 
             <button
               type="button"
-              className={`header-action-btn primary-save ${dirty ? "dirty" : ""}`}
+              className={`header-action-btn ${dirty ? "dirty" : ""}`}
               disabled={!project}
               onClick={onSave}
               aria-label={dirty ? "Save project, unsaved changes exist" : "Save project"}
@@ -171,6 +171,7 @@ export default function ProjectHeader({
               Save{dirty ? " •" : ""}
             </button>
           </div>
+          )}
 
           {projectMenuOpen && (
             <div className="dropdown-menu project-menu" role="menu">
@@ -231,22 +232,12 @@ export default function ProjectHeader({
           <button
             type="button"
             role="tab"
-            aria-selected={workspaceMode === "map"}
-            className={`mode-tab ${workspaceMode === "map" ? "active" : ""}`}
-            onClick={() => onModeChange("map")}
-            title="Map Focus: High-resolution structural analysis with aligned layers and film overview"
+            aria-selected={workspaceMode === "explore"}
+            className={`mode-tab ${workspaceMode === "explore" ? "active" : ""}`}
+            onClick={() => onModeChange("explore")}
+            title="Explore: Build and play data-driven viewing sequences"
           >
-            Map Focus
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={workspaceMode === "review"}
-            className={`mode-tab ${workspaceMode === "review" ? "active" : ""}`}
-            onClick={() => onModeChange("review")}
-            title="Review Desk: Fast human confirmation queue with 3-shot context and keyboard tagging"
-          >
-            Review Desk
+            Explore
           </button>
         </div>
       )}
@@ -269,17 +260,17 @@ export default function ProjectHeader({
         <div className="history-group">
           <button
             type="button"
-            className="btn-icon"
+            className="header-history-btn"
             disabled={!project || !historyState.undo}
             onClick={onUndo}
-            title={`Undo (Cmd/Ctrl+Z)${historyState.undo ? ` (${historyState.undo})` : ""}`}
+            title="Undo (Cmd/Ctrl+Z)"
             aria-label="Undo"
           >
             ↩
           </button>
           <button
             type="button"
-            className="btn-icon"
+            className="header-history-btn"
             disabled={!project || !historyState.redo}
             onClick={onRedo}
             title="Redo (Cmd/Ctrl+Shift+Z)"
@@ -288,6 +279,19 @@ export default function ProjectHeader({
             ↪
           </button>
         </div>
+
+        {/* Save Button */}
+        {project && (
+          <button
+            type="button"
+            className={`header-action-btn primary-save ${dirty ? "dirty" : ""}`}
+            onClick={onSave}
+            title={dirty ? "Save Project (Cmd+S) • Unsaved changes" : "Project Saved"}
+            aria-label={dirty ? "Save project, unsaved changes exist" : "Save project"}
+          >
+            Save{dirty ? " •" : ""}
+          </button>
+        )}
 
         {/* Import Menu */}
         <div className="header-dropdown-container" ref={importMenuRef}>
@@ -307,7 +311,7 @@ export default function ProjectHeader({
           </button>
 
           {importMenuOpen && (
-            <div className="dropdown-menu" role="menu">
+            <div className="dropdown-menu dropdown-menu-right" role="menu">
               <button
                 type="button"
                 role="menuitem"
@@ -387,7 +391,7 @@ export default function ProjectHeader({
           </button>
 
           {exportMenuOpen && (
-            <div className="dropdown-menu" role="menu">
+            <div className="dropdown-menu dropdown-menu-right" role="menu">
               <button
                 type="button"
                 role="menuitem"

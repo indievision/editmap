@@ -32,10 +32,12 @@ test("three workspace modes: studio, map focus, and review desk", async ({ page 
   await expect(studioTab).toHaveClass(/active/);
   await expect(page.locator(".workspace")).toHaveClass(/mode-studio/);
 
-  // Studio Mode has slim tool rail and Studio Rhythm Ribbon
+  // Studio Mode has slim tool rail and single authoritative timeline (EditingMap)
   await expect(page.locator(".studio-tool-rail")).toBeVisible();
-  await expect(page.locator(".studio-rhythm-ribbon")).toBeVisible();
-  await expect(page.locator(".ribbon-lane")).toHaveCount(5);
+  await expect(page.locator(".studio-rhythm-ribbon")).toHaveCount(0);
+  await expect(page.locator(".minimap-section")).toHaveCount(0);
+  await expect(page.locator(".ruler")).toBeVisible();
+  await expect(page.locator(".shot-track")).toBeVisible();
 
   // Open contextual detail drawer via tool rail tab
   await page.locator('.studio-rail-btn[aria-label="Rhythm"]').click();

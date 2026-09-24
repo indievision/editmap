@@ -4,29 +4,79 @@ import {
   cameraMovementTypes,
   peopleLabels,
   selectableShotSizes,
-  shotSizes,
   subjectLabels,
 } from "../models/project";
-import { analyzeShotMotion } from "../analysis/motion";
+import {
+  analyzeShotMotion,
+  classifyKineticVelocity,
+  classifyMomentumTransition,
+} from "../analysis/motion";
 import ShotAnalysis from "./ShotAnalysis";
 
-const cameraMovementIcons: Record<CameraMovementType, string> = {
-  Static: "🔒",
-  Pan: "↔️",
-  Tilt: "↕️",
-  "Dolly / Track": "🚂",
-  Handheld: "〰️",
-  "Dynamic / Action": "⚡",
-  Zoom: "🔍",
-  Unknown: "❓",
+const cameraMovementIcons: Record<CameraMovementType, React.ReactNode> = {
+  Static: (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+  ),
+  Pan: (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <line x1="5" y1="12" x2="19" y2="12" />
+      <polyline points="12 5 19 12 12 19" />
+      <polyline points="12 19 5 12 12 5" />
+    </svg>
+  ),
+  Tilt: (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <polyline points="5 12 12 5 19 12" />
+      <polyline points="19 12 12 19 5 12" />
+    </svg>
+  ),
+  "Dolly / Track": (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <line x1="12" y1="2" x2="12" y2="22" />
+      <polyline points="7 7 12 2 17 7" />
+      <polyline points="7 17 12 22 17 17" />
+    </svg>
+  ),
+  Handheld: (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2 12c2-2 4-2 6 0s4 2 6 0 4-2 6 0" />
+    </svg>
+  ),
+  "Dynamic / Action": (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+    </svg>
+  ),
+  Zoom: (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="11" cy="11" r="8" />
+      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+      <line x1="11" y1="8" x2="11" y2="14" />
+      <line x1="8" y1="11" x2="14" y2="11" />
+    </svg>
+  ),
+  Unknown: (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
+    </svg>
+  ),
 };
 
 const shotSizeLabels: Record<Shot["shotSize"], string> = {
-  Wide: "Wide framing",
-  Full: "Full framing",
-  Medium: "Medium framing",
-  Close: "Close framing",
-  "Extreme close": "Extreme close framing",
+  "Extreme wide": "Extreme wide",
+  Wide: "Wide",
+  Full: "Full",
+  American: "American",
+  Medium: "Medium",
+  "Medium close-up": "Medium close-up",
+  Close: "Close",
+  "Extreme close": "Extreme close",
   EWS: "Extreme wide shot",
   WS: "Wide shot",
   FS: "Full shot",
@@ -44,9 +94,12 @@ const shotSizeLabels: Record<Shot["shotSize"], string> = {
 };
 
 const shotSizeDescriptions: Partial<Record<Shot["shotSize"], string>> = {
+  "Extreme wide": "Environment dominates; subject tiny or absent",
   Wide: "Subject small or surrounded by substantial environment",
   Full: "Full body or subject with contextual surroundings",
+  American: "Approximately knees up; also called a cowboy shot",
   Medium: "Subject emphasis with meaningful environment retained",
+  "Medium close-up": "Approximately chest up",
   Close: "Face or main subject fills a substantial part of frame",
   "Extreme close": "An isolated facial, bodily, or prop detail dominates",
   EWS: "Environment dominates; subject tiny or absent",
@@ -63,7 +116,29 @@ const shotSizeDescriptions: Partial<Record<Shot["shotSize"], string>> = {
   AS: "Person framed approximately knees up",
 };
 
+const shotSizeShortDescriptions: Partial<Record<Shot["shotSize"], string>> = {
+  "Extreme wide": "Environment dominates",
+  Wide: "Surroundings",
+  Full: "Head to toe",
+  American: "Knees up",
+  Medium: "Waist up",
+  "Medium close-up": "Chest up",
+  Close: "Face / object",
+  "Extreme close": "Tight detail",
+  Unknown: "Undetermined",
+};
+
 const sizeShortcuts: Record<string, string> = {
+  "Extreme wide": "1",
+  Wide: "2",
+  Full: "3",
+  American: "4",
+  Medium: "5",
+  "Medium close-up": "6",
+  Close: "7",
+  "Extreme close": "8",
+  Unknown: "U",
+  // Legacy mappings for fallback
   EWS: "1",
   WS: "2",
   FS: "F",
@@ -76,22 +151,54 @@ const sizeShortcuts: Record<string, string> = {
   Insert: "8",
   OTS: "9",
   POV: "0",
-  Unknown: "U",
 };
 
+function getAvailableShotSizes(currentSize?: Shot["shotSize"]): Shot["shotSize"][] {
+  const sizes: Shot["shotSize"][] = [
+    ...selectableShotSizes,
+    "MCU",
+    "CU",
+    "WS",
+    "MS",
+    "FS",
+    "AS",
+    "ECU",
+    "EWS",
+    "Not applicable",
+  ];
+  if (
+    currentSize &&
+    !sizes.includes(currentSize)
+  ) {
+    sizes.push(currentSize);
+  }
+  return sizes;
+}
+
+function formatShotSizeOption(s: Shot["shotSize"]): string {
+  const shortcut = sizeShortcuts[s];
+  const isLegacy =
+    !selectableShotSizes.includes(s as (typeof selectableShotSizes)[number]) &&
+    s !== "Not applicable";
+  if (isLegacy) {
+    const label = shotSizeLabels[s];
+    return label && label !== s ? `${s} — ${label} (Legacy)` : `${s} (Legacy)`;
+  }
+  if (s === "Not applicable") {
+    return "Not applicable";
+  }
+  return shortcut ? `${s} (${shortcut})` : s;
+}
+
 const gridShotSizes: Shot["shotSize"][] = [
-  "EWS",
-  "WS",
-  "FS",
-  "MWS",
-  "AS",
-  "MS",
-  "MCU",
-  "CU",
-  "ECU",
-  "Insert",
-  "OTS",
-  "POV",
+  "Extreme wide",
+  "Wide",
+  "Full",
+  "American",
+  "Medium",
+  "Medium close-up",
+  "Close",
+  "Extreme close",
   "Unknown",
 ];
 
@@ -176,7 +283,15 @@ export default function ShotInspector({
     if (!url || !shot || scanningMotion) return;
     setScanningMotion(true);
     try {
-      const profile = await analyzeShotMotion(url, shot);
+      const rawProfile = await analyzeShotMotion(url, shot);
+      const shotIndex = project.shots.findIndex((s) => s.id === shot.id);
+      const prevShot = shotIndex > 0 ? project.shots[shotIndex - 1] : null;
+      const kineticDelta =
+        prevShot?.motionProfile?.totalKineticEnergy !== undefined
+          ? Math.round(rawProfile.totalKineticEnergy - prevShot.motionProfile.totalKineticEnergy)
+          : undefined;
+      const profile = { ...rawProfile, kineticDelta };
+
       onEditShot({
         motionProfile: profile,
         cameraMovement: profile.cameraMovement,
@@ -310,9 +425,13 @@ export default function ShotInspector({
                     })
                   }
                 >
-                  {shotSizes.map((s) => (
-                    <option key={s} value={s}>
-                      {s === "Unknown" || s === "Not applicable" ? s : `${s} — ${shotSizeLabels[s as Shot["shotSize"]] || s}`}
+                  {getAvailableShotSizes(shot.shotSize).map((s) => (
+                    <option
+                      key={s}
+                      value={s}
+                      title={shotSizeDescriptions[s as Shot["shotSize"]]}
+                    >
+                      {formatShotSizeOption(s)}
                     </option>
                   ))}
                 </select>
@@ -419,10 +538,10 @@ export default function ShotInspector({
                         uncertain: false,
                       })
                     }
-                    title={`${size}: ${shotSizeLabels[size]} ${shortcut ? `(Key: ${shortcut})` : ""}`}
+                    title={`${size}${shortcut ? ` (Key: ${shortcut})` : ""}${shotSizeDescriptions[size] ? ` — ${shotSizeDescriptions[size]}` : ""}`}
                   >
                     <span className="grid-btn-abbr">{size}</span>
-                    <span className="grid-btn-name">{shotSizeLabels[size]}</span>
+                    <span className="grid-btn-name">{shotSizeShortDescriptions[size] || ""}</span>
                     {shortcut && <kbd className="grid-btn-key">{shortcut}</kbd>}
                   </button>
                 );
@@ -441,21 +560,13 @@ export default function ShotInspector({
                 })
               }
             >
-              {[
-                ...selectableShotSizes,
-                "Not applicable",
-                ...(!selectableShotSizes.includes(shot.shotSize as typeof selectableShotSizes[number]) && shot.shotSize !== "Not applicable" ? [shot.shotSize] : []),
-              ].map((s) => (
+              {getAvailableShotSizes(shot.shotSize).map((s) => (
                 <option
                   key={s}
                   value={s}
                   title={shotSizeDescriptions[s as Shot["shotSize"]]}
                 >
-                  {s === "Unknown" || s === "Not applicable"
-                    ? s
-                    : `${s} — ${shotSizeLabels[s as Shot["shotSize"]]}${
-                        sizeShortcuts[s] ? ` (${sizeShortcuts[s]})` : ""
-                      }`}
+                  {formatShotSizeOption(s)}
                 </option>
               ))}
             </select>
@@ -465,7 +576,10 @@ export default function ShotInspector({
             <div className="suggestion-callout">
               <span className="suggestion-icon">✨</span>
               <span className="suggestion-text">
-                Suggested by AI: <b>{shot.suggestion.shotSize}</b> ({shotSizeLabels[shot.suggestion.shotSize]})
+                Suggested by AI: <b>{shot.suggestion.shotSize}</b>
+                {shotSizeDescriptions[shot.suggestion.shotSize]
+                  ? ` — ${shotSizeDescriptions[shot.suggestion.shotSize]}`
+                  : ""}
               </span>
             </div>
           )}
@@ -527,7 +641,10 @@ export default function ShotInspector({
               disabled={scanningMotion || !url}
               title="Analyze camera motion & subject energy from video"
             >
-              {scanningMotion ? "Scanning…" : "⚡ Detect Motion"}
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style={{ display: "inline-block", verticalAlign: "-1px", marginRight: 4 }}>
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+              </svg>
+              <span>{scanningMotion ? "Scanning…" : "Detect Motion"}</span>
             </button>
           </div>
 
@@ -557,41 +674,38 @@ export default function ShotInspector({
           {shot.motionProfile && (
             <div className="kinetic-energy-card">
               <div className="kinetic-headline">
-                <span className="kinetic-title">Kinetic Energy Breakdown</span>
+                <span className="kinetic-title">Kinetic Energy Flow</span>
                 <span
                   className={`kinetic-total-badge ${
                     shot.motionProfile.totalKineticEnergy > 50 ? "high" : "normal"
                   }`}
                 >
-                  ⚡ {shot.motionProfile.totalKineticEnergy}% TOTAL
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style={{ display: "inline-block", verticalAlign: "-1px", marginRight: 4 }}>
+                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                  </svg>
+                  {shot.motionProfile.totalKineticEnergy}% Flow ({classifyKineticVelocity(shot.motionProfile.totalKineticEnergy)})
                 </span>
               </div>
-              <div className="kinetic-gauges-grid">
-                <div className="kinetic-gauge">
-                  <div className="gauge-label">
-                    <span>🎥 Camera (Global)</span>
-                    <b>{shot.motionProfile.cameraEnergy}%</b>
-                  </div>
-                  <div className="gauge-bar-track">
-                    <div
-                      className="gauge-bar-fill camera"
-                      style={{ width: `${shot.motionProfile.cameraEnergy}%` }}
-                    />
-                  </div>
-                </div>
-                <div className="kinetic-gauge">
-                  <div className="gauge-label">
-                    <span>🏃 Subject (Internal)</span>
-                    <b>{shot.motionProfile.subjectEnergy}%</b>
-                  </div>
-                  <div className="gauge-bar-track">
-                    <div
-                      className="gauge-bar-fill subject"
-                      style={{ width: `${shot.motionProfile.subjectEnergy}%` }}
-                    />
-                  </div>
+              <div className="kinetic-flow-gauge">
+                <div className="gauge-bar-track">
+                  <div
+                    className="gauge-bar-fill unified-flow"
+                    style={{ width: `${shot.motionProfile.totalKineticEnergy}%` }}
+                  />
                 </div>
               </div>
+              {shot.motionProfile.kineticDelta !== undefined && (
+                <div className="kinetic-momentum-row">
+                  <span className="momentum-label">Cut Momentum Transition:</span>
+                  <b
+                    className={`momentum-value ${
+                      classifyMomentumTransition(shot.motionProfile.kineticDelta).type
+                    }`}
+                  >
+                    {classifyMomentumTransition(shot.motionProfile.kineticDelta).label}
+                  </b>
+                </div>
+              )}
             </div>
           )}
 

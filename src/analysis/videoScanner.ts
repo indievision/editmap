@@ -4,6 +4,7 @@ import {
   computeFrameDelta,
   type SceneDetectionOptions,
 } from "./sceneDetection";
+import { fetchLocalModel } from "./localModel";
 import type { Shot } from "../models/project";
 
 export interface ScanProgress {
@@ -11,6 +12,7 @@ export interface ScanProgress {
   currentTime: number;
   totalDuration: number;
   shotsCount: number;
+  detector?: "transnet" | "browser";
 }
 
 export interface VideoScanOptions extends SceneDetectionOptions {
@@ -35,6 +37,8 @@ export interface VideoScanOptions extends SceneDetectionOptions {
    * Abort signal to cancel detection.
    */
   signal?: AbortSignal;
+  /** Reports which scanner produced the cut map for truthful progress copy. */
+  onDetector?: (detector: "transnet" | "browser", reason?: string) => void;
 }
 
 const CANVAS_WIDTH = 160;
@@ -44,7 +48,100 @@ const CANVAS_HEIGHT = 90;
  * Scans an HTML video source to automatically detect scene cuts and return EDITMAP Shot objects.
  * Uses high-speed fixed-anchor binary search boundary refinement.
  */
+interface TransNetShotResponse {
+  start_seconds: number;
+  end_seconds: number;
+  transition_type?: "cut" | "soft";
+}
+
+interface TransNetResponse {
+  fps: number;
+  model_backend: "onnx" | "torch" | "heuristic";
+  shots: TransNetShotResponse[];
+}
+
+interface TransNetStatusResponse { available: boolean; }
+
+async function detectVideoShotsWithTransNet(
+  file: File,
+  options: VideoScanOptions,
+): Promise<Shot[]> {
+  const { dropFrame = false, onProgress, signal, onDetector } = options;
+  signal?.throwIfAborted();
+  onProgress?.({ percent: 0, currentTime: 0, totalDuration: 0, shotsCount: 0, detector: "transnet" });
+
+  const status = await fetchLocalModel("/api/detect-shots-status", { method: "GET", signal });
+  const availability = status.ok ? await status.json() as TransNetStatusResponse : null;
+  if (!availability?.available) throw new Error("TransNet V2 weights are not available locally.");
+
+  const form = new FormData();
+  form.append("file", file, file.name);
+  form.append("threshold", "0.5");
+  form.append("min_shot_len_frames", "10");
+  const response = await fetchLocalModel("/api/detect-shots-upload", {
+    method: "POST",
+    body: form,
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null);
+    throw new Error(typeof detail?.detail === "string" ? detail.detail : `TransNet V2 unavailable (HTTP ${response.status}).`);
+  }
+
+  const result = await response.json() as TransNetResponse;
+  if (!Array.isArray(result.shots) || !Number.isFinite(result.fps) || result.fps <= 0) {
+    throw new Error("TransNet V2 returned an invalid shot map.");
+  }
+  // Do not silently present the backend's visual-difference fallback as TransNet V2.
+  if (result.model_backend !== "onnx" && result.model_backend !== "torch") {
+    throw new Error("TransNet V2 weights are not available locally.");
+  }
+  const duration = result.shots.at(-1)?.end_seconds ?? 0;
+  const projectFps = options.fps ?? result.fps;
+  const shots = buildShotsFromCuts(
+    result.shots.slice(1).map((shot) => shot.start_seconds),
+    duration,
+    projectFps,
+    dropFrame,
+    1 / result.fps,
+  ).map((shot) => {
+    const source = result.shots.find((candidate) => Math.abs(candidate.start_seconds - shot.startSeconds) < 1 / result.fps);
+    return { ...shot, transition: source?.transition_type === "soft" ? "SOFT" : "CUT" };
+  });
+  onDetector?.("transnet");
+  onProgress?.({ percent: 100, currentTime: duration, totalDuration: duration, shotsCount: shots.length, detector: "transnet" });
+  return shots;
+}
+
+/**
+ * Prefer the local TransNet V2 engine whenever the original file is available.
+ * Browser-side adaptive detection is retained only for unlinked media and
+ * unavailable/misconfigured local model weights.
+ */
 export async function detectVideoShots(
+  videoSource: string | File,
+  options: VideoScanOptions = {},
+): Promise<Shot[]> {
+  if (videoSource instanceof File) {
+    try {
+      return await detectVideoShotsWithTransNet(videoSource, options);
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      console.warn("TransNet V2 cut scan unavailable; using browser fallback.", error);
+      options.onDetector?.("browser", error instanceof Error ? error.message : "TransNet V2 unavailable.");
+      const objectUrl = URL.createObjectURL(videoSource);
+      try {
+        return await detectVideoShotsInBrowser(objectUrl, options);
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    }
+  }
+  options.onDetector?.("browser");
+  return detectVideoShotsInBrowser(videoSource, options);
+}
+
+async function detectVideoShotsInBrowser(
   videoUrl: string,
   options: VideoScanOptions = {},
 ): Promise<Shot[]> {
@@ -56,9 +153,10 @@ export async function detectVideoShots(
     minContentVal = 16.0,
     minShotDurationSeconds = 0.4,
     windowWidth = 8,
-    onProgress,
+    onProgress: reportProgress,
     signal,
   } = options;
+  const onProgress = (progress: ScanProgress) => reportProgress?.({ ...progress, detector: "browser" });
 
   return new Promise<Shot[]>((resolve, reject) => {
     if (signal?.aborted) {

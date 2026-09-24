@@ -44,15 +44,20 @@ export default function MapSequenceOverview({
     return "Contemplative Extended Takes (ASL > 9s)";
   }, [avgDuration]);
 
+  const passages = useMemo(
+    () => (project.sequences ?? []).filter((seq) => (seq.kind ?? "passage") === "passage"),
+    [project.sequences],
+  );
+
   // Current sequence if time falls inside one
   const currentSequence = useMemo(() => {
-    if (!project.sequences?.length) return null;
+    if (!passages.length) return null;
     return (
-      project.sequences.find(
+      passages.find(
         (seq) => time >= seq.startSeconds && time <= seq.endSeconds
       ) ?? null
     );
-  }, [project.sequences, time]);
+  }, [passages, time]);
 
   return (
     <div className="map-sequence-overview panel">
@@ -83,7 +88,7 @@ export default function MapSequenceOverview({
         <div className="rhythm-insight-meta mono">
           <span>{totalShots} Shots</span>
           <span className="meta-sep">·</span>
-          <span>{project.sequences?.length ?? 0} Sequences</span>
+          <span>{passages.length} Sequences</span>
           {shortestShot && (
             <>
               <span className="meta-sep">·</span>
@@ -99,10 +104,10 @@ export default function MapSequenceOverview({
         </div>
       </div>
 
-      {/* Sequence Header Blocks (if sequences defined) */}
-      {project.sequences && project.sequences.length > 0 && (
+      {/* Sequence Header Blocks (if passages defined) */}
+      {passages.length > 0 && (
         <div className="sequence-ruler-blocks">
-          {project.sequences.map((seq, idx) => {
+          {passages.map((seq, idx) => {
             const widthPct =
               ((seq.endSeconds - seq.startSeconds) / (project.duration || 1)) * 100;
             const isCurrent =

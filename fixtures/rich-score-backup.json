@@ -1,0 +1,391 @@
+{
+  "format": "editmap-project",
+  "version": 1,
+  "exportedAt": "2026-09-16T19:47:35.568Z",
+  "project": {
+    "id": "082f99c3-b002-40cf-9208-7a07fbbf12bb",
+    "name": "Cinematic Score Test",
+    "frameRate": 24,
+    "duration": 30,
+    "recordOrigin": "00:00:00:00",
+    "dropFrame": false,
+    "shots": [
+      {
+        "id": "s1",
+        "index": 1,
+        "sourceReel": "A",
+        "sourceIn": "00:00:00:00",
+        "sourceOut": "00:00:03:12",
+        "startTimecode": "01:00:00:00",
+        "endTimecode": "01:00:03:12",
+        "startSeconds": 0,
+        "endSeconds": 3.5,
+        "duration": 3.5,
+        "transition": "C",
+        "shotSize": "ECU",
+        "reviewStatus": "Confirmed",
+        "notes": "",
+        "motionProfile": {
+          "cameraMovement": "Static",
+          "cameraEnergy": 15,
+          "subjectEnergy": 65,
+          "totalKineticEnergy": 80,
+          "confidence": 0.9
+        },
+        "characterAnalysis": {
+          "intervals": [
+            {
+              "memberId": "cast-1",
+              "startSeconds": 0,
+              "endSeconds": 3.5,
+              "reviewStatus": "Confirmed"
+            }
+          ],
+          "unresolvedTimes": [],
+          "sampleTimes": [
+            1
+          ],
+          "manualReviewStatus": "Confirmed",
+          "manualMemberIds": [
+            "cast-1"
+          ],
+          "reviewStatus": "Confirmed",
+          "model": "local",
+          "createdAt": "2026-09-16T19:47:35.566Z",
+          "mode": "fast"
+        }
+      },
+      {
+        "id": "s2",
+        "index": 2,
+        "sourceReel": "A",
+        "sourceIn": "00:00:03:12",
+        "sourceOut": "00:00:07:00",
+        "startTimecode": "01:00:03:12",
+        "endTimecode": "01:00:07:00",
+        "startSeconds": 3.5,
+        "endSeconds": 7,
+        "duration": 3.5,
+        "transition": "C",
+        "shotSize": "MS",
+        "reviewStatus": "Confirmed",
+        "notes": "",
+        "motionProfile": {
+          "cameraMovement": "Pan",
+          "cameraEnergy": 60,
+          "subjectEnergy": 30,
+          "totalKineticEnergy": 90,
+          "confidence": 0.85
+        },
+        "characterAnalysis": {
+          "intervals": [
+            {
+              "memberId": "cast-2",
+              "startSeconds": 3.5,
+              "endSeconds": 7,
+              "reviewStatus": "Confirmed"
+            }
+          ],
+          "unresolvedTimes": [],
+          "sampleTimes": [
+            5
+          ],
+          "manualReviewStatus": "Confirmed",
+          "manualMemberIds": [
+            "cast-2"
+          ],
+          "reviewStatus": "Confirmed",
+          "model": "local",
+          "createdAt": "2026-09-16T19:47:35.566Z",
+          "mode": "fast"
+        }
+      },
+      {
+        "id": "s3",
+        "index": 3,
+        "sourceReel": "A",
+        "sourceIn": "00:00:07:00",
+        "sourceOut": "00:00:10:12",
+        "startTimecode": "01:00:07:00",
+        "endTimecode": "01:00:10:12",
+        "startSeconds": 7,
+        "endSeconds": 10.5,
+        "duration": 3.5,
+        "transition": "C",
+        "shotSize": "WS",
+        "reviewStatus": "Confirmed",
+        "notes": "",
+        "motionProfile": {
+          "cameraMovement": "Tilt",
+          "cameraEnergy": 40,
+          "subjectEnergy": 20,
+          "totalKineticEnergy": 60,
+          "confidence": 0.8
+        }
+      },
+      {
+        "id": "s4",
+        "index": 4,
+        "sourceReel": "A",
+        "sourceIn": "00:00:10:12",
+        "sourceOut": "00:00:14:00",
+        "startTimecode": "01:00:10:12",
+        "endTimecode": "01:00:14:00",
+        "startSeconds": 10.5,
+        "endSeconds": 14,
+        "duration": 3.5,
+        "transition": "C",
+        "shotSize": "CU",
+        "reviewStatus": "Confirmed",
+        "notes": "",
+        "motionProfile": {
+          "cameraMovement": "Static",
+          "cameraEnergy": 10,
+          "subjectEnergy": 85,
+          "totalKineticEnergy": 95,
+          "confidence": 0.95
+        },
+        "characterAnalysis": {
+          "intervals": [
+            {
+              "memberId": "cast-1",
+              "startSeconds": 10.5,
+              "endSeconds": 14,
+              "reviewStatus": "Confirmed"
+            },
+            {
+              "memberId": "cast-2",
+              "startSeconds": 10.5,
+              "endSeconds": 14,
+              "reviewStatus": "Confirmed"
+            }
+          ],
+          "unresolvedTimes": [],
+          "sampleTimes": [
+            12
+          ],
+          "manualReviewStatus": "Confirmed",
+          "manualMemberIds": [
+            "cast-1",
+            "cast-2"
+          ],
+          "reviewStatus": "Confirmed",
+          "model": "local",
+          "createdAt": "2026-09-16T19:47:35.566Z",
+          "mode": "fast"
+        }
+      },
+      {
+        "id": "s5",
+        "index": 5,
+        "sourceReel": "A",
+        "sourceIn": "00:00:14:00",
+        "sourceOut": "00:00:18:00",
+        "startTimecode": "01:00:14:00",
+        "endTimecode": "01:00:18:00",
+        "startSeconds": 14,
+        "endSeconds": 18,
+        "duration": 4,
+        "transition": "C",
+        "shotSize": "MCU",
+        "reviewStatus": "Confirmed",
+        "notes": "",
+        "motionProfile": {
+          "cameraMovement": "Dolly / Track",
+          "cameraEnergy": 75,
+          "subjectEnergy": 70,
+          "totalKineticEnergy": 85,
+          "confidence": 0.9
+        }
+      },
+      {
+        "id": "s6",
+        "index": 6,
+        "sourceReel": "A",
+        "sourceIn": "00:00:18:00",
+        "sourceOut": "00:00:22:00",
+        "startTimecode": "01:00:18:00",
+        "endTimecode": "01:00:22:00",
+        "startSeconds": 18,
+        "endSeconds": 22,
+        "duration": 4,
+        "transition": "C",
+        "shotSize": "FS",
+        "reviewStatus": "Confirmed",
+        "notes": "",
+        "motionProfile": {
+          "cameraMovement": "Static",
+          "cameraEnergy": 5,
+          "subjectEnergy": 15,
+          "totalKineticEnergy": 20,
+          "confidence": 0.7
+        }
+      },
+      {
+        "id": "s7",
+        "index": 7,
+        "sourceReel": "A",
+        "sourceIn": "00:00:22:00",
+        "sourceOut": "00:00:26:00",
+        "startTimecode": "01:00:22:00",
+        "endTimecode": "01:00:26:00",
+        "startSeconds": 22,
+        "endSeconds": 26,
+        "duration": 4,
+        "transition": "C",
+        "shotSize": "CU",
+        "reviewStatus": "Confirmed",
+        "notes": "",
+        "motionProfile": {
+          "cameraMovement": "Pan",
+          "cameraEnergy": 45,
+          "subjectEnergy": 50,
+          "totalKineticEnergy": 95,
+          "confidence": 0.88
+        }
+      },
+      {
+        "id": "s8",
+        "index": 8,
+        "sourceReel": "A",
+        "sourceIn": "00:00:26:00",
+        "sourceOut": "00:00:30:00",
+        "startTimecode": "01:00:26:00",
+        "endTimecode": "01:00:30:00",
+        "startSeconds": 26,
+        "endSeconds": 30,
+        "duration": 4,
+        "transition": "C",
+        "shotSize": "WS",
+        "reviewStatus": "Confirmed",
+        "notes": "",
+        "motionProfile": {
+          "cameraMovement": "Static",
+          "cameraEnergy": 10,
+          "subjectEnergy": 10,
+          "totalKineticEnergy": 20,
+          "confidence": 0.8
+        }
+      }
+    ],
+    "colorMode": "shotSize",
+    "createdAt": "2026-09-16T19:47:35.568Z",
+    "updatedAt": "2026-09-16T19:47:35.568Z",
+    "sequences": [
+      {
+        "id": "seq-1",
+        "name": "Sequence 1",
+        "startSeconds": 0,
+        "endSeconds": 14,
+        "shotIds": [
+          "s1",
+          "s2",
+          "s3",
+          "s4"
+        ]
+      },
+      {
+        "id": "seq-2",
+        "name": "Sequence 2",
+        "startSeconds": 14,
+        "endSeconds": 30,
+        "shotIds": [
+          "s5",
+          "s6",
+          "s7",
+          "s8"
+        ]
+      }
+    ],
+    "dmeWaveforms": {
+      "dialogue": [
+        0.05,
+        0.4,
+        0.7,
+        0.6,
+        0.1,
+        0.05,
+        0.5,
+        0.8,
+        0.6,
+        0.2,
+        0.05,
+        0.3,
+        0.5,
+        0.05,
+        0.05,
+        0.05,
+        0.4,
+        0.7,
+        0.5,
+        0.1
+      ],
+      "music": [
+        0.3,
+        0.35,
+        0.4,
+        0.45,
+        0.5,
+        0.6,
+        0.7,
+        0.75,
+        0.8,
+        0.85,
+        0.8,
+        0.75,
+        0.7,
+        0.65,
+        0.6,
+        0.55,
+        0.5,
+        0.45,
+        0.4,
+        0.35
+      ],
+      "effects": [
+        0.1,
+        0.1,
+        0.6,
+        0.2,
+        0.1,
+        0.1,
+        0.8,
+        0.2,
+        0.1,
+        0.1,
+        0.5,
+        0.1,
+        0.1,
+        0.1,
+        0.7,
+        0.2,
+        0.1,
+        0.1,
+        0.1,
+        0.1
+      ],
+      "binCount": 20,
+      "duration": 30,
+      "separatedAt": "2026-09-16T19:47:35.566Z"
+    },
+    "cast": [
+      {
+        "id": "cast-1",
+        "name": "Elena",
+        "references": [
+          {
+            "id": "ref-1",
+            "image": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+            "shotId": "s1",
+            "time": 1
+          }
+        ]
+      },
+      {
+        "id": "cast-2",
+        "name": "Marcus",
+        "references": []
+      }
+    ]
+  }
+}

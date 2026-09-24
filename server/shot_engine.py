@@ -49,6 +49,10 @@ class TransNetV2Model:
             pass
         return "cpu"
 
+    def pretrained_weights_available(self) -> bool:
+        """Whether a real TransNet checkpoint is available before video upload."""
+        return os.path.isfile(self.onnx_path) or os.path.isfile(self.pt_path)
+
     @staticmethod
     def _select_onnx_providers() -> List[str]:
         try:
@@ -493,5 +497,11 @@ class ShotBoundaryDetector:
             "video_path": video_path,
             "total_shots": len(shots),
             "fps": round(float(fps), 3),
+            # The caller must be able to distinguish a real TransNet inference
+            # from the emergency visual-difference fallback.
+            "model_backend": self.model.backend,
             "shots": shots
         }
+
+    def pretrained_weights_available(self) -> bool:
+        return self.model.pretrained_weights_available()

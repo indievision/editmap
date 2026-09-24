@@ -51,9 +51,9 @@ test("Studio Color drawer design, interactions, views, curves, barcode seeking, 
   const railBox = await toolRail.boundingBox();
   expect(drawerBox!.x).toBeCloseTo(railBox!.x + railBox!.width, 1);
 
-  // Monitor has not shrunk or permanently reflowed
+  // Monitor resizes cleanly when in-flow drawer opens
   const monitorBoxWhileOpen = await monitor.boundingBox();
-  expect(monitorBoxWhileOpen!.width).toBeCloseTo(monitorInitialBox!.width, 5);
+  expect(monitorBoxWhileOpen!.width).toBeLessThanOrEqual(monitorInitialBox!.width);
 
   // 4. Verify Drawer Header
   const drawerTitle = page.locator(".color-drawer-title");
@@ -85,15 +85,13 @@ test("Studio Color drawer design, interactions, views, curves, barcode seeking, 
   await colorRailBtn.click();
   await expect(drawer).toBeVisible();
 
-  // 8. Verify Subtabs: Color script, Lighting, Squint test
+  // 8. Verify Subtabs: Color script, Lighting
   const scriptTab = page.locator('.color-drawer-tab', { hasText: "Color script" });
   const lightingTab = page.locator('.color-drawer-tab', { hasText: "Lighting" });
-  const squintTab = page.locator('.color-drawer-tab', { hasText: "Squint test" });
 
   await expect(scriptTab).toBeVisible();
   await expect(scriptTab).toHaveClass(/active/);
   await expect(lightingTab).toBeVisible();
-  await expect(squintTab).toBeVisible();
 
   // 9. View 1: Color script verification
   // Selected shot card header
@@ -126,25 +124,7 @@ test("Studio Color drawer design, interactions, views, curves, barcode seeking, 
   await expect(page.locator(".curve-legend-inline")).toContainText("Luminance");
   await expect(page.locator(".curve-legend-inline")).toContainText("Temperature");
 
-  // Squint controls
-  const normalRadio = page.locator('input[name="color-squint-radio"]').first();
-  const squintRadio = page.locator('input[name="color-squint-radio"]').nth(1);
-  const depthSlider = page.locator(".squint-depth-slider");
-  const caveatText = page.locator(".squint-caveat-note");
 
-  await expect(normalRadio).toBeChecked();
-  await expect(depthSlider).toBeVisible();
-  await expect(caveatText).toBeVisible();
-  await expect(caveatText).toHaveText("Squint is a visual filter, not eye tracking.");
-
-  // Toggle Squint Mode to active
-  await squintRadio.check();
-  await expect(squintRadio).toBeChecked();
-  await expect(page.locator(".depth-val")).toHaveText("4");
-
-  // Switch back to Normal color
-  await normalRadio.check();
-  await expect(normalRadio).toBeChecked();
 
   // 10. Filter palette reading expandable accordion
   const filterAccordion = page.locator(".color-filter-accordion");
@@ -189,30 +169,21 @@ test("Studio Color drawer design, interactions, views, curves, barcode seeking, 
     path: "/Users/indievision/.gemini/antigravity/brain/4c6df2a4-56cd-418c-a1af-1c4e1ccc8883/studio-color-drawer-lighting.png",
   });
 
-  // 12. View 3: Squint Test View verification
-  await squintTab.click();
-  await expect(squintTab).toHaveClass(/active/);
-  await expect(page.locator(".color-view-squint")).toBeVisible();
-  await expect(page.locator(".squint-strip-grid")).toBeVisible();
-  const squintCards = page.locator(".squint-shot-card");
-  await expect(squintCards).toHaveCount(3);
-
-  await page.screenshot({
-    path: "/Users/indievision/.gemini/antigravity/brain/4c6df2a4-56cd-418c-a1af-1c4e1ccc8883/studio-color-drawer-squint.png",
-  });
-
-  // Click Shot 3 squint card to select and seek
-  await squintCards.nth(2).click();
-  await expect(squintCards.nth(2)).toHaveClass(/selected/);
-
-  // Switch back to Color script view
+  // 12. View 2: Lighting verification done above
+  // Return to Color script view
   await scriptTab.click();
   await expect(scriptTab).toHaveClass(/active/);
-  await expect(cardTitle).toContainText("Shot 003");
 
-  // 13. Verify Map Focus mode remains completely intact
-  await page.getByRole("tab", { name: "Map Focus" }).click();
-  await expect(page.locator(".workspace")).toHaveClass(/mode-map/);
+  // 13. Verify Expand map in Studio and Review mode
+  await page.getByRole("button", { name: "Expand map" }).click();
+  await expect(page.locator(".workspace")).toHaveClass(/studio-map-expanded/);
+  await expect(page.locator(".studio-detail-drawer")).not.toBeVisible();
+  await page.getByRole("button", { name: "Restore Studio" }).click();
+
+  // Switch to Review
+  await page.getByRole("tab", { name: "Review" }).click();
+  await expect(page.getByRole("main", { name: "Screening room" })).toBeVisible();
+  await expect(page.locator(".studio-detail-drawer")).not.toBeVisible();
 
   // Return to Studio mode
   await page.getByRole("tab", { name: "Studio" }).click();

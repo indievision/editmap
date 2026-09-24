@@ -141,10 +141,10 @@ export default memo(function LoudnessReading({
                 {analysis.integratedLoudness.toFixed(1)} <span className="unit">LUFS</span>
               </div>
               <div className="loudness-card-sub">
-                Target: <b>-23.0 LUFS</b> (
+                Reference: <b>-23.0 LUFS</b> (
                 {analysis.integratedLoudness >= -23.5 && analysis.integratedLoudness <= -22.5
-                  ? "Broadcast compliant ±0.5 LU"
-                  : `${(analysis.integratedLoudness - -23.0).toFixed(1)} LU from target`}
+                  ? "At reference ±0.5 LU"
+                  : `${(analysis.integratedLoudness - -23.0).toFixed(1)} LU from reference`}
                 )
               </div>
             </div>
@@ -202,7 +202,7 @@ export default memo(function LoudnessReading({
                   <span className="swatch amber-light" /> Momentary (400ms, LUFS)
                 </span>
                 <span className="legend-item target-line">
-                  <span className="swatch target-dash" /> -23 LUFS Target
+                  <span className="swatch target-dash" /> -23 LUFS Reference
                 </span>
               </div>
 

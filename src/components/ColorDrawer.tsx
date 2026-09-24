@@ -1,8 +1,6 @@
 import { useState, useMemo } from "react";
 import type { Project, Shot, HarmonyType } from "../models/project";
 import { formatTimecode } from "../utils/timecode";
-import { getSquintFilter } from "../utils/squint";
-
 export interface ColorDrawerProps {
   project: Project;
   shot?: Shot;
@@ -11,14 +9,11 @@ export interface ColorDrawerProps {
   selected?: string;
   onSelect: (shotId: string) => void;
   onSeek: (seconds: number) => void;
-  squintMode?: boolean;
-  onSquintModeChange?: (active: boolean) => void;
-  squintLevel?: number;
-  onSquintLevelChange?: (level: number) => void;
   onClose: () => void;
+  onOpenCompare?: (measure: "luminance") => void;
 }
 
-export type ColorDrawerView = "script" | "lighting" | "squint";
+export type ColorDrawerView = "script" | "lighting";
 
 export default function ColorDrawer({
   project,
@@ -28,11 +23,8 @@ export default function ColorDrawer({
   selected,
   onSelect,
   onSeek,
-  squintMode: propSquintMode,
-  onSquintModeChange,
-  squintLevel: propSquintLevel,
-  onSquintLevelChange,
   onClose,
+  onOpenCompare,
 }: ColorDrawerProps) {
   const [activeView, setActiveView] = useState<ColorDrawerView>("script");
   const [hoveredShot, setHoveredShot] = useState<Shot | null>(null);
@@ -40,21 +32,6 @@ export default function ColorDrawer({
   const [filterTab, setFilterTab] = useState<"harmony" | "mood">("harmony");
   const [activeMoodFilter, setActiveMoodFilter] = useState<string | null>(null);
   const [activeHarmonyFilter, setActiveHarmonyFilter] = useState<HarmonyType | null>(null);
-  const [internalSquintMode, setInternalSquintMode] = useState(false);
-  const [internalSquintLevel, setInternalSquintLevel] = useState(4);
-
-  const squintMode = propSquintMode !== undefined ? propSquintMode : internalSquintMode;
-  const squintLevel = propSquintLevel !== undefined ? propSquintLevel : internalSquintLevel;
-
-  const setSquintMode = (active: boolean) => {
-    setInternalSquintMode(active);
-    onSquintModeChange?.(active);
-  };
-
-  const setSquintLevel = (lvl: number) => {
-    setInternalSquintLevel(lvl);
-    onSquintLevelChange?.(lvl);
-  };
 
   const duration = Math.max(project.duration, 1);
   const shots = project.shots;
@@ -202,15 +179,6 @@ export default function ColorDrawer({
         >
           Lighting
         </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeView === "squint"}
-          className={`color-drawer-tab ${activeView === "squint" ? "active" : ""}`}
-          onClick={() => setActiveView("squint")}
-        >
-          Squint test
-        </button>
       </div>
 
       {/* 3. Drawer Scrollable Body */}
@@ -269,6 +237,13 @@ export default function ColorDrawer({
                     <span className="muted">No sampled palette for this shot.</span>
                   </div>
                 )}
+                {activeShot?.colorProfile?.temporal && (
+                  <p className="muted">
+                    {activeShot.colorProfile.temporal.changed
+                      ? `Interior colour change ${Math.round(activeShot.colorProfile.temporal.changeScore * 100)}% · ${activeShot.colorProfile.temporal.samples.length} samples`
+                      : `Interior colour stable · ${activeShot.colorProfile.temporal.samples.length} samples`}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -325,6 +300,17 @@ export default function ColorDrawer({
                   <span className="curve-legend-item temp">
                     <span className="legend-line gold" /> Temperature
                   </span>
+                  {onOpenCompare && (
+                    <button
+                      type="button"
+                      className="panel-compare-launch-btn"
+                      onClick={() => onOpenCompare("luminance")}
+                      title="Open analytical curve comparison with Luminance"
+                      aria-label="Compare Luminance with other measures"
+                    >
+                      Compare ↗
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -394,51 +380,6 @@ export default function ColorDrawer({
                   </span>
                 ))}
               </div>
-            </div>
-
-            {/* Squint Mode Quick Controls */}
-            <div className="color-section-block squint-controls-block">
-              <div className="squint-radio-group">
-                <label className="squint-radio-label">
-                  <input
-                    type="radio"
-                    name="color-squint-radio"
-                    checked={!squintMode}
-                    onChange={() => setSquintMode(false)}
-                  />
-                  <span className="squint-radio-indicator" />
-                  <span className="squint-radio-text">Normal color</span>
-                </label>
-
-                <label className="squint-radio-label">
-                  <input
-                    type="radio"
-                    name="color-squint-radio"
-                    checked={squintMode}
-                    onChange={() => setSquintMode(true)}
-                  />
-                  <span className="squint-radio-indicator" />
-                  <span className="squint-radio-text">Squint mode (values)</span>
-                </label>
-
-                <div className="squint-depth-inline">
-                  <span className="squint-depth-label">
-                    Depth <span className="depth-val">{squintLevel}</span>
-                  </span>
-                  <input
-                    type="range"
-                    min="1"
-                    max="10"
-                    step="1"
-                    value={squintLevel}
-                    onChange={(e) => setSquintLevel(Number(e.target.value))}
-                    className="squint-depth-slider"
-                    aria-label="Squint depth level"
-                  />
-                </div>
-              </div>
-
-              <p className="squint-caveat-note">Squint is a visual filter, not eye tracking.</p>
             </div>
 
             {/* Filter Palette Reading (Secondary Expandable Control) */}
@@ -596,6 +537,17 @@ export default function ColorDrawer({
                   <span className="curve-legend-item temp">
                     <span className="legend-line gold" /> Temperature
                   </span>
+                  {onOpenCompare && (
+                    <button
+                      type="button"
+                      className="panel-compare-launch-btn"
+                      onClick={() => onOpenCompare("luminance")}
+                      title="Open analytical curve comparison with Luminance"
+                      aria-label="Compare Luminance with other measures"
+                    >
+                      Compare ↗
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -702,115 +654,6 @@ export default function ColorDrawer({
                   <span className="metric-num">{stats.highKeyPct}%</span>
                   <span className="metric-label">High-key (bright)</span>
                 </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* VIEW 3: SQUINT TEST VIEW */}
-        {activeView === "squint" && (
-          <div className="color-view-squint">
-            {/* Squint Controls */}
-            <div className="color-section-block squint-controls-block">
-              <div className="squint-radio-group">
-                <label className="squint-radio-label">
-                  <input
-                    type="radio"
-                    name="color-squint-full"
-                    checked={!squintMode}
-                    onChange={() => setSquintMode(false)}
-                  />
-                  <span className="squint-radio-indicator" />
-                  <span className="squint-radio-text">Normal color</span>
-                </label>
-
-                <label className="squint-radio-label">
-                  <input
-                    type="radio"
-                    name="color-squint-full"
-                    checked={squintMode}
-                    onChange={() => setSquintMode(true)}
-                  />
-                  <span className="squint-radio-indicator" />
-                  <span className="squint-radio-text">Squint mode (values)</span>
-                </label>
-
-                <div className="squint-depth-inline">
-                  <span className="squint-depth-label">
-                    Depth <span className="depth-val">{squintLevel}</span>
-                  </span>
-                  <input
-                    type="range"
-                    min="1"
-                    max="10"
-                    step="1"
-                    value={squintLevel}
-                    onChange={(e) => setSquintLevel(Number(e.target.value))}
-                    className="squint-depth-slider"
-                    aria-label="Squint depth level"
-                  />
-                </div>
-              </div>
-
-              <p className="squint-caveat-note">Squint is a visual filter, not eye tracking.</p>
-            </div>
-
-            {/* Squint Contact Sheet (Sequence Tonal Value Strip) */}
-            <div className="color-section-block">
-              <div className="color-section-header">
-                <h3 className="color-section-title">Sequence tonal value strip</h3>
-                <span className="color-section-subtitle">
-                  Chiaroscuro massing and contrast hierarchy
-                </span>
-              </div>
-
-              <div className="squint-strip-grid">
-                {shots.map((s) => {
-                  const thumb = thumbnails[s.id];
-                  const isSelected = activeShotId === s.id;
-                  const luma =
-                    s.colorProfile?.luminance !== undefined
-                      ? Math.round(s.colorProfile.luminance * 100)
-                      : null;
-
-                  return (
-                    <div
-                      key={s.id}
-                      className={`squint-shot-card ${isSelected ? "selected" : ""}`}
-                      onClick={() => {
-                        onSelect(s.id);
-                        onSeek(s.startSeconds);
-                      }}
-                      title={`Shot ${s.index} · ${formatTimecode(s.startSeconds, project.frameRate, project.dropFrame)}`}
-                    >
-                      <div className="squint-card-thumb-wrap">
-                        {thumb ? (
-                          <img
-                            src={thumb}
-                            alt={`Shot ${s.index}`}
-                            className={`squint-card-img ${squintMode ? "filtered" : ""}`}
-                            style={
-                              squintMode
-                                ? { filter: getSquintFilter(squintLevel) }
-                                : undefined
-                            }
-                          />
-                        ) : (
-                          <div className="squint-card-empty">
-                            <span>Shot {String(s.index).padStart(3, "0")}</span>
-                          </div>
-                        )}
-                        {luma !== null && (
-                          <span className="squint-card-luma-tag">{luma}%</span>
-                        )}
-                      </div>
-                      <div className="squint-card-label">
-                        <span>Shot {String(s.index).padStart(3, "0")}</span>
-                        <span className="muted">{s.shotSize || "—"}</span>
-                      </div>
-                    </div>
-                  );
-                })}
               </div>
             </div>
           </div>

@@ -1,8 +1,11 @@
 import type { Shot, ShotSize } from "../models/project";
 export const sizeColors: Record<ShotSize, string> = {
+  "Extreme wide": "#3c78b8",
   Wide: "#4fabc5",
   Full: "#71ad84",
+  American: "#9eb56c",
   Medium: "#d0a85a",
+  "Medium close-up": "#d58c55",
   Close: "#cd7652",
   "Extreme close": "#ba5458",
   EWS: "#4a7cc2",

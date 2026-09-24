@@ -294,6 +294,8 @@ export interface DiscoveredFaceSample {
   crop: string;
   score: number;
   area: number;
+  /** Local face-continuity track within one shot; never a cast identity. */
+  trackId?: string;
 }
 
 export interface AutoDiscoverProgress {
@@ -345,7 +347,7 @@ export async function discoverCharactersAcrossShots(
   for (const shot of eligibleShots) {
     if (signal.aborted) break;
 
-    const time = (shot.startSeconds + shot.endSeconds) / 2;
+    const sampleTimes = characterSampleTimes(shot);
     const request = new AbortController();
     const abort = () => request.abort();
     signal.addEventListener("abort", abort, { once: true });
@@ -354,29 +356,43 @@ export async function discoverCharactersAcrossShots(
       signal.throwIfAborted();
       let faces = checkpoint.get(shot.id);
       if (!faces) {
-        const image = await sampler.sample(time);
-        options.onFrame?.(shot, time, image);
-        const resp = await fetchLocalModel("/api/detect-shot-faces", {
+        const frames: { image: string; time: number }[] = [];
+        // FrameSampler owns one decoder/canvas, so seeks must remain ordered.
+        for (const time of sampleTimes) {
+          const image = await sampler.sample(time);
+          options.onFrame?.(shot, time, image);
+          frames.push({ image, time });
+        }
+        const resp = await fetchLocalModel("/api/track-shot-faces", {
           method: "POST", signal: request.signal,
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ image, shotId: shot.id, time }),
+          body: JSON.stringify({ frames, shotId: shot.id }),
         });
-        if (!resp.ok) throw new Error(`Face detection failed (HTTP ${resp.status}).`);
+        if (!resp.ok) throw new Error(`Face tracking failed (HTTP ${resp.status}).`);
         const data = await resp.json();
-        if (!Array.isArray(data.faces)) throw new Error("Invalid face detection response.");
+        if (!Array.isArray(data.faces)) throw new Error("Invalid face tracking response.");
         faces = data.faces.map((f: DiscoveredFaceSample) => {
           if (!Array.isArray(f.embedding) || !f.embedding.length || !f.embedding.every(Number.isFinite) || typeof f.crop !== "string") throw new Error("Invalid face evidence.");
-          return { shotId: shot.id, time, embedding: f.embedding, crop: f.crop, score: f.score ?? 1, area: f.area ?? 100 };
+          if (!Number.isFinite(f.time)) throw new Error("Tracked face has no sample time.");
+          return { shotId: shot.id, time: f.time, embedding: f.embedding, crop: f.crop, score: f.score ?? 1, area: f.area ?? 100, trackId: typeof f.trackId === "string" ? f.trackId : undefined };
         });
         checkpoint.set(shot.id, faces!);
       }
-      allFaces.push(...faces!);
+      // Each local track contributes its clearest face once to global
+      // clustering. It reduces duplicates without inflating appearance counts.
+      const representatives = new Map<string, DiscoveredFaceSample>();
+      for (const face of faces!) {
+        const key = face.trackId ?? `sample-${face.time}-${face.area}`;
+        const current = representatives.get(key);
+        if (!current || face.score * Math.sqrt(face.area) > current.score * Math.sqrt(current.area)) representatives.set(key, face);
+      }
+      allFaces.push(...representatives.values());
     } catch (e) {
       if (signal.aborted) throw e;
-      const failure = request.signal.aborted ? "Face detection timed out." : e instanceof Error ? e.message : "Face detection failed.";
+      const failure = request.signal.aborted ? "Face tracking timed out." : e instanceof Error ? e.message : "Face tracking failed.";
       failures.set(shot.id, failure);
       options.onCheckpoint?.(shot.id, {
-        intervals: shot.characterAnalysis?.intervals ?? [], unresolvedTimes: [], failedTimes: [time], lastError: failure,
+        intervals: shot.characterAnalysis?.intervals ?? [], unresolvedTimes: [], failedTimes: sampleTimes, lastError: failure,
         sampleTimes: [], reviewStatus: "Needs review", model: "local-face-recognition", createdAt: new Date().toISOString(), mode: "fast", partial: true,
       });
     } finally {
@@ -447,29 +463,36 @@ export async function discoverCharactersAcrossShots(
 
   // Map shot appearances for each shot
   for (const shot of eligibleShots) {
-    const presentMemberIds: string[] = [];
+    const observations: Array<{ memberId: string; time: number }> = [];
     for (const c of rawCharacters) {
-      if (Array.isArray(c.appearances) && c.appearances.some((a: any) => a.shotId === shot.id)) {
-        presentMemberIds.push(c.id);
+      if (Array.isArray(c.appearances)) {
+        for (const appearance of c.appearances) {
+          if (appearance.shotId === shot.id && Number.isFinite(appearance.time)) {
+            observations.push({ memberId: c.id, time: appearance.time });
+          }
+        }
       }
     }
 
-    const intervals: CharacterInterval[] = presentMemberIds.map((memberId) => ({
+    const intervals: CharacterInterval[] = [...new Map(
+      observations.map((observation) => [`${observation.memberId}:${observation.time.toFixed(4)}`, observation]),
+    ).values()].map(({ memberId, time }) => ({
       memberId,
-      startSeconds: (shot.startSeconds + shot.endSeconds) / 2,
-      endSeconds: (shot.startSeconds + shot.endSeconds) / 2,
+      // Discovery is sampled evidence, not a claim of full-shot presence.
+      startSeconds: time,
+      endSeconds: time,
       reviewStatus: "Needs review",
     }));
 
     shotAnalyses.set(shot.id, {
       intervals: failures.has(shot.id) ? shot.characterAnalysis?.intervals ?? [] : intervals,
       unresolvedTimes: [],
-      failedTimes: failures.has(shot.id) ? [(shot.startSeconds + shot.endSeconds) / 2] : [],
+      failedTimes: failures.has(shot.id) ? characterSampleTimes(shot) : [],
       lastError: failures.get(shot.id),
       partial: failures.has(shot.id),
-      sampleTimes: failures.has(shot.id) ? [] : [(shot.startSeconds + shot.endSeconds) / 2],
+      sampleTimes: failures.has(shot.id) ? [] : characterSampleTimes(shot),
       reviewStatus: "Needs review",
-      model: "auto-cluster",
+      model: "auto-cluster+sampled-tracks",
       createdAt: new Date().toISOString(),
       mode: "fast",
       referenceSignature: signature,
@@ -485,6 +508,16 @@ export async function discoverCharactersAcrossShots(
 
 /** Existing IDs, names and reference images are authoritative across rediscovery. */
 export function mergeDiscoveredCast(existing: CastMember[], discovered: CastMember[]): CastMember[] {
-  const ids = new Set(existing.map(member => member.id));
-  return [...existing, ...discovered.filter(member => !ids.has(member.id))];
+  const discoveredIds = new Set(discovered.map(member => member.id));
+  const preservedExisting = existing.filter(member => {
+    // Retain if matched in discovered cast
+    if (discoveredIds.has(member.id)) return true;
+    const isDefaultAutoName = /^Character\s+\d+$/i.test(member.name.trim());
+    const isAutoRef = member.references.length <= 1 && member.references.every(r => r.id.startsWith("ref-"));
+    // If it was just an unedited auto-discovered placeholder that no longer appeared, purge it
+    if (isDefaultAutoName && isAutoRef) return false;
+    return true;
+  });
+  const preservedIds = new Set(preservedExisting.map(member => member.id));
+  return [...preservedExisting, ...discovered.filter(member => !preservedIds.has(member.id))];
 }

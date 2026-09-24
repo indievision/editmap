@@ -27,7 +27,7 @@ class LocalAccessMiddleware:
             token = headers.get(b"x-editmap-token", b"").decode()
             if not secrets.compare_digest(token, SESSION_TOKEN):
                 return await reject(401, "Local session token required.")
-        limit = MAX_REQUEST_BYTES if path in ("/api/separate-dme", "/api/scan-speech", "/api/scan-loudness") else 32 * 1024**2
+        limit = MAX_REQUEST_BYTES if path in ("/api/separate-dme", "/api/scan-speech", "/api/scan-loudness", "/api/detect-shots-upload", "/api/track-shot-faces") else 32 * 1024**2
         try:
             if int(headers.get(b"content-length", b"0")) > limit:
                 return await reject(413, "Request exceeds the local processing limit.")

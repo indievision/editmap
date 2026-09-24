@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { analyzeCharacterFrame, characterReferenceSignature, characterSampleTimes, isEligibleForCharacterScan, scanCharactersInShot, shouldScanCharacters } from "../src/analysis/characters";
+import { analyzeCharacterFrame, characterReferenceSignature, characterSampleTimes, discoverCharactersAcrossShots, isEligibleForCharacterScan, scanCharactersInShot, shouldScanCharacters } from "../src/analysis/characters";
 import type { CastMember, Shot } from "../src/models/project";
 
 const shot: Shot = {
@@ -125,11 +125,12 @@ test("discoverCharactersAcrossShots discovers faces and clusters them into Chara
     },
   ];
 
-  t.mock.method(globalThis, "fetch", async (url) => {
+  t.mock.method(globalThis, "fetch", async (url, init) => {
     const urlStr = String(url);
-    if (urlStr.includes("/api/detect-shot-faces")) {
+    if (urlStr.includes("/api/track-shot-faces")) {
+      const body = JSON.parse(String(init?.body ?? "{}"));
       return new Response(JSON.stringify({
-        faces: [{ embedding: [0.1, 0.2], bbox: [10, 10, 50, 50], score: 0.95, crop: "avatar-b64", area: 1600 }],
+        faces: body.frames.map((frame: { time: number }) => ({ embedding: [0.1, 0.2], bbox: [10, 10, 50, 50], score: 0.95, crop: "avatar-b64", area: 1600, time: frame.time, trackId: "track-1" })),
       }));
     }
     if (urlStr.includes("/api/cluster-faces")) {
@@ -171,6 +172,20 @@ test("discoverCharactersAcrossShots discovers faces and clusters them into Chara
   ]);
 });
 
+test("discovery retains the observed face time instead of moving it to the shot midpoint", async (t) => {
+  t.mock.method(globalThis, "fetch", async (url) => new Response(JSON.stringify(
+    String(url).includes("track-shot-faces")
+      ? { faces: [{ time: 1, embedding: [1, 0], crop: "face", score: 1, area: 100, trackId: "track-1" }] }
+      : { characters: [{ id: "anna", name: "Anna", avatar: "face", shotId: shot.id, time: 1, appearances: [{ shotId: shot.id, time: 1 }] }] },
+  )));
+  const result = await discoverCharactersAcrossShots(
+    [{ ...shot, composition: "Single person", content: "People" }],
+    { sample: async () => "frame", dispose() {} },
+    new AbortController().signal,
+  );
+  assert.deepEqual(result.shotAnalyses.get(shot.id)?.intervals, [{ memberId: "anna", startSeconds: 1, endSeconds: 1, reviewStatus: "Needs review" }]);
+});
+
 test("rediscovery preserves named cast and retries failed samples from its checkpoint", async (t) => {
   const { discoverCharactersAcrossShots, mergeDiscoveredCast } = await import("../src/analysis/characters");
   const existing = [{ id: "anna", name: "Anna", references: [{ id: "manual", image: "aGVsbG8=", shotId: "s1", time: .5 }] }];
@@ -180,7 +195,7 @@ test("rediscovery preserves named cast and retries failed samples from its check
   let fail = true, samples = 0;
   t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
     const body = JSON.parse(init.body as string);
-    if (String(url).includes("detect-shot")) {
+    if (String(url).includes("track-shot")) {
       if (body.shotId === "s2" && fail) return new Response("{}", { status: 503 });
       return Response.json({ faces: [] });
     }
@@ -189,10 +204,10 @@ test("rediscovery preserves named cast and retries failed samples from its check
   const sampler = { sample: async () => { samples++; return "image"; }, dispose() {} };
   const first = await discoverCharactersAcrossShots(shots, sampler, new AbortController().signal, { existingCast: existing, checkpoint });
   assert.deepEqual(first.cast, existing);
-  assert.deepEqual(first.shotAnalyses.get("s2")?.failedTimes, [1.5]);
+  assert.deepEqual(first.shotAnalyses.get("s2")?.failedTimes, [1.1, 1.3, 1.5, 1.7, 1.9]);
   assert.deepEqual(first.shotAnalyses.get("s2")?.sampleTimes, []);
   fail = false;
   const resumed = await discoverCharactersAcrossShots(shots, sampler, new AbortController().signal, { existingCast: existing, checkpoint });
-  assert.equal(samples, 3);
+  assert.equal(samples, 15);
   assert.deepEqual(resumed.shotAnalyses.get("s2")?.failedTimes, []);
 });

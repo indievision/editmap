@@ -2,10 +2,13 @@ import { memo, useState, useRef, useEffect, useCallback } from "react";
 import type { Project, Shot } from "../models/project";
 import Rhythm from "./Rhythm";
 import LocalPacing from "./LocalPacing";
-import FramingSummary from "./FramingSummary";
-import FramingArc from "./FramingArc";
 import AudiovisualRhythm from "./AudiovisualRhythm";
 import MotionEnergyArc from "./MotionEnergyArc";
+import ComparisonView from "./ComparisonView";
+import type { MeasureId } from "../analysis/comparison";
+
+const RHYTHM_TABS = ["duration", "pacing", "compare", "audiovisual", "motion"] as const;
+type RhythmTabId = (typeof RHYTHM_TABS)[number];
 
 const EditingRhythm = memo(function EditingRhythm({
   project,
@@ -18,6 +21,13 @@ const EditingRhythm = memo(function EditingRhythm({
   onUpdateShots,
   onClose,
   variant = "deck",
+  initialCompareMeasure,
+  onClearInitialCompareMeasure,
+  range,
+  onRangeChange,
+  onUpdateProject,
+  isLoopingRange,
+  onToggleLoopRange,
 }: {
   project: Project;
   time: number;
@@ -29,8 +39,29 @@ const EditingRhythm = memo(function EditingRhythm({
   onUpdateShots?: (shots: Shot[]) => void;
   onClose?: () => void;
   variant?: "deck" | "drawer";
+  initialCompareMeasure?: MeasureId;
+  onClearInitialCompareMeasure?: () => void;
+  range?: { start?: number; end?: number };
+  onRangeChange?: (range?: { start?: number; end?: number }) => void;
+  onUpdateProject?: (patch: Partial<Project>) => void;
+  isLoopingRange?: boolean;
+  onToggleLoopRange?: (active?: boolean) => void;
 }) {
-  const [tab, setTab] = useState("duration");
+  const [tab, setTab] = useState<RhythmTabId>(() => (initialCompareMeasure ? "compare" : "duration"));
+  const [compareMeasure, setCompareMeasure] = useState<MeasureId | undefined>(initialCompareMeasure);
+
+  useEffect(() => {
+    if (initialCompareMeasure) {
+      setCompareMeasure(initialCompareMeasure);
+      setTab("compare");
+      onClearInitialCompareMeasure?.();
+    }
+  }, [initialCompareMeasure, onClearInitialCompareMeasure]);
+
+  const handleOpenCompare = useCallback((measure: MeasureId) => {
+    setCompareMeasure(measure);
+    setTab("compare");
+  }, []);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
@@ -72,8 +103,11 @@ const EditingRhythm = memo(function EditingRhythm({
     scrollRef.current?.scrollBy({ left: amount, behavior: "smooth" });
   };
 
-  const handleSelectTab = (selectedTab: string, e: React.MouseEvent<HTMLButtonElement>) => {
+  const handleSelectTab = (selectedTab: RhythmTabId, e: React.MouseEvent<HTMLButtonElement>) => {
     setTab(selectedTab);
+    if (selectedTab !== "compare") {
+      onClearInitialCompareMeasure?.();
+    }
     if (variant !== "drawer") {
       e.currentTarget.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
     }
@@ -128,6 +162,16 @@ const EditingRhythm = memo(function EditingRhythm({
               <button
                 type="button"
                 role="tab"
+                aria-selected={tab === "compare"}
+                aria-pressed={tab === "compare"}
+                className={`rhythm-subtab-btn ${tab === "compare" ? "active" : ""}`}
+                onClick={(e) => handleSelectTab("compare", e)}
+              >
+                Compare
+              </button>
+              <button
+                type="button"
+                role="tab"
                 aria-selected={tab === "audiovisual"}
                 aria-pressed={tab === "audiovisual"}
                 className={`rhythm-subtab-btn ${tab === "audiovisual" ? "active" : ""}`}
@@ -144,26 +188,6 @@ const EditingRhythm = memo(function EditingRhythm({
                 onClick={(e) => handleSelectTab("motion", e)}
               >
                 Motion energy
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={tab === "summary"}
-                aria-pressed={tab === "summary"}
-                className={`rhythm-subtab-btn ${tab === "summary" ? "active" : ""}`}
-                onClick={(e) => handleSelectTab("summary", e)}
-              >
-                Framing summary
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={tab === "arc"}
-                aria-pressed={tab === "arc"}
-                className={`rhythm-subtab-btn ${tab === "arc" ? "active" : ""}`}
-                onClick={(e) => handleSelectTab("arc", e)}
-              >
-                Framing arc
               </button>
             </div>
           </div>
@@ -201,6 +225,12 @@ const EditingRhythm = memo(function EditingRhythm({
                 Local pacing
               </button>
               <button
+                aria-pressed={tab === "compare"}
+                onClick={(e) => handleSelectTab("compare", e)}
+              >
+                Compare
+              </button>
+              <button
                 aria-pressed={tab === "audiovisual"}
                 onClick={(e) => handleSelectTab("audiovisual", e)}
               >
@@ -211,18 +241,6 @@ const EditingRhythm = memo(function EditingRhythm({
                 onClick={(e) => handleSelectTab("motion", e)}
               >
                 Motion energy
-              </button>
-              <button
-                aria-pressed={tab === "summary"}
-                onClick={(e) => handleSelectTab("summary", e)}
-              >
-                Framing summary
-              </button>
-              <button
-                aria-pressed={tab === "arc"}
-                onClick={(e) => handleSelectTab("arc", e)}
-              >
-                Framing arc
               </button>
             </div>
             {canScrollRight && (
@@ -243,7 +261,26 @@ const EditingRhythm = memo(function EditingRhythm({
         <Rhythm shots={project.shots} selected={selected} onSelect={onSelect} />
       </div>
       <div hidden={tab !== "pacing"}>
-        <LocalPacing project={project} time={time} onSeek={onSeek} />
+        <LocalPacing
+          project={project}
+          time={time}
+          onSeek={onSeek}
+          onOpenCompare={handleOpenCompare}
+        />
+      </div>
+      <div hidden={tab !== "compare"}>
+        <ComparisonView
+          project={project}
+          time={time}
+          initialMeasure={compareMeasure}
+          onSeek={onSeek}
+          onSelectShot={onSelect}
+          range={range}
+          onRangeChange={onRangeChange}
+          onUpdateProject={onUpdateProject}
+          isLooping={isLoopingRange}
+          onToggleLoop={onToggleLoopRange}
+        />
       </div>
       <div hidden={tab !== "audiovisual"}>
         <AudiovisualRhythm
@@ -261,17 +298,7 @@ const EditingRhythm = memo(function EditingRhythm({
           selected={selected}
           onSelect={onSelect}
           onUpdateShots={onUpdateShots}
-        />
-      </div>
-      <div hidden={tab !== "summary"}>
-        <FramingSummary shots={project.shots} />
-      </div>
-      <div hidden={tab !== "arc"}>
-        <FramingArc
-          project={project}
-          time={time}
-          selected={selected}
-          onSelect={onSelect}
+          onOpenCompare={handleOpenCompare}
         />
       </div>
     </section>

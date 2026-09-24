@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { extractColorProfile, fallbackColorProfile, detectColorHarmony } from "../src/analysis/colorExtraction";
+import { temporalColorProfile } from "../src/analysis/colorTemporal";
 import type { ColorProfile } from "../src/models/project";
 
 function createMockImageData(
@@ -102,6 +103,24 @@ test("fallbackColorProfile provides safe default color profile", () => {
   assert.equal(fallback.luminance, 0.5);
   assert.equal(fallback.mood, "Neutral");
   assert.equal(fallback.harmony.type, "neutral");
+});
+
+test("temporal colour reading records measured interior change without changing the midpoint profile", () => {
+  const dark = { ...fallbackColorProfile(), palette: ["#101010"], luminance: .1, temperature: -.4, saturation: .1 };
+  const middle = { ...fallbackColorProfile(), palette: ["#808080"], luminance: .5, temperature: 0, saturation: .3 };
+  const warm = { ...fallbackColorProfile(), palette: ["#FFAA33"], luminance: .8, temperature: .5, saturation: .8 };
+  const profile = temporalColorProfile([{ time: 1, profile: dark }, { time: 5, profile: middle }, { time: 9, profile: warm }]);
+  assert.equal(profile.luminance, .5);
+  assert.equal(profile.temporal?.samples.length, 3);
+  assert.equal(profile.temporal?.changed, true);
+});
+
+test("temporal colour reading detects a middle change even when the endpoints match", () => {
+  const dark = { ...fallbackColorProfile(), palette: ["#101010"], luminance: .05, temperature: 0, saturation: 0 };
+  const bright = { ...fallbackColorProfile(), palette: ["#F0F0F0"], luminance: .95, temperature: 0, saturation: 0 };
+  const profile = temporalColorProfile([{ time: 1, profile: dark }, { time: 5, profile: bright }, { time: 9, profile: dark }]);
+  assert.equal(profile.temporal?.changed, true);
+  assert.ok((profile.temporal?.deltaLuminance ?? 0) > .8);
 });
 
 test("extractColorProfile accurately excludes letterbox padding when given active bounds", () => {

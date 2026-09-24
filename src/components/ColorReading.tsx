@@ -1,18 +1,12 @@
 import { useState, useMemo } from "react";
 import type { Project, Shot, HarmonyType } from "../models/project";
 import { formatTimecode } from "../utils/timecode";
-import { getSquintFilter } from "../utils/squint";
-
 export interface ColorReadingProps {
   project: Project;
   thumbnails?: Record<string, string>;
   selected?: string;
   onSelect: (shotId: string) => void;
   onSeek: (seconds: number) => void;
-  squintMode?: boolean;
-  onSquintModeChange?: (active: boolean) => void;
-  squintLevel?: number;
-  onSquintLevelChange?: (level: number) => void;
 }
 
 export default function ColorReading({
@@ -21,29 +15,10 @@ export default function ColorReading({
   selected,
   onSelect,
   onSeek,
-  squintMode: propSquintMode,
-  onSquintModeChange,
-  squintLevel: propSquintLevel,
-  onSquintLevelChange,
 }: ColorReadingProps) {
   const [hoveredShot, setHoveredShot] = useState<Shot | null>(null);
   const [activeMoodFilter, setActiveMoodFilter] = useState<string | null>(null);
   const [activeHarmonyFilter, setActiveHarmonyFilter] = useState<HarmonyType | null>(null);
-  const [internalSquintMode, setInternalSquintMode] = useState(false);
-  const [internalSquintLevel, setInternalSquintLevel] = useState(4);
-
-  const squintMode = propSquintMode !== undefined ? propSquintMode : internalSquintMode;
-  const squintLevel = propSquintLevel !== undefined ? propSquintLevel : internalSquintLevel;
-
-  const setSquintMode = (active: boolean) => {
-    setInternalSquintMode(active);
-    onSquintModeChange?.(active);
-  };
-
-  const setSquintLevel = (lvl: number) => {
-    setInternalSquintLevel(lvl);
-    onSquintLevelChange?.(lvl);
-  };
 
   const duration = Math.max(project.duration, 1);
   const shots = project.shots;
@@ -210,6 +185,13 @@ export default function ColorReading({
                       </strong>
                     )}
                   </span>
+                  {hoveredShot.colorProfile.temporal && (
+                    <span className="tooltip-mood">
+                      {hoveredShot.colorProfile.temporal.changed
+                        ? `Interior change · ${Math.round(hoveredShot.colorProfile.temporal.changeScore * 100)}%`
+                        : "Interior colour stable"}
+                    </span>
+                  )}
                   <div className="tooltip-swatches">
                     {hoveredShot.colorProfile.palette.map((hex, i) => (
                       <span key={i} className="swatch-micro" style={{ backgroundColor: hex }} title={hex} />
@@ -358,105 +340,6 @@ export default function ColorReading({
               {mood} ({count})
             </button>
           ))}
-        </div>
-      </div>
-
-      {/* 3. THE SQUINT TEST (SEQUENCE TONAL VALUE STRIP) */}
-      <div className="squint-test-section">
-        <div className="subhead squint-subhead">
-          <div>
-            <h3>The Squint Test (Tonal Value Strip)</h3>
-            <span className="muted">
-              Composite optical engine: diffraction blur, rod desaturation, highlight bloom & chiaroscuro value massing (Notan).
-            </span>
-          </div>
-
-          <div className="squint-controls">
-            <div className="squint-toggle-group">
-              <button
-                type="button"
-                className={`squint-mode-btn ${!squintMode ? "active" : ""}`}
-                onClick={() => setSquintMode(false)}
-              >
-                🖼 Normal Color
-              </button>
-              <button
-                type="button"
-                className={`squint-mode-btn ${squintMode ? "active" : ""}`}
-                onClick={() => setSquintMode(true)}
-              >
-                😑 Squint Mode (Values)
-              </button>
-            </div>
-
-            {squintMode && (
-              <label className="squint-depth-slider">
-                <span>Squint Depth: <b>Level {squintLevel}</b></span>
-                <input
-                  type="range"
-                  min="1"
-                  max="10"
-                  step="1"
-                  value={squintLevel}
-                  onChange={(e) => setSquintLevel(Number(e.target.value))}
-                />
-              </label>
-            )}
-          </div>
-        </div>
-
-        <div className="squint-contact-sheet">
-          {shots.map((s) => {
-            const thumb = thumbnails[s.id];
-            const isSelected = selected === s.id;
-            const luma = s.colorProfile?.luminance !== undefined ? Math.round(s.colorProfile.luminance * 100) : null;
-
-            return (
-              <div
-                key={s.id}
-                className={`squint-card ${isSelected ? "selected" : ""}`}
-                onClick={() => {
-                  onSeek(s.startSeconds);
-                  onSelect(s.id);
-                }}
-                title={`Shot ${s.index} · ${s.shotSize} · ${formatTimecode(s.startSeconds, project.frameRate, project.dropFrame)} · ${luma !== null ? `${luma}% Luma` : ""}`}
-              >
-                <div className="squint-thumb-wrapper">
-                  {thumb ? (
-                    <img
-                      src={thumb}
-                      alt={`Shot ${s.index}`}
-                      className={`squint-img ${squintMode ? "squint-active" : ""}`}
-                      style={
-                        squintMode
-                          ? {
-                              filter: getSquintFilter(squintLevel),
-                            }
-                          : undefined
-                      }
-                    />
-                  ) : (
-                    <div className="squint-empty">
-                      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                        <rect x="2" y="4" width="20" height="16" rx="2" />
-                        <path d="M7 8h10M7 12h10M7 16h10" strokeDasharray="2 2" />
-                      </svg>
-                      <span>Shot {String(s.index).padStart(3, "0")}</span>
-                    </div>
-                  )}
-                  {luma !== null && (
-                    <span className={`squint-luma-badge ${luma < 25 ? "dark" : luma > 70 ? "bright" : "mid"}`}>
-                      {luma}%
-                    </span>
-                  )}
-                </div>
-                <div className="squint-card-footer">
-                  <span className="squint-card-idx">Shot {String(s.index).padStart(3, "0")}</span>
-                  <span className="squint-card-size">{s.shotSize}</span>
-                </div>
-              </div>
-            );
-          })}
         </div>
       </div>
     </div>

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   classifyDynamicContrast,
+  getRangeLoudness,
   getShotLoudness,
   isLoudnessAnalysisValid,
   lufsToNormalized,
@@ -85,6 +86,28 @@ test("lufsToNormalized normalizes within range", () => {
   assert.equal(lufsToNormalized(-30, -60, 0), 0.5);
 });
 
+test("getRangeLoudness computes metrics across arbitrary range and handles edge cases", () => {
+  const fullRange = getRangeLoudness({ start: 0, end: 10 }, sampleAnalysis);
+  assert.equal(typeof fullRange.avgMomentary, "number");
+  assert.equal(typeof fullRange.maxShortTerm, "number");
+  assert.equal(fullRange.peakTruePeak, -1.4);
+
+  // Sub-range where momentary jump occurred (bins 2-4: -20, -10, -25)
+  const jumpRange = getRangeLoudness({ start: 2.0, end: 4.5 }, sampleAnalysis);
+  assert.ok(jumpRange.maxShortTerm >= -20);
+  assert.ok(jumpRange.shortTermRange >= 0);
+
+  // Inverted range order start > end
+  const inverted = getRangeLoudness({ start: 5.0, end: 2.0 }, sampleAnalysis);
+  assert.equal(inverted.peakTruePeak, jumpRange.peakTruePeak);
+
+  // Edge cases: empty or missing analysis arrays
+  const emptyAnalysis = { ...sampleAnalysis, momentary: [] };
+  const emptyRes = getRangeLoudness({ start: 0, end: 5 }, emptyAnalysis);
+  assert.equal(emptyRes.avgMomentary, -70);
+  assert.equal(emptyRes.peakTruePeak, -70);
+});
+
 test("loudness analysis survives project backup export and restore", () => {
   const project: Project = newProject();
   project.duration = 10;
@@ -95,3 +118,13 @@ test("loudness analysis survives project backup export and restore", () => {
 
   assert.deepEqual(restored.loudnessAnalysis, sampleAnalysis);
 });
+
+test("lufsToNormalized correctly maps -23 LUFS reference line position", () => {
+  const norm23 = lufsToNormalized(-23, -60, 0);
+  assert.ok(Math.abs(norm23 - 37 / 60) < 0.0001);
+
+  // SVG Y coordinate: 200 - norm * 200
+  const y23 = 200 - norm23 * 200;
+  assert.ok(y23 > 66 && y23 < 100, "-23 LUFS line must sit between -20 and -30 LUFS");
+});
+

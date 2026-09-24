@@ -138,12 +138,15 @@ test("does not retry a missing model", async (t) => {
   assert.equal(calls, 1);
 });
 
-test("selectableShotSizes exposes the active five-rung framing taxonomy", async () => {
+test("selectableShotSizes exposes the active eight-rung framing taxonomy", async () => {
   const { selectableShotSizes } = await import("../src/models/project");
   assert.deepEqual(selectableShotSizes, [
+    "Extreme wide",
     "Wide",
     "Full",
+    "American",
     "Medium",
+    "Medium close-up",
     "Close",
     "Extreme close",
     "Unknown",

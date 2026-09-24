@@ -63,3 +63,10 @@ test("full shots participate in the same duration denominator as close-ups", () 
   assert.equal(result.known, 20);
   assert.equal(result.closeShare, 0.5);
 });
+
+test("the editorial scale preserves CinemaCLIP's wide, American, and medium-close distinctions", () => {
+  assert.deepEqual(
+    ["EWS", "WS", "FS", "AS", "MS", "MCU", "CU", "ECU"].map((size) => framingRank(shot(0, 1, size as Shot["shotSize"]))),
+    [0, 1, 2, 3, 4, 5, 6, 7],
+  );
+});

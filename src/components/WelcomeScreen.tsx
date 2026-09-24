@@ -143,6 +143,7 @@ export default function WelcomeScreen({
             <button
               type="button"
               className="welcome-btn-secondary"
+              aria-label="Open project"
               onClick={onOpenProject}
             >
               Open
@@ -261,8 +262,9 @@ export default function WelcomeScreen({
                   hard cuts and scene boundaries.
                 </li>
                 <li>
-                  <strong>Framing & Shot Sizes:</strong> Suggests Wide, Full, Medium, Close,
-                  or Extreme close using a local cinema-specific vision model.
+                  <strong>Framing & Shot Sizes:</strong> Suggests Extreme wide, Wide, Full,
+                  American, Medium, Medium close-up, Close, or Extreme close using a local
+                  cinema-specific vision model.
                 </li>
                 <li>
                   <strong>Character Discovery & Cast Gallery:</strong> Detects faces and

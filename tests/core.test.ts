@@ -10,8 +10,9 @@ import {
   timecodeSeconds,
 } from "../src/utils/timecode";
 import { activeShot, clampSeek } from "../src/analysis/playback";
-import { cutPairAt, durationChange, framingChange } from "../src/analysis/cuts";
+import { colorMatchAtCut, cutPairAt, durationChange, framingChange } from "../src/analysis/cuts";
 import { waveformBins } from "../src/analysis/audio";
+import { detectVideoShots } from "../src/analysis/videoScanner";
 const fixture = (name: string) =>
   readFileSync(new URL(`../fixtures/${name}.edl`, import.meta.url), "utf8");
 const near = (a: number, b: number) =>
@@ -107,6 +108,28 @@ test("cut comparison only joins contiguous shots and reports measurable changes"
   assert.deepEqual(framingChange(pair), { label: "Tighter", detail: "WS → CU" });
   assert.deepEqual(durationChange(pair), { label: "Longer", detail: "1.00s → 2.50s" });
   assert.equal(cutPairAt(parseEDL(fixture("gaps-25"), 25).shots, "event-003-2"), undefined);
+});
+
+test("cut colour match uses near-boundary samples when present", () => {
+  const { shots } = parseEDL(fixture("cuts-24"), 24);
+  const profile = (luminance: number, palette: string[]) => ({ luminance, temperature: 0, saturation: .5, palette });
+  shots[0].colorProfile = { ...profile(.2, ["#202020"]), mood: "Neutral", harmony: { type: "neutral", label: "Neutral", confidence: 1, dominantHue: 0 }, temporal: { samples: [{ time: .2, ...profile(.8, ["#F0F0F0"]) }, { time: .8, ...profile(.8, ["#F0F0F0"]) }, { time: .9, ...profile(.8, ["#F0F0F0"]) }], boundary: { start: { time: .01, ...profile(.2, ["#202020"]) }, end: { time: .99, ...profile(.2, ["#202020"]) } }, deltaLuminance: 0, deltaTemperature: 0, deltaSaturation: 0, deltaPalette: 0, changeScore: 0, changed: false } };
+  shots[1].colorProfile = { ...profile(.8, ["#F0F0F0"]), mood: "Neutral", harmony: { type: "neutral", label: "Neutral", confidence: 1, dominantHue: 0 }, temporal: { samples: [{ time: 1.1, ...profile(.2, ["#202020"]) }, { time: 2, ...profile(.2, ["#202020"]) }, { time: 3, ...profile(.2, ["#202020"]) }], boundary: { start: { time: 1.01, ...profile(.8, ["#F0F0F0"]) }, end: { time: 3.99, ...profile(.8, ["#F0F0F0"]) } }, deltaLuminance: 0, deltaTemperature: 0, deltaSaturation: 0, deltaPalette: 0, changeScore: 0, changed: false } };
+  assert.equal(colorMatchAtCut(shots[0], shots[1]).label, "Luminance jump");
+});
+
+test("TransNet cut import keeps soft transitions and project timecode", async (t) => {
+  t.mock.method(globalThis, "fetch", async (url) => new Response(JSON.stringify(
+    String(url).includes("detect-shots-status")
+      ? { available: true }
+      : { fps: 25, model_backend: "onnx", shots: [
+        { start_seconds: 0, end_seconds: 1.5, transition_type: "cut" },
+        { start_seconds: 1.5, end_seconds: 3, transition_type: "soft" },
+      ] },
+  )));
+  const shots = await detectVideoShots(new File(["fixture"], "fixture.mp4"), { fps: 24 });
+  assert.equal(shots[0].endTimecode, "00:00:01:12");
+  assert.equal(shots[1].transition, "SOFT");
 });
 test("waveform bins retain local peaks without making a sound classification", () => {
   const bins = waveformBins(new Float32Array([0, -0.25, 0.8, -0.4]), 2);

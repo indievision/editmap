@@ -42,3 +42,28 @@ export function formatTimecode(
     .join(":")
     .replace(/:(\d{2})$/, `${drop ? ";" : ":"}$1`);
 }
+
+export interface ParsedTimecodeResult {
+  valid: boolean;
+  seconds?: number;
+  error?: string;
+}
+
+export function parseTimecodeSafely(
+  tc: string,
+  fps: number,
+  drop = false,
+): ParsedTimecodeResult {
+  const trimmed = tc.trim();
+  if (!trimmed) {
+    return { valid: false, error: "Timecode required" };
+  }
+  try {
+    const sec = timecodeSeconds(trimmed, fps, drop);
+    return { valid: true, seconds: sec };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Invalid timecode";
+    return { valid: false, error: message };
+  }
+}
+

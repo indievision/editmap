@@ -32,7 +32,14 @@ export function sharedPresence(left: CharacterInterval[], right: CharacterInterv
 /** Consecutive shot changes where the two sampled characters trade separate visibility. */
 export function alternations(shots: Shot[], leftId: string, rightId: string, range?: PresenceRange): PresenceRange[] {
   const readings = shots.map((shot) => {
-    const ids = new Set((shot.characterAnalysis?.intervals ?? []).filter((interval) => !range || overlaps({ start: interval.startSeconds, end: interval.endSeconds }, range)).map((interval) => interval.memberId));
+    const manualIds =
+      shot.characterAnalysis?.manualReviewStatus === "Confirmed" && shot.characterAnalysis.manualMemberIds
+        ? shot.characterAnalysis.manualMemberIds.filter(() => !range || overlaps({ start: shot.startSeconds, end: shot.endSeconds }, range))
+        : [];
+    const intervalIds = (shot.characterAnalysis?.intervals ?? [])
+      .filter((interval) => !range || overlaps({ start: interval.startSeconds, end: interval.endSeconds }, range))
+      .map((interval) => interval.memberId);
+    const ids = new Set([...intervalIds, ...manualIds]);
     return { shot, side: ids.has(leftId) && !ids.has(rightId) ? "left" : ids.has(rightId) && !ids.has(leftId) ? "right" : undefined };
   });
   const ranges: PresenceRange[] = [];

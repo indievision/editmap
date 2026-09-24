@@ -16,10 +16,12 @@ const LocalPacing = memo(function LocalPacing({
   project,
   time,
   onSeek,
+  onOpenCompare,
 }: {
   project: Project;
   time: number;
   onSeek: (time: number) => void;
+  onOpenCompare?: (measure: "cutRate") => void;
 }) {
   const [window, setWindow] = useState(30);
 
@@ -81,23 +83,36 @@ const LocalPacing = memo(function LocalPacing({
           <h3 className="pacing-glance-title">PACING AT A GLANCE</h3>
           <p className="pacing-glance-subtitle">Three measures, one moment in the film.</p>
         </div>
-        <div
-          className="pacing-window-selector"
-          role="radiogroup"
-          aria-label="Moving window duration"
-        >
-          {[10, 30, 60].map((n) => (
+        <div className="pacing-glance-controls">
+          <div
+            className="pacing-window-selector"
+            role="radiogroup"
+            aria-label="Moving window duration"
+          >
+            {[10, 30, 60].map((n) => (
+              <button
+                key={n}
+                type="button"
+                role="radio"
+                aria-checked={window === n}
+                className={`pacing-window-btn ${window === n ? "active" : ""}`}
+                onClick={() => setWindow(n)}
+              >
+                {n}s
+              </button>
+            ))}
+          </div>
+          {onOpenCompare && (
             <button
-              key={n}
               type="button"
-              role="radio"
-              aria-checked={window === n}
-              className={`pacing-window-btn ${window === n ? "active" : ""}`}
-              onClick={() => setWindow(n)}
+              className="panel-compare-launch-btn"
+              onClick={() => onOpenCompare("cutRate")}
+              title="Open analytical curve comparison with Cut rate"
+              aria-label="Compare Cut rate with other measures"
             >
-              {n}s
+              Compare ↗
             </button>
-          ))}
+          )}
         </div>
         <select
           aria-label="Pacing window"

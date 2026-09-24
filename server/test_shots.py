@@ -136,6 +136,29 @@ class TestShotEngine(unittest.TestCase):
             self.assertGreaterEqual(body["total_shots"], 2)
             self.assertIsInstance(body["shots"], list)
 
+            # Browser-selected files use the upload endpoint; the service must
+            # never require a browser to disclose a local filesystem path.
+            with open(tmp_path, "rb") as video_file:
+                upload_res = self.client.post(
+                    "/api/detect-shots-upload",
+                    headers=self.headers,
+                    data={"threshold": "0.3", "min_shot_len_frames": "5"},
+                    files={"file": ("synthetic.mp4", video_file, "video/mp4")},
+                )
+            if self.detector.pretrained_weights_available():
+                self.assertEqual(upload_res.status_code, 200)
+                uploaded = upload_res.json()
+                self.assertEqual(uploaded["video_path"], "synthetic.mp4")
+                self.assertIn(uploaded["model_backend"], ("onnx", "torch"))
+                self.assertGreaterEqual(uploaded["total_shots"], 2)
+            else:
+                self.assertEqual(upload_res.status_code, 503)
+                self.assertEqual(upload_res.json()["detail"], "TransNet V2 weights are not available locally.")
+
+            status_res = self.client.get("/api/detect-shots-status", headers=self.headers)
+            self.assertEqual(status_res.status_code, 200)
+            self.assertEqual(status_res.json()["available"], self.detector.pretrained_weights_available())
+
         finally:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)

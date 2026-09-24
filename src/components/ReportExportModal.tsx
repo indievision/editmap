@@ -1,6 +1,12 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import type { Project } from "../models/project";
 import PrintableReport, { type ReportSectionConfig } from "./PrintableReport";
+import {
+  generateReportPdf,
+  savePdfWithFilePicker,
+  openPdfPreview,
+  formatPdfFilename,
+} from "../utils/pdfExport";
 
 export interface ReportExportConfig {
   theme: "ink-saver" | "dark";
@@ -12,7 +18,8 @@ export interface ReportExportModalProps {
   project: Project;
   isOpen: boolean;
   onClose: () => void;
-  onExport: (config: ReportExportConfig) => void;
+  onExport?: (config: ReportExportConfig) => void;
+  onSystemPrint?: (config: ReportExportConfig) => void;
   config?: ReportExportConfig;
   onChangeConfig?: (config: ReportExportConfig) => void;
 }
@@ -22,6 +29,7 @@ export default function ReportExportModal({
   isOpen,
   onClose,
   onExport,
+  onSystemPrint,
   config,
   onChangeConfig,
 }: ReportExportModalProps) {
@@ -29,6 +37,11 @@ export default function ReportExportModal({
   const [format, setFormat] = useState<
     "A4 Landscape" | "A4 Portrait" | "Letter"
   >(config?.format ?? "A4 Landscape");
+  const [filename, setFilename] = useState<string>(() => formatPdfFilename(project.name));
+  const [isExporting, setIsExporting] = useState<boolean>(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [previewZoom, setPreviewZoom] = useState<number>(0.65);
+  const reportContentRef = useRef<HTMLDivElement | null>(null);
 
   const [sections, setSections] = useState<ReportSectionConfig>(
     config?.sections ?? {
@@ -65,12 +78,79 @@ export default function ReportExportModal({
     onChangeConfig?.({ theme, format, sections: nextSections });
   };
 
-  const handleExportClick = () => {
-    onExport({ theme, format, sections });
+  const handleDirectExport = async () => {
+    if (!reportContentRef.current) return;
+    try {
+      setIsExporting(true);
+      setStatusMessage("Rendering high-res pages...");
+      const blob = await generateReportPdf(
+        reportContentRef.current,
+        { theme, format, sections },
+        project.name
+      );
+      setStatusMessage("Saving PDF file...");
+      const saved = await savePdfWithFilePicker(blob, filename || formatPdfFilename(project.name));
+      if (saved) {
+        onExport?.({ theme, format, sections });
+        onClose();
+      } else {
+        setStatusMessage(null);
+      }
+    } catch (err: any) {
+      console.error("PDF export failed:", err);
+      setStatusMessage("Export failed. You can use System Print.");
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handlePreviewPdf = async () => {
+    if (!reportContentRef.current) return;
+
+    // Open a blank window synchronously during user click to prevent Safari popup blocker
+    const previewWin = window.open("", "_blank");
+    if (previewWin) {
+      try {
+        previewWin.document.write(
+          "<!DOCTYPE html><html><head><title>Generating PDF Preview...</title></head><body style='background:#18181b;color:#a1a1aa;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;margin:0;'><div>Rendering high-resolution PDF preview...</div></body></html>"
+        );
+      } catch {
+        // Ignore if restricted
+      }
+    }
+
+    try {
+      setIsExporting(true);
+      setStatusMessage("Generating preview...");
+      const blob = await generateReportPdf(
+        reportContentRef.current,
+        { theme, format, sections },
+        project.name
+      );
+      openPdfPreview(blob, previewWin);
+      setStatusMessage(null);
+    } catch (err: any) {
+      console.error("PDF preview failed:", err);
+      if (previewWin && !previewWin.closed) {
+        previewWin.close();
+      }
+      setStatusMessage("Preview failed.");
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleSystemPrintClick = () => {
+    if (onSystemPrint) {
+      onSystemPrint({ theme, format, sections });
+    } else {
+      onExport?.({ theme, format, sections });
+      window.print();
+    }
   };
 
   return (
-    <div className="report-modal-overlay" onClick={onClose}>
+    <div className="report-modal-overlay" onClick={isExporting ? undefined : onClose}>
       <div className="report-modal-dialog" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="report-modal-header">
@@ -84,7 +164,7 @@ export default function ReportExportModal({
             </svg>
             Export Analysis Report (PDF)
           </div>
-          <button className="report-modal-close" onClick={onClose} title="Close modal">
+          <button className="report-modal-close" onClick={onClose} disabled={isExporting} title="Close modal">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <line x1="18" y1="6" x2="6" y2="18"></line>
               <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -126,6 +206,18 @@ export default function ReportExportModal({
                 <option value="A4 Portrait">A4 Portrait (210 x 297 mm)</option>
                 <option value="Letter">US Letter (11 x 8.5 in)</option>
               </select>
+            </div>
+
+            {/* File Name */}
+            <div className="control-group">
+              <div className="control-group-title">File Name</div>
+              <input
+                type="text"
+                className="export-filename-input"
+                value={filename}
+                onChange={(e) => setFilename(e.target.value)}
+                placeholder="report-filename.pdf"
+              />
             </div>
 
             {/* Sections Toggles */}
@@ -238,15 +330,48 @@ export default function ReportExportModal({
 
           {/* Live Preview Panel */}
           <div className="report-preview-panel">
-            <div className="preview-panel-header">Live preview:</div>
+            <div className="preview-panel-header">
+              <span>Live preview:</span>
+              <div className="preview-zoom-controls">
+                <button
+                  type="button"
+                  className={`btn-zoom ${previewZoom === 0.65 ? "active" : ""}`}
+                  onClick={() => setPreviewZoom(0.65)}
+                >
+                  Fit (65%)
+                </button>
+                <button
+                  type="button"
+                  className={`btn-zoom ${previewZoom === 0.8 ? "active" : ""}`}
+                  onClick={() => setPreviewZoom(0.8)}
+                >
+                  80%
+                </button>
+                <button
+                  type="button"
+                  className={`btn-zoom ${previewZoom === 1.0 ? "active" : ""}`}
+                  onClick={() => setPreviewZoom(1.0)}
+                >
+                  100%
+                </button>
+              </div>
+            </div>
             <div className="preview-scroll-container">
-              <div className="preview-page-wrapper" style={{ transform: "scale(0.65)", transformOrigin: "top center" }}>
-                <PrintableReport
-                  project={project}
-                  theme={theme}
-                  format={format}
-                  sections={sections}
-                />
+              <div
+                className="preview-page-wrapper"
+                style={{
+                  transform: `scale(${previewZoom})`,
+                  transformOrigin: "top center",
+                }}
+              >
+                <div ref={reportContentRef}>
+                  <PrintableReport
+                    project={project}
+                    theme={theme}
+                    format={format}
+                    sections={sections}
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -254,17 +379,64 @@ export default function ReportExportModal({
 
         {/* Footer */}
         <div className="report-modal-footer">
-          <button className="btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="btn-primary" onClick={handleExportClick}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-              <polyline points="7 10 12 15 17 10"></polyline>
-              <line x1="12" y1="15" x2="12" y2="3"></line>
-            </svg>
-            Export PDF
-          </button>
+          <div className="report-modal-footer-left">
+            <button
+              type="button"
+              className="btn-link-print"
+              onClick={handleSystemPrintClick}
+              disabled={isExporting}
+              title="Open browser system print sheet (for physical printers)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="6 9 6 2 18 2 18 9"></polyline>
+                <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+                <rect x="6" y="14" width="12" height="8"></rect>
+              </svg>
+              System Print...
+            </button>
+            {statusMessage && (
+              <span className="report-export-status-message">{statusMessage}</span>
+            )}
+          </div>
+
+          <div className="report-modal-footer-right">
+            <button className="btn-secondary" onClick={onClose} disabled={isExporting}>
+              Cancel
+            </button>
+            <button
+              className="btn-secondary btn-preview-pdf"
+              onClick={handlePreviewPdf}
+              disabled={isExporting}
+              title="Generate PDF and preview in browser tab"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+              Preview PDF
+            </button>
+            <button
+              className="btn-primary btn-export-pdf"
+              onClick={handleDirectExport}
+              disabled={isExporting}
+            >
+              {isExporting ? (
+                <>
+                  <span className="export-spinner" />
+                  Generating PDF...
+                </>
+              ) : (
+                <>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                  </svg>
+                  Export PDF
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </div>

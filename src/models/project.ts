@@ -1,13 +1,16 @@
 export const shotSizes = [
-  // The active scale is deliberately coarse: it is the shared contract between
+  // The active editorial scale is the shared contract between
   // CinemaCLIP suggestions, manual review, and the framing rhythm readings.
+  "Extreme wide",
   "Wide",
   "Full",
+  "American",
   "Medium",
+  "Medium close-up",
   "Close",
   "Extreme close",
   // Retained solely to open existing projects without data loss. New scans and
-  // manual controls use the five values above.
+  // manual controls use the eight values above.
   "EWS",
   "WS",
   "MWS",
@@ -26,9 +29,12 @@ export const shotSizes = [
 ] as const;
 export type ShotSize = (typeof shotSizes)[number];
 export const selectableShotSizes = [
+  "Extreme wide",
   "Wide",
   "Full",
+  "American",
   "Medium",
+  "Medium close-up",
   "Close",
   "Extreme close",
   "Unknown",
@@ -78,6 +84,27 @@ export interface ColorProfile {
     confidence: number;
     dominantHue: number;
   };
+  /** Multiple interior frame readings; estimates, never a grading-intent claim. */
+  temporal?: {
+    samples: Array<{
+      time: number;
+      luminance: number;
+      temperature: number;
+      saturation: number;
+      palette: string[];
+    }>;
+    deltaLuminance: number;
+    deltaTemperature: number;
+    deltaSaturation: number;
+    deltaPalette: number;
+    changeScore: number;
+    changed: boolean;
+    /** Near-boundary samples support cut matching without confusing them with interior change. */
+    boundary?: {
+      start: { time: number; luminance: number; temperature: number; saturation: number; palette: string[] };
+      end: { time: number; luminance: number; temperature: number; saturation: number; palette: string[] };
+    };
+  };
 }
 
 export const cameraMovementTypes = [
@@ -95,14 +122,16 @@ export type CameraMovementType = (typeof cameraMovementTypes)[number];
 export interface MotionProfile {
   /** Dominant camera movement classification */
   cameraMovement: CameraMovementType;
-  /** Global camera motion energy 0 to 100 */
+  /** Global camera motion energy 0 to 100 (retained for backward compatibility) */
   cameraEnergy: number;
-  /** Internal subject motion energy 0 to 100 */
+  /** Internal subject motion energy 0 to 100 (retained for backward compatibility) */
   subjectEnergy: number;
-  /** Combined visual kinetic energy 0 to 100 */
+  /** Unified visual kinetic energy flow 0 to 100 */
   totalKineticEnergy: number;
   /** Confidence of estimation 0.0 to 1.0 */
   confidence: number;
+  /** Optional kinetic momentum delta across cut into this shot (-100 to +100) */
+  kineticDelta?: number;
 }
 
 export interface Shot {
@@ -192,6 +221,8 @@ export interface SequenceMarker {
   endSeconds: number;
   /** A user reading, never an automated conclusion. */
   notes?: string;
+  kind?: "moment" | "passage";
+  beat?: string;
 }
 export const cutInterpretations = [
   "Unmarked",
@@ -305,6 +336,35 @@ export interface LoudnessAnalysis {
   processingSeconds: number;
 }
 
+/** A subjective screening reaction; the raw time is never replaced by cut snapping. */
+export interface ScreeningMark {
+  id: string;
+  passId: string;
+  time: number;
+  anchorTime: number;
+  incomingId?: string;
+  outgoingId?: string;
+  createdAt: string;
+  mirror: boolean;
+  darken: boolean;
+  muted: boolean;
+  notes: string;
+  resolved: boolean;
+  trimFrames?: number;
+  audioLeadFrames?: number;
+}
+
+export interface ComparisonObservation {
+  id: string;
+  startSeconds: number;
+  endSeconds: number;
+  notes: string;
+  selectedMeasures: Array<"cutRate" | "luminance" | "motion">;
+  pacingWindow?: number;
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -321,13 +381,19 @@ export interface Project {
   dropFrame: boolean;
   shots: Shot[];
   sequences?: SequenceMarker[];
+  screeningMarks?: ScreeningMark[];
   cutAnnotations?: CutAnnotation[];
   soundSpans?: SoundSpan[];
   cast?: CastMember[];
   dmeWaveforms?: DmeWaveforms;
   speechAnalysis?: SpeechAnalysis;
   loudnessAnalysis?: LoudnessAnalysis;
+  savedExploreSequences?: import("./explore").SavedExploreSequence[];
+  savedExploreComparisons?: import("./explore").SavedExploreComparison[];
+  comparisonObservations?: ComparisonObservation[];
   colorMode: string;
+  structureVocabulary?: import("./structureVocabularies").StructureVocabularyId;
+  customStoryBeats?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -341,7 +407,11 @@ export function newProject(): Project {
     recordOrigin: "00:00:00:00",
     dropFrame: false,
     shots: [],
+    savedExploreSequences: [],
+    savedExploreComparisons: [],
     colorMode: "shotSize",
+    structureVocabulary: "freeform",
+    customStoryBeats: [],
     createdAt: now,
     updatedAt: now,
   };

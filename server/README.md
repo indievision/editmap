@@ -14,17 +14,28 @@ Start Vite from the project root with host-network access. `/api/*` proxies to p
 
 ## Readiness and access
 
-`GET /health` reports service and per-engine readiness without forcing model downloads. `not_loaded` means the engine has not been initialized; `unavailable` means initialization/inference failed. `GET /api/health` exposes the same status through Vite. Models load lazily. Run `provision_cinemaclip.py` before offline use to cache CinemaCLIP framing weights; YOLO and InsightFace may download weights on first use, and Demucs uses `models/97d170e1-dbb4db15.th`. Primary framing-model failures return an explicit 503, never fabricated labels. Each framing suggestion combines three interior shot samples; disagreement or low confidence stays uncertain and requires review.
+`GET /health` reports service and per-engine readiness without forcing model downloads. `not_loaded` means the engine has not been initialized; `unavailable` means initialization/inference failed. `GET /api/health` exposes the same status through Vite. Models load lazily. Run `provision_cinemaclip.py` before offline use to cache and verify the approved CinemaCLIP framing checkpoint; YOLO and InsightFace may download weights on first use, and Demucs uses `models/97d170e1-dbb4db15.th`. Primary framing-model failures return an explicit 503, never fabricated labels. Each framing suggestion combines three interior shot samples; disagreement or low confidence stays uncertain and requires review.
+
+## Framing benchmark
+
+Use the reviewer-labelled JSON template at `fixtures/framing-benchmark.example.json` to assess real-film shots. Every entry has one human scale label, a film identifier, and exactly three interior stills (20%/50%/80%). The benchmark does not download frames or use model output as ground truth.
+
+```sh
+.venv/bin/python benchmark_framing.py /absolute/path/to/labels.json --output /absolute/path/to/report.json
+```
+
+It emits a dataset-specific report and only marks it `qualified_on_this_dataset` when it has at least 100 shots from three films, ten examples per scale, and 75% accuracy. This is deliberately not a universal reliability claim.
 
 Only localhost/127.0.0.1 browser origins and hostnames are supported. `GET /api/session` returns a process-local token; other `/api/*` requests require `X-Editmap-Token`. The client negotiates this automatically and refreshes after a backend restart. These checks reject unrelated websites; this is not an authentication boundary against other trusted local processes.
 
 ## Endpoints
 
-- `POST /api/analyze-shot`: `{image, images?}` → five-rung framing tags (`Wide`, `Full`, `Medium`, `Close`, `Extreme close`), uncertainty, model. `images` accepts up to three frames for shot aggregation.
+- `POST /api/analyze-shot`: `{image, images?}` → eight editorial framing tags (`Extreme wide`, `Wide`, `Full`, `American`, `Medium`, `Medium close-up`, `Close`, `Extreme close`), uncertainty, model. `images` accepts up to three frames for shot aggregation.
 - `POST /api/analyze-characters`: `{image, cast}` → matched appearances/unresolved state.
 - `POST /api/detect-shot-faces`: `{image, shotId, time}` → embeddings and face crops.
+- `POST /api/track-shot-faces`: `{shotId, frames[]}` → five ordered face samples associated into shot-local tracks; these reduce duplicate cluster evidence but do not assign cast identity.
 - `POST /api/cluster-faces`: `{faces, existingCast?, similarityThreshold?, minAppearances?}` → clusters reconciled with existing references. Existing IDs/names survive confident matches; unmatched identities receive UUIDs.
-- `POST /api/detect-shots`: `{video_path, threshold?, min_shot_len_frames?}` → TransNet V2 shot boundary detection intervals.
+- `POST /api/detect-shots-upload`: browser-selected `file` plus optional threshold/minimum-shot-length → primary TransNet V2 shot-boundary intervals. The file is held in a temporary local path only for the scan, then removed. `POST /api/detect-shots` remains for trusted local tooling that already has a path.
 - `POST /api/analyze-color`, `/api/analyze-eye-trace`, `/api/analyze-motion`: local visual readings.
 - `GET /api/dme-status`: DME model availability.
 - `POST /api/separate-dme`: multipart `file`, `binCount` (1–10000), optional client-generated UUID `jobId` → HTTP 202 `{jobId}`.

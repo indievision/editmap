@@ -4,13 +4,16 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
+    "dev": "vite --host 127.0.0.1 --open",
+    "start": "vite --host 127.0.0.1 --open",
     "build": "tsc -b && vite build",
     "test": "node --import tsx --test tests/*.test.ts",
     "test:browser": "playwright test"
   },
   "dependencies": {
     "echarts": "^6.1.0",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

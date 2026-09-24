@@ -1,7 +1,12 @@
-import { memo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import type { Project, Shot } from "../models/project";
 import { formatTimecode } from "../utils/timecode";
-import { analyzeShotMotion } from "../analysis/motion";
+import {
+  analyzeShotMotion,
+  calculateKineticDeltas,
+  classifyKineticVelocity,
+  classifyMomentumTransition,
+} from "../analysis/motion";
 
 const MotionEnergyArc = memo(function MotionEnergyArc({
   project,
@@ -10,6 +15,7 @@ const MotionEnergyArc = memo(function MotionEnergyArc({
   selected,
   onSelect,
   onUpdateShots,
+  onOpenCompare,
 }: {
   project: Project;
   time: number;
@@ -17,12 +23,14 @@ const MotionEnergyArc = memo(function MotionEnergyArc({
   selected?: string;
   onSelect: (shot: Shot) => void;
   onUpdateShots?: (updatedShots: Shot[]) => void;
+  onOpenCompare?: (measure: "motion") => void;
 }) {
   const [batchScanning, setBatchScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
 
   const duration = Math.max(1, project.duration);
-  const shots = project.shots;
+  // Ensure kinetic deltas are populated across sequential shots
+  const shots = useMemo(() => calculateKineticDeltas(project.shots), [project.shots]);
 
   const analyzedCount = shots.filter(
     (s) => s.motionProfile !== undefined,
@@ -41,10 +49,18 @@ const MotionEnergyArc = memo(function MotionEnergyArc({
     (s) => (s.motionProfile?.totalKineticEnergy ?? 0) >= 50,
   ).length;
 
-  const staticCount = shots.filter(
+  const stillCount = shots.filter(
     (s) =>
-      (s.cameraMovement ?? s.motionProfile?.cameraMovement) === "Static" ||
-      (s.motionProfile?.cameraEnergy ?? 0) < 8,
+      s.motionProfile !== undefined &&
+      (s.motionProfile.totalKineticEnergy <= 15 ||
+        s.cameraMovement === "Static" ||
+        s.motionProfile.cameraEnergy < 8),
+  ).length;
+
+  const cutShockCount = shots.filter(
+    (s) =>
+      s.motionProfile?.kineticDelta !== undefined &&
+      Math.abs(s.motionProfile.kineticDelta) >= 25,
   ).length;
 
   const handleScanSequence = async () => {
@@ -70,7 +86,8 @@ const MotionEnergyArc = memo(function MotionEnergyArc({
       setScanProgress(Math.round(((i + 1) / updated.length) * 100));
     }
 
-    onUpdateShots(updated);
+    const withDeltas = calculateKineticDeltas(updated);
+    onUpdateShots(withDeltas);
     setBatchScanning(false);
   };
 
@@ -78,13 +95,22 @@ const MotionEnergyArc = memo(function MotionEnergyArc({
     <section className="motion-energy-arc">
       <div className="motion-arc-header">
         <p className="rhythm-explanation">
-          <b>Kinetic Energy Arc</b>: Visualizes macro motion energy across the
-          sequence. Layered bars represent{" "}
-          <span className="legend-camera">■ Camera Motion</span> (global frame
-          move) and <span className="legend-subject">■ Subject Motion</span>{" "}
-          (internal actor/action energy).
+          <b>Kinetic Energy Arc</b>: Visualizes macro motion energy and movement flow across the
+          sequence. Shaded bars represent unified visual velocity, tracking where visual rhythm
+          accelerates, sustains momentum, or drops into still contemplative breath.
         </p>
         <div className="motion-arc-actions">
+          {onOpenCompare && (
+            <button
+              type="button"
+              className="panel-compare-launch-btn"
+              onClick={() => onOpenCompare("motion")}
+              title="Open analytical curve comparison with Motion energy"
+              aria-label="Compare Motion energy with other measures"
+            >
+              Compare ↗
+            </button>
+          )}
           {url && onUpdateShots && (
             <button
               type="button"
@@ -111,8 +137,12 @@ const MotionEnergyArc = memo(function MotionEnergyArc({
           <b className="stat-value">{highVelocityCount}</b>
         </div>
         <div className="motion-stat">
-          <span className="stat-label">Static Camera Shots</span>
-          <b className="stat-value">{staticCount}</b>
+          <span className="stat-label">Still / Static Beats</span>
+          <b className="stat-value">{stillCount}</b>
+        </div>
+        <div className="motion-stat">
+          <span className="stat-label">Momentum Cut Shocks</span>
+          <b className="stat-value">{cutShockCount}</b>
         </div>
         <div className="motion-stat">
           <span className="stat-label">Coverage Analyzed</span>
@@ -143,14 +173,15 @@ const MotionEnergyArc = memo(function MotionEnergyArc({
             >
               {shots.map((shot) => {
                 const profile = shot.motionProfile;
-                const camEnergy = profile?.cameraEnergy ?? 0;
-                const subEnergy = profile?.subjectEnergy ?? 0;
                 const totalEnergy = profile?.totalKineticEnergy ?? 0;
                 const isSelected = selected === shot.id;
-                const movement =
-                  shot.cameraMovement ??
-                  profile?.cameraMovement ??
-                  "Unclassified";
+                const velocityTier = classifyKineticVelocity(totalEnergy);
+                const momentum =
+                  profile?.kineticDelta !== undefined
+                    ? classifyMomentumTransition(profile.kineticDelta)
+                    : null;
+
+                const tierClass = velocityTier.toLowerCase().replace(/\s+/g, "-");
 
                 return (
                   <button
@@ -158,7 +189,9 @@ const MotionEnergyArc = memo(function MotionEnergyArc({
                     type="button"
                     aria-label={`Motion shot ${shot.index}`}
                     aria-pressed={isSelected}
-                    title={`Shot ${shot.index} · ${movement} · Total: ${totalEnergy}% (Camera: ${camEnergy}%, Subject: ${subEnergy}%) · ${shot.duration.toFixed(2)}s`}
+                    title={`Shot ${shot.index} · ${velocityTier} (${totalEnergy}% Flow)${
+                      momentum && momentum.type !== "initial" ? ` · Cut Momentum: ${momentum.label}` : ""
+                    } · ${shot.duration.toFixed(2)}s`}
                     className={`motion-shot-bar ${isSelected ? "selected" : ""} ${
                       profile ? "analyzed" : "unscanned"
                     }`}
@@ -170,25 +203,18 @@ const MotionEnergyArc = memo(function MotionEnergyArc({
                   >
                     {profile ? (
                       <div
-                        className="bar-energy-stack"
-                        style={{ height: `${Math.max(2, totalEnergy)}%` }}
+                        className={`bar-energy-unified tier-${tierClass}`}
+                        style={{ height: `${Math.max(3, totalEnergy)}%` }}
                       >
-                        {/* Subject energy layer (top/amber) */}
-                        <div
-                          className="bar-layer subject"
-                          style={{
-                            flex: subEnergy,
-                            minHeight: subEnergy > 0 ? "4px" : "0",
-                          }}
-                        />
-                        {/* Camera energy layer (bottom/cyan) */}
-                        <div
-                          className="bar-layer camera"
-                          style={{
-                            flex: camEnergy,
-                            minHeight: camEnergy > 0 ? "4px" : "0",
-                          }}
-                        />
+                        {profile.kineticDelta !== undefined &&
+                          Math.abs(profile.kineticDelta) >= 25 && (
+                            <div
+                              className={`bar-momentum-dot ${
+                                profile.kineticDelta > 0 ? "surge" : "drop"
+                              }`}
+                              title={momentum ? momentum.label : ""}
+                            />
+                          )}
                       </div>
                     ) : (
                       <div className="bar-energy-unscanned" />

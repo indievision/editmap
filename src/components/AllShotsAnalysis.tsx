@@ -375,7 +375,7 @@ export default function AllShotsAnalysis({
           existingCast: cast,
           checkpoint: discoveryCheckpoint.current,
           onCheckpoint: onCharacterResult,
-          minAppearances: 1,
+          minAppearances: peopleEligible.length >= 2 ? 2 : 1,
           onProgress: (prog) => {
             setCharacterProgress({ completed: prog.completedShots, total: prog.totalShots });
             if (prog.stage === "sampling") {

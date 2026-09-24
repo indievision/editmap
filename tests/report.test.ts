@@ -161,3 +161,28 @@ test('ReportExportConfig preserves user customisations across export', async () 
   assert.equal(customConfig.sections.rhythm, false);
   assert.equal(customConfig.sections.color, true);
 });
+
+test('formatPdfFilename sanitizes and creates clean report file names', async () => {
+  const { formatPdfFilename, getPageDimensions } = await import('../src/utils/pdfExport');
+
+  assert.equal(formatPdfFilename('My Feature Film'), 'my-feature-film-film-analysis-report.pdf');
+  assert.equal(formatPdfFilename('Project #12 (Final Cut!)'), 'project-12-final-cut-film-analysis-report.pdf');
+  assert.equal(formatPdfFilename(''), 'editmap-film-analysis-report.pdf');
+  assert.equal(formatPdfFilename(undefined), 'editmap-film-analysis-report.pdf');
+
+  const landscapeDims = getPageDimensions('A4 Landscape');
+  assert.equal(landscapeDims.widthMm, 297);
+  assert.equal(landscapeDims.heightMm, 210);
+  assert.equal(landscapeDims.orientation, 'landscape');
+
+  const portraitDims = getPageDimensions('A4 Portrait');
+  assert.equal(portraitDims.widthMm, 210);
+  assert.equal(portraitDims.heightMm, 297);
+  assert.equal(portraitDims.orientation, 'portrait');
+
+  const letterDims = getPageDimensions('Letter');
+  assert.equal(letterDims.widthMm, 279.4);
+  assert.equal(letterDims.heightMm, 215.9);
+  assert.equal(letterDims.orientation, 'landscape');
+});
+

@@ -1,9 +1,12 @@
 import type { Shot, ShotSize } from "../models/project";
 
 export const framingSizes = [
+  "Extreme wide",
   "Wide",
   "Full",
+  "American",
   "Medium",
+  "Medium close-up",
   "Close",
   "Extreme close",
 ] as const;
@@ -14,9 +17,12 @@ export type FramingSize = (typeof framingSizes)[number];
 export function normalizedFramingSize(shot: Pick<Shot, "shotSize" | "content">): FramingSize | null {
   if (shot.content === "Text / title card") return null;
   switch (shot.shotSize) {
-    case "Wide": case "EWS": case "WS": return "Wide";
-    case "Full": case "FS": case "MWS": case "AS": return "Full";
-    case "Medium": case "MS": case "MCU": return "Medium";
+    case "Extreme wide": case "EWS": return "Extreme wide";
+    case "Wide": case "WS": return "Wide";
+    case "Full": case "FS": return "Full";
+    case "American": case "MWS": case "AS": return "American";
+    case "Medium": case "MS": return "Medium";
+    case "Medium close-up": case "MCU": return "Medium close-up";
     case "Close": case "CU": return "Close";
     case "Extreme close": case "ECU": return "Extreme close";
     default: return null;

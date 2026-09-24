@@ -18,26 +18,29 @@ test("framing summary, arc selection and local share follow current tags", async
     await page
       .getByRole("button", { name: `Shot ${index}`, exact: true })
       .click();
+    await page.getByRole("button", { name: "Inspect Shot" }).click();
     await page.getByLabel("Shot size", { exact: true }).selectOption(size);
+    await page.locator(".drawer-close-btn").click();
   }
-  await page
-    .getByRole("button", { name: "Framing summary", exact: true })
-    .click();
+  await page.locator('.studio-rail-btn[aria-label="Framing"]').click();
   await expect(page.locator(".framing-summary")).toContainText("100.0%");
   await expect(
     page
       .locator(".framing-bin")
       .filter({ has: page.getByText("Extreme close", { exact: true }) }),
   ).toContainText("74.1%");
-  await page.getByRole("button", { name: "Framing arc", exact: true }).click();
+  await page.getByRole("tab", { name: "Progression", exact: true }).click();
   await page
     .getByRole("button", { name: "Framing shot 2", exact: true })
     .click();
+  await page.getByRole("button", { name: "Inspect Shot" }).click();
   await expect(page.getByLabel("Shot size", { exact: true })).toHaveValue("Close");
+  await page.locator(".drawer-close-btn").click();
   await expect(
     page.getByRole("button", { name: "Framing shot 2", exact: true }),
   ).toHaveAttribute("aria-pressed", "true");
-  await page.getByRole("button", { name: "Local pacing", exact: true }).click();
+  await page.locator('.studio-rail-btn[aria-label="Rhythm"]').click();
+  await page.getByRole("tab", { name: "Local pacing", exact: true }).click();
   await expect(page.locator(".pacing .rhythm-summary")).toContainText("92.6%");
   await page.getByLabel("Pacing window").selectOption("10");
   await expect(page.locator(".pacing .rhythm-summary")).toContainText("83.3%");

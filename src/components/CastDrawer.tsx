@@ -1,19 +1,29 @@
-import { useMemo, useState } from "react";
-import type { CastMember, Project, Shot } from "../models/project";
+import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import type { CastMember, CharacterInterval, Project, Shot } from "../models/project";
 import {
   alternations,
-  appearanceGaps,
   sharedPresence,
   type PresenceRange,
 } from "../analysis/characterPresence";
 
-const duration = (intervals: { startSeconds: number; endSeconds: number }[]) =>
-  intervals.reduce((total, interval) => total + Math.max(0, interval.endSeconds - interval.startSeconds), 0);
+export const CAST_PALETTE = [
+  "#d97764", // terracotta
+  "#7ca381", // sage green
+  "#8e7cc3", // purple
+  "#d4a34b", // warm gold
+  "#c97282", // rose
+  "#6ba3cf", // steel blue
+];
 
-const clock = (seconds: number) => {
-  const m = Math.floor(seconds / 60);
-  const s = Math.round(seconds % 60);
-  return `${m}:${String(s).padStart(2, "0")}`;
+export function getMemberColor(memberId: string, cast: CastMember[]): string {
+  const index = cast.findIndex((m) => m.id === memberId);
+  return CAST_PALETTE[(index >= 0 ? index : 0) % CAST_PALETTE.length];
+}
+
+const formatClock = (seconds: number) => {
+  const m = Math.floor(Math.max(0, seconds) / 60);
+  const s = Math.floor(Math.max(0, seconds) % 60);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 };
 
 export interface CastDrawerProps {
@@ -61,47 +71,177 @@ export default function CastDrawer({
   onSeek,
   onClose,
 }: CastDrawerProps) {
+  const containerRef = useRef<HTMLElement>(null);
+  const [isEnlarged, setIsEnlarged] = useState(false);
+
+  // Responsive observer for container width: threshold 620px
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setIsEnlarged(entry.contentRect.width >= 620);
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   const cast = project.cast ?? [];
   const activeMemberId = selectedMember || cast[0]?.id;
-  const selectedMemberObj = cast.find((m) => m.id === activeMemberId);
+  const selectedMemberObj = cast.find((m) => m.id === activeMemberId) || cast[0];
 
+  const [isAddingChar, setIsAddingChar] = useState(false);
   const [newCharName, setNewCharName] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [tempName, setTempName] = useState("");
-  const [comparisonMember, setComparisonMember] = useState<string>();
+  const [showMergeSelect, setShowMergeSelect] = useState(false);
+  const [comparisonMember, setComparisonMember] = useState<string | undefined>();
+  const [selectedShotId, setSelectedShotId] = useState<string | undefined>(shot?.id);
+  const [hoveredShotId, setHoveredShotId] = useState<string | null>(null);
 
-  const referenceCount = cast.reduce((total, member) => total + member.references.length, 0);
+  // Sync selectedShotId if external shot changes
+  useEffect(() => {
+    if (shot?.id) setSelectedShotId(shot.id);
+  }, [shot?.id]);
+
   const timelineDuration = Math.max(1, project.duration || 1);
 
-  // Compile all intervals and manual assignments
+  // Map of shotId -> set of cast memberIds present in that shot
+  const shotsCastMap = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    for (const s of project.shots) {
+      const set = new Set<string>();
+      const ca = s.characterAnalysis;
+      if (ca) {
+        if (ca.manualReviewStatus === "Confirmed" && ca.manualMemberIds) {
+          for (const id of ca.manualMemberIds) {
+            if (cast.some((m) => m.id === id)) set.add(id);
+          }
+        } else if (ca.intervals) {
+          for (const inv of ca.intervals) {
+            if (cast.some((m) => m.id === inv.memberId)) set.add(inv.memberId);
+          }
+        }
+      }
+      map.set(s.id, set);
+    }
+    return map;
+  }, [project.shots, cast]);
+
+  // Shots where 2 or more cast members appear together
+  const overlappingShots = useMemo(() => {
+    const overlaps: Array<{
+      shot: Shot;
+      startSeconds: number;
+      endSeconds: number;
+      members: CastMember[];
+    }> = [];
+
+    for (const s of project.shots) {
+      const presentIds = shotsCastMap.get(s.id);
+      if (presentIds && presentIds.size >= 2) {
+        const members = Array.from(presentIds)
+          .map((id) => cast.find((m) => m.id === id))
+          .filter(Boolean) as CastMember[];
+        overlaps.push({
+          shot: s,
+          startSeconds: s.startSeconds,
+          endSeconds: s.endSeconds,
+          members,
+        });
+      }
+    }
+
+    return overlaps.sort((a, b) => a.startSeconds - b.startSeconds);
+  }, [project.shots, shotsCastMap, cast]);
+
+  // Compile summary of appearances for all characters with duration lines covering time
   const allSummary = useMemo(() => {
     return cast.map((member) => {
-      const intervals = project.shots.flatMap((s) => {
-        const analysis = s.characterAnalysis;
-        // A confirmed manual decision is the source of truth for this shot
-        if (analysis?.manualReviewStatus === "Confirmed") return [];
-        return (analysis?.intervals ?? [])
-          .filter((interval) => interval.memberId === member.id)
-          .map((interval) => ({ ...interval, shot: s }));
-      });
-      const seconds = duration(intervals);
-      const shots = new Map(intervals.map((interval) => [interval.shot.id, interval.shot])).values();
-      const manualShots = project.shots.filter(
-        (s) =>
-          s.characterAnalysis?.manualReviewStatus === "Confirmed" &&
-          s.characterAnalysis.manualMemberIds?.includes(member.id)
+      const segmentMap = new Map<
+        string,
+        {
+          id: string;
+          shot: Shot;
+          startSeconds: number;
+          endSeconds: number;
+          isManual: boolean;
+          isConfirmed: boolean;
+          overlappingMemberIds: string[];
+        }
+      >();
+
+      for (const s of project.shots) {
+        const ca = s.characterAnalysis;
+        if (!ca) continue;
+
+        const isManual =
+          ca.manualReviewStatus === "Confirmed" &&
+          (ca.manualMemberIds?.includes(member.id) ?? false);
+
+        const memberIntervals =
+          ca.manualReviewStatus !== "Confirmed" && ca.intervals
+            ? ca.intervals.filter((i) => i.memberId === member.id)
+            : [];
+
+        if (!isManual && memberIntervals.length === 0) continue;
+
+        const isConfirmed =
+          isManual ||
+          ca.reviewStatus === "Confirmed" ||
+          memberIntervals.some((i) => i.reviewStatus === "Confirmed");
+
+        // The appearance covers the shot's duration across time,
+        // or the trimmed sub-shot span if explicit duration is present.
+        let start = s.startSeconds;
+        let end = s.endSeconds;
+        if (!isManual && memberIntervals.length > 0) {
+          const hasExplicitSpan = memberIntervals.some(
+            (i) => i.endSeconds > i.startSeconds + 0.1,
+          );
+          if (hasExplicitSpan) {
+            start = Math.max(s.startSeconds, Math.min(...memberIntervals.map((i) => i.startSeconds)));
+            end = Math.min(s.endSeconds, Math.max(...memberIntervals.map((i) => i.endSeconds)));
+          }
+        }
+
+        const presentInShot = shotsCastMap.get(s.id) ?? new Set();
+        const overlappingMemberIds = Array.from(presentInShot).filter((id) => id !== member.id);
+
+        segmentMap.set(s.id, {
+          id: `seg-${member.id}-${s.id}`,
+          shot: s,
+          startSeconds: start,
+          endSeconds: end,
+          isManual,
+          isConfirmed,
+          overlappingMemberIds,
+        });
+      }
+
+      const segments = Array.from(segmentMap.values()).sort(
+        (a, b) => a.startSeconds - b.startSeconds,
       );
+
+      const uniqueShots = segments.map((seg) => seg.shot);
+
+      const presenceIntervals: CharacterInterval[] = segments.map((seg) => ({
+        memberId: member.id,
+        startSeconds: seg.startSeconds,
+        endSeconds: seg.endSeconds,
+        reviewStatus: seg.isConfirmed ? ("Confirmed" as const) : ("Needs review" as const),
+      }));
+
       return {
         member,
-        intervals,
-        seconds,
-        shots: [...new Map([...shots, ...manualShots].map((s) => [s.id, s])).values()],
-        manualShots,
+        segments,
+        uniqueShots,
+        presenceIntervals,
       };
     });
-  }, [cast, project.shots]);
+  }, [cast, project.shots, shotsCastMap]);
 
-  // Selected member data
   const selectedSummary = useMemo(() => {
     return allSummary.find((item) => item.member.id === activeMemberId);
   }, [allSummary, activeMemberId]);
@@ -109,45 +249,31 @@ export default function CastDrawer({
   // Unified appearances list for selected member
   const appearancesList = useMemo(() => {
     if (!selectedSummary) return [];
-    const items: Array<{
-      id: string;
-      shot: Shot;
-      isManual: boolean;
-      startSeconds: number;
-      endSeconds: number;
-      reviewStatus: "Confirmed" | "Needs review";
-    }> = [];
-
-    selectedSummary.intervals.forEach((interval, idx) => {
-      items.push({
-        id: `interval-${interval.shot.id}-${idx}`,
-        shot: interval.shot,
-        isManual: false,
-        startSeconds: interval.startSeconds,
-        endSeconds: interval.endSeconds,
-        reviewStatus:
-          interval.reviewStatus === "Confirmed" ||
-          interval.shot.characterAnalysis?.reviewStatus === "Confirmed"
-            ? "Confirmed"
-            : "Needs review",
-      });
-    });
-
-    selectedSummary.manualShots.forEach((manualShot) => {
-      items.push({
-        id: `manual-${manualShot.id}`,
-        shot: manualShot,
-        isManual: true,
-        startSeconds: manualShot.startSeconds,
-        endSeconds: manualShot.endSeconds,
-        reviewStatus: "Confirmed",
-      });
-    });
-
-    return items.sort((a, b) => a.startSeconds - b.startSeconds);
+    return selectedSummary.segments.map((seg) => ({
+      id: seg.id,
+      shot: seg.shot,
+      isManual: seg.isManual,
+      startSeconds: seg.startSeconds,
+      endSeconds: seg.endSeconds,
+      reviewStatus: (seg.isConfirmed ? "Confirmed" : "Needs review") as "Confirmed" | "Needs review",
+      overlappingMemberIds: seg.overlappingMemberIds,
+    }));
   }, [selectedSummary]);
 
-  // Comparison logic
+  // Currently focused shot in details
+  const currentAppearanceShot = useMemo(() => {
+    if (selectedShotId) {
+      const found = project.shots.find((s) => s.id === selectedShotId);
+      if (found) return found;
+    }
+    return appearancesList[0]?.shot ?? shot ?? project.shots[0];
+  }, [selectedShotId, project.shots, appearancesList, shot]);
+
+  const hoveredShot = useMemo(() => {
+    return hoveredShotId ? project.shots.find((s) => s.id === hoveredShotId) : null;
+  }, [hoveredShotId, project.shots]);
+
+  // Pair comparison
   const comparison =
     activeMemberId && comparisonMember && comparisonMember !== activeMemberId
       ? ([
@@ -159,22 +285,35 @@ export default function CastDrawer({
   const pairReadings =
     comparison?.[0] && comparison?.[1]
       ? {
-          shared: sharedPresence(comparison[0].intervals, comparison[1].intervals, range),
-          alternating: alternations(project.shots, comparison[0].member.id, comparison[1].member.id, range),
+          shared: sharedPresence(
+            comparison[0].presenceIntervals,
+            comparison[1].presenceIntervals,
+            range,
+          ),
+          alternating: alternations(
+            project.shots,
+            comparison[0].member.id,
+            comparison[1].member.id,
+            range,
+          ),
         }
       : undefined;
 
-  const selectPassage = (passage: PresenceRange) => {
-    onRangeChange(passage);
-    if (passage.end > passage.start) onPlayRange(passage);
-    else onSeek(passage.start);
-  };
+  const selectPassage = useCallback(
+    (passage: PresenceRange) => {
+      onRangeChange(passage);
+      if (passage.end > passage.start) onPlayRange(passage);
+      else onSeek(passage.start);
+    },
+    [onRangeChange, onPlayRange, onSeek],
+  );
 
-  // 6 ruler time points
+  // Time ruler tick marks: 5 evenly spaced intervals
   const rulerTicks = useMemo(() => {
+    const count = 5;
+    const step = timelineDuration / (count - 1);
     const ticks: number[] = [];
-    const step = timelineDuration / 5;
-    for (let i = 0; i <= 5; i++) {
+    for (let i = 0; i < count; i++) {
       ticks.push(Math.round(i * step));
     }
     return ticks;
@@ -188,481 +327,678 @@ export default function CastDrawer({
     return undefined;
   };
 
-  return (
-    <section className="cast-drawer panel" aria-label="Cast gallery drawer">
-      {/* 1. Header */}
-      <div className="cast-drawer-head">
-        <div className="cast-drawer-title-group">
-          <h2 className="cast-drawer-title">CAST GALLERY</h2>
-          <p className="cast-drawer-subtitle">
-            {cast.length} cast · {referenceCount} reference {referenceCount === 1 ? "view" : "views"}
-          </p>
-        </div>
-        <button
-          type="button"
-          className="studio-drawer-close-btn cast-drawer-close-btn"
-          onClick={onClose}
-          title="Close cast drawer (Esc)"
-          aria-label="Close cast drawer"
-        >
-          ✕
-        </button>
-      </div>
+  const handleStartRename = (member: CastMember) => {
+    setEditingId(member.id);
+    setTempName(member.name);
+  };
 
-      <div className="cast-drawer-content">
-        {/* 2. Cast Cards Row */}
-        {cast.length > 0 ? (
-          <div className="cast-drawer-cards" role="radiogroup" aria-label="Cast members">
-            {cast.map((member) => {
-              const isSelected = member.id === activeMemberId;
-              const avatar = getAvatarSrc(member);
-              return (
+  const handleCommitRename = (memberId: string) => {
+    if (editingId === memberId) {
+      const trimmed = tempName.trim();
+      if (trimmed && trimmed !== selectedMemberObj?.name) {
+        onRename?.(memberId, trimmed);
+      }
+      setEditingId(null);
+    }
+  };
+
+  const handleAddSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = newCharName.trim();
+    if (trimmed) {
+      onAdd(trimmed);
+      setNewCharName("");
+      setIsAddingChar(false);
+    }
+  };
+
+  return (
+    <section
+      ref={containerRef}
+      className={`cast-munari-container ${isEnlarged ? "view-enlarged" : "view-compact"}`}
+      aria-label="Cast Gallery"
+    >
+      {/* ── 1. LEFT ROSTER COLUMN ── */}
+      <aside className="cast-roster-column" aria-label="Cast members roster">
+        <div className="cast-roster-list" role="radiogroup" aria-label="Characters">
+          {cast.map((member) => {
+            const isSelected = member.id === activeMemberId;
+            const avatar = getAvatarSrc(member);
+            const color = getMemberColor(member.id, cast);
+
+            return (
+              <div
+                key={member.id}
+                className={`cast-roster-card ${isSelected ? "selected" : ""}`}
+                onClick={() => {
+                  onSelect(member.id);
+                  setShowMergeSelect(false);
+                }}
+                role="radio"
+                aria-checked={isSelected}
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onSelect(member.id);
+                  }
+                }}
+                title={member.name}
+              >
+                {/* Active indicator bar */}
+                {isSelected && <div className="roster-active-bar" />}
+
+                {/* Avatar */}
+                <div className="roster-avatar-wrap">
+                  {avatar ? (
+                    <img src={avatar} alt={member.name} className="roster-avatar-img" />
+                  ) : (
+                    <div className="roster-avatar-placeholder" style={{ background: color + "22", color }}>
+                      {member.name.charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                </div>
+
+                {/* Name */}
+                <span className="roster-member-name">{member.name}</span>
+
+                {/* Color Dot */}
+                <span
+                  className="roster-color-dot"
+                  style={{ backgroundColor: color }}
+                  title={`Character color: ${member.name}`}
+                />
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Add Character Form / Button */}
+        <div className="cast-roster-footer">
+          {isAddingChar ? (
+            <form onSubmit={handleAddSubmit} className="roster-add-form">
+              <input
+                autoFocus
+                type="text"
+                className="roster-add-input"
+                placeholder="Name..."
+                value={newCharName}
+                onChange={(e) => setNewCharName(e.target.value)}
+                onBlur={() => {
+                  if (!newCharName.trim()) setIsAddingChar(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setIsAddingChar(false);
+                }}
+              />
+              <button type="submit" className="roster-add-submit-btn" disabled={!newCharName.trim()}>
+                Add
+              </button>
+            </form>
+          ) : (
+            <button
+              type="button"
+              className="roster-add-btn"
+              onClick={() => setIsAddingChar(true)}
+              title="Add a new character"
+            >
+              <span className="add-plus-icon">+</span> Add
+            </button>
+          )}
+        </div>
+      </aside>
+
+      {/* ── 2. MAIN CONTENT AREA (COMPACT OR ENLARGED) ── */}
+      <main className="cast-main-area">
+        {selectedMemberObj ? (
+          <>
+            {/* ── ENLARGED VIEW: DISTRIBUTION OVERVIEW CHART ── */}
+            {isEnlarged && (
+              <section className="cast-distribution-section" aria-label="Across the film distribution">
+                <div className="cast-distribution-header">
+                  <span className="distribution-title">Across the film</span>
+                  <span className="distribution-range mono">
+                    00:00 — {formatClock(timelineDuration)}
+                  </span>
+                </div>
+
+                {/* Interactive Multi-Row Timeline Chart */}
                 <div
-                  key={member.id}
-                  className={`cast-card ${isSelected ? "selected" : ""}`}
-                  onClick={() => onSelect(member.id)}
-                  role="radio"
-                  aria-checked={isSelected}
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      onSelect(member.id);
+                  className="cast-distribution-chart"
+                  onClick={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const clickX = e.clientX - rect.left - 70; // 70px left gutter for names
+                    const trackWidth = rect.width - 70;
+                    if (clickX >= 0 && trackWidth > 0) {
+                      const seekRatio = Math.max(0, Math.min(1, clickX / trackWidth));
+                      onSeek(seekRatio * timelineDuration);
                     }
                   }}
                 >
-                  <div className="cast-card-img-wrap">
-                    {avatar ? (
-                      <img src={avatar} alt={member.name} className="cast-card-img" />
-                    ) : (
-                      <div className="portrait-empty">?</div>
-                    )}
-                    <button
-                      type="button"
-                      className="cast-card-remove-btn"
-                      aria-label={`Remove ${member.name}`}
-                      title={`Remove ${member.name}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onRemove(member.id);
-                      }}
-                    >
-                      ×
-                    </button>
+                  {/* Time Ruler Ticks */}
+                  <div className="distribution-ruler">
+                    <div className="ruler-gutter" />
+                    <div className="ruler-ticks">
+                      {rulerTicks.map((tick, idx) => (
+                        <span
+                          key={idx}
+                          className="ruler-tick mono"
+                          style={{ left: `${(tick / timelineDuration) * 100}%` }}
+                        >
+                          {formatClock(tick)}
+                        </span>
+                      ))}
+                    </div>
                   </div>
 
-                  <div className="cast-card-name-wrap" onClick={(e) => e.stopPropagation()}>
+                  {/* Character Presence Lanes */}
+                  <div className="distribution-lanes">
+                    {/* Synchronized Playhead Line */}
+                    <div
+                      className="distribution-playhead"
+                      style={{
+                        left: `calc(70px + ${(time / timelineDuration) * 100}% * ((100% - 70px) / 100))`,
+                      }}
+                      title={`Playhead: ${formatClock(time)}`}
+                    >
+                      <div className="playhead-diamond" />
+                      <div className="playhead-line" />
+                    </div>
+
+                    {/* Synchronized Hover Guide Beam across all tracks */}
+                    {hoveredShot && (
+                      <div
+                        className="distribution-hover-guide"
+                        style={{
+                          left: `calc(70px + ${(hoveredShot.startSeconds / timelineDuration) * 100}% * ((100% - 70px) / 100))`,
+                          width: `calc(${Math.max(0.6, ((hoveredShot.endSeconds - hoveredShot.startSeconds) / timelineDuration) * 100)}% * ((100% - 70px) / 100))`,
+                        }}
+                      />
+                    )}
+
+                    {/* Overlaps Summary Lane: highlights shots where 2+ characters are present */}
+                    {overlappingShots.length > 0 && (
+                      <div className="distribution-row overlap-summary-row">
+                        <span
+                          className="distribution-row-name overlap-row-label"
+                          title="Shots where two or more characters appear together"
+                        >
+                          Overlaps
+                        </span>
+                        <div className="distribution-track overlap-track">
+                          {overlappingShots.map(({ shot: oShot, startSeconds, endSeconds, members }) => {
+                            const isHovered = hoveredShotId === oShot.id;
+                            const spanWidth = Math.max(
+                              0.6,
+                              ((endSeconds - startSeconds) / timelineDuration) * 100,
+                            );
+                            const memberNames = members.map((m) => m.name).join(", ");
+                            return (
+                              <div
+                                key={`overlap-${oShot.id}`}
+                                className={`distribution-segment overlap-segment ${
+                                  isHovered ? "hovered" : ""
+                                }`}
+                                style={{
+                                  left: `${(startSeconds / timelineDuration) * 100}%`,
+                                  width: `${spanWidth}%`,
+                                }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedShotId(oShot.id);
+                                  onInspect(oShot);
+                                  onSeek(startSeconds);
+                                }}
+                                onMouseEnter={() => setHoveredShotId(oShot.id)}
+                                onMouseLeave={() => setHoveredShotId(null)}
+                                title={`Overlap · ${memberNames} · Shot ${oShot.index} (${formatClock(
+                                  startSeconds,
+                                )}–${formatClock(endSeconds)})`}
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {allSummary.map(({ member, segments }) => {
+                      const isRowSelected = member.id === activeMemberId;
+                      const memberColor = getMemberColor(member.id, cast);
+
+                      return (
+                        <div
+                          key={member.id}
+                          className={`distribution-row ${isRowSelected ? "selected" : ""}`}
+                        >
+                          <span
+                            className="distribution-row-name"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSelect(member.id);
+                            }}
+                          >
+                            {member.name}
+                          </span>
+
+                          <div className="distribution-track">
+                            {/* Unanalysed background segments */}
+                            {project.shots
+                              .filter((s) => !s.characterAnalysis)
+                              .map((unscanned) => (
+                                <div
+                                  key={`unscanned-${unscanned.id}`}
+                                  className="distribution-segment unanalysed"
+                                  style={{
+                                    left: `${(unscanned.startSeconds / timelineDuration) * 100}%`,
+                                    width: `${Math.max(
+                                      0.4,
+                                      ((unscanned.endSeconds - unscanned.startSeconds) /
+                                        timelineDuration) *
+                                        100,
+                                    )}%`,
+                                  }}
+                                  title={`Shot ${unscanned.index}: Unanalysed`}
+                                />
+                              ))}
+
+                            {/* Appearance Lines covering time */}
+                            {segments.map((seg) => {
+                              const spanWidth = Math.max(
+                                0.6,
+                                ((seg.endSeconds - seg.startSeconds) / timelineDuration) * 100,
+                              );
+                              const isHovered = hoveredShotId === seg.shot.id;
+                              const hasOverlap = seg.overlappingMemberIds.length > 0;
+                              const overlapNames = seg.overlappingMemberIds
+                                .map((id) => cast.find((m) => m.id === id)?.name)
+                                .filter(Boolean)
+                                .join(", ");
+
+                              return (
+                                <div
+                                  key={seg.id}
+                                  className={`distribution-segment ${
+                                    seg.isConfirmed ? "confirmed" : "needs-review"
+                                  } ${seg.isManual ? "manual" : ""} ${
+                                    hasOverlap ? "has-overlap" : ""
+                                  } ${isHovered ? "hovered" : ""}`}
+                                  style={{
+                                    left: `${(seg.startSeconds / timelineDuration) * 100}%`,
+                                    width: `${spanWidth}%`,
+                                    backgroundColor: seg.isConfirmed
+                                      ? memberColor
+                                      : "rgba(18, 22, 26, 0.8)",
+                                    borderColor: memberColor,
+                                    color: memberColor,
+                                  }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onSelect(member.id);
+                                    setSelectedShotId(seg.shot.id);
+                                    onInspect(seg.shot);
+                                    onSeek(seg.startSeconds);
+                                  }}
+                                  onMouseEnter={() => setHoveredShotId(seg.shot.id)}
+                                  onMouseLeave={() => setHoveredShotId(null)}
+                                  title={`${member.name} · Shot ${seg.shot.index} (${formatClock(
+                                    seg.startSeconds,
+                                  )}–${formatClock(seg.endSeconds)}) [${
+                                    seg.isManual
+                                      ? "Manual"
+                                      : seg.isConfirmed
+                                        ? "Confirmed"
+                                        : "Needs review"
+                                  }]${hasOverlap ? ` · Overlaps with: ${overlapNames}` : ""}`}
+                                />
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Distribution Legend */}
+                  <div className="distribution-legend">
+                    <span className="legend-item">
+                      <span className="legend-swatch confirmed" /> Confirmed
+                    </span>
+                    <span className="legend-item">
+                      <span className="legend-swatch needs-review" /> Needs review
+                    </span>
+                    <span className="legend-item">
+                      <span className="legend-swatch manual" /> Manual
+                    </span>
+                    <span className="legend-item">
+                      <span className="legend-swatch unanalysed" /> Unanalysed
+                    </span>
+                    {overlappingShots.length > 0 && (
+                      <span className="legend-item">
+                        <span className="legend-swatch overlap" /> Overlap (2+ cast)
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {/* ── APPEARANCES DETAIL AREA ── */}
+            <section className="cast-details-section" aria-label="Character appearances">
+              {/* Header with Name & Actions */}
+              <div className="cast-details-header">
+                <div className="cast-details-title-wrap">
+                  {editingId === selectedMemberObj.id ? (
                     <input
-                      className="cast-card-name-input"
-                      aria-label={`Rename ${member.name}`}
-                      title="Click to rename"
-                      value={editingId === member.id ? tempName : member.name}
-                      onFocus={() => {
-                        setEditingId(member.id);
-                        setTempName(member.name);
-                        onSelect(member.id);
-                      }}
+                      autoFocus
+                      type="text"
+                      className="cast-rename-input"
+                      value={tempName}
                       onChange={(e) => setTempName(e.target.value)}
-                      onBlur={() => {
-                        if (editingId === member.id) {
-                          const trimmed = tempName.trim();
-                          if (trimmed && trimmed !== member.name) {
-                            onRename?.(member.id, trimmed);
-                          }
-                          setEditingId(null);
-                        }
-                      }}
+                      onBlur={() => handleCommitRename(selectedMemberObj.id)}
                       onKeyDown={(e) => {
-                        if (e.key === "Enter") e.currentTarget.blur();
+                        if (e.key === "Enter") handleCommitRename(selectedMemberObj.id);
                         if (e.key === "Escape") setEditingId(null);
                       }}
                     />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="cast-empty-box">
-            <p className="cast-empty-msg">
-              Characters can be automatically discovered using the scanner, or added manually with reference views you control.
-            </p>
-          </div>
-        )}
-
-        {/* 3. Cast Action Controls */}
-        <div className="cast-drawer-actions">
-          <div className="cast-actions-row">
-            <button
-              type="button"
-              className="cast-action-btn"
-              disabled={!shot || disabled || !selectedMemberObj}
-              title={
-                shot && selectedMemberObj
-                  ? `Capture Shot ${shot.index} midpoint as reference view for ${selectedMemberObj.name}`
-                  : "Select a shot and cast member first"
-              }
-              onClick={() => {
-                if (selectedMemberObj) {
-                  void onReference(selectedMemberObj.id);
-                }
-              }}
-            >
-              <span>+ Add view {selectedMemberObj ? `(to ${selectedMemberObj.name})` : ""}</span>
-            </button>
-
-            <div className="cast-merge-wrap">
-              <select
-                className="cast-action-select"
-                aria-label={`Merge ${selectedMemberObj?.name || "character"} into another`}
-                title="Merge this character into another"
-                value=""
-                disabled={!selectedMemberObj || cast.length < 2 || !onMerge}
-                onChange={(e) => {
-                  if (e.target.value && selectedMemberObj) {
-                    onMerge?.(selectedMemberObj.id, e.target.value);
-                    e.target.value = "";
-                  }
-                }}
-              >
-                <option value="" disabled>
-                  🔗 Merge into…
-                </option>
-                {cast
-                  .filter((other) => other.id !== selectedMemberObj?.id)
-                  .map((other) => (
-                    <option key={other.id} value={other.id}>
-                      Merge into {other.name}
-                    </option>
-                  ))}
-              </select>
-            </div>
-          </div>
-
-          <form
-            className="cast-add-row"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const trimmed = newCharName.trim();
-              if (trimmed) {
-                onAdd(trimmed);
-                setNewCharName("");
-              }
-            }}
-          >
-            <span className="cast-add-icon" aria-hidden="true">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                <circle cx="8.5" cy="7" r="4" />
-                <line x1="20" y1="8" x2="20" y2="14" />
-                <line x1="23" y1="11" x2="17" y2="11" />
-              </svg>
-            </span>
-            <input
-              aria-label="Add a character"
-              className="cast-add-input"
-              placeholder="Add a character…"
-              value={newCharName}
-              onChange={(e) => setNewCharName(e.target.value)}
-            />
-          </form>
-        </div>
-
-        {/* 4. Character Appearances & Presence Arc */}
-        <div className="cast-drawer-section">
-          <div className="cast-drawer-section-head">
-            <h3 className="cast-drawer-section-title">CHARACTER APPEARANCES</h3>
-            <p className="cast-drawer-section-subtitle">Sampled presence and manual shot review</p>
-          </div>
-
-          <div className="cast-notice-box">
-            <span className="cast-notice-icon" aria-hidden="true">ⓘ</span>
-            <p className="cast-notice-text">
-              Sampled intervals are estimates; midpoint results are markers, not measured screen time. A non-match is unresolved, never an absence.
-            </p>
-          </div>
-
-          {cast.length > 0 && (
-            <div className="presence-arc-card">
-              {/* Time Ruler */}
-              <div className="presence-ruler">
-                {rulerTicks.map((t, idx) => (
-                  <span key={idx} className="presence-ruler-tick">
-                    {clock(t)}
-                  </span>
-                ))}
-              </div>
-
-              {/* Presence Lanes */}
-              <div className="presence-lanes-container">
-                {/* Vertical Playhead Needle */}
-                <div
-                  className="presence-playhead-line"
-                  style={{ left: `calc(70px + ${(time / timelineDuration) * 100}% * ((100% - 70px) / 100))` }}
-                  title={`Playhead: ${clock(time)}`}
-                >
-                  <div className="playhead-needle-cap top" />
-                  <div className="playhead-needle-line" />
-                  <div className="playhead-needle-cap bottom" />
-                </div>
-
-                {allSummary.map(({ member, intervals, manualShots }) => {
-                  const isSelected = member.id === activeMemberId;
-                  return (
-                    <div
-                      key={member.id}
-                      className={`presence-arc-lane ${isSelected ? "selected" : ""}`}
-                    >
+                  ) : (
+                    <div className="cast-name-row">
+                      <h2 className="cast-member-name">{selectedMemberObj.name}</h2>
                       <button
                         type="button"
-                        className="presence-lane-name"
-                        onClick={() => onSelect(member.id)}
-                        title={`Select ${member.name}`}
+                        className="cast-edit-pencil-btn"
+                        onClick={() => handleStartRename(selectedMemberObj)}
+                        title="Rename character"
+                        aria-label="Rename character"
                       >
-                        {member.name}
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                        </svg>
                       </button>
+                    </div>
+                  )}
 
-                      <div
-                        className="presence-lane-track"
-                        aria-label={`${member.name} visible intervals`}
-                      >
-                        {/* Range Selection Highlight */}
-                        {range && (
-                          <div
-                            className="presence-range-highlight"
-                            style={{
-                              left: `${(range.start / timelineDuration) * 100}%`,
-                              width: `${((range.end - range.start) / timelineDuration) * 100}%`,
-                            }}
-                          />
-                        )}
+                  <span className="cast-shots-count">
+                    {selectedSummary?.uniqueShots.length ?? 0} shots
+                  </span>
+                </div>
 
-                        {/* Sampled Intervals */}
-                        {intervals.map((interval, idx) => {
-                          const isConfirmed =
-                            interval.reviewStatus === "Confirmed" ||
-                            interval.shot.characterAnalysis?.reviewStatus === "Confirmed";
-                          return (
+                {/* Action Links/Buttons */}
+                <div className="cast-action-links">
+                  <button
+                    type="button"
+                    className="cast-link-btn"
+                    disabled={!shot || disabled}
+                    onClick={() => void onReference(selectedMemberObj.id)}
+                    title={
+                      shot
+                        ? `Capture Shot ${shot.index} midpoint as reference photo for ${selectedMemberObj.name}`
+                        : "Select a shot in timeline first"
+                    }
+                  >
+                    Reference +
+                  </button>
+
+                  <button
+                    type="button"
+                    className="cast-link-btn"
+                    onClick={() => handleStartRename(selectedMemberObj)}
+                  >
+                    Rename
+                  </button>
+
+                  <div className="cast-merge-dropdown-wrap">
+                    <button
+                      type="button"
+                      className="cast-link-btn"
+                      disabled={cast.length < 2 || !onMerge}
+                      onClick={() => setShowMergeSelect(!showMergeSelect)}
+                    >
+                      Merge
+                    </button>
+
+                    {showMergeSelect && (
+                      <div className="cast-merge-popover">
+                        <span className="merge-popover-title">Merge into:</span>
+                        {cast
+                          .filter((other) => other.id !== selectedMemberObj.id)
+                          .map((other) => (
                             <button
-                              key={`int-${interval.shot.id}-${idx}`}
+                              key={other.id}
                               type="button"
-                              className={`presence-lane-block ${isConfirmed ? "confirmed" : ""}`}
-                              title={`${member.name}: ${clock(interval.startSeconds)}–${clock(interval.endSeconds)} (${isConfirmed ? "Confirmed" : "Needs review"})`}
-                              aria-label={`Play ${member.name} from ${clock(interval.startSeconds)} to ${clock(interval.endSeconds)}`}
-                              style={{
-                                left: `${(interval.startSeconds / timelineDuration) * 100}%`,
-                                width: `${Math.max(0.6, ((interval.endSeconds - interval.startSeconds) / timelineDuration) * 100)}%`,
+                              className="merge-target-btn"
+                              onClick={() => {
+                                onMerge?.(selectedMemberObj.id, other.id);
+                                setShowMergeSelect(false);
                               }}
-                              onClick={() =>
-                                selectPassage({
-                                  start: interval.startSeconds,
-                                  end: interval.endSeconds,
-                                })
-                              }
-                            />
-                          );
-                        })}
-
-                        {/* Manual Assignments */}
-                        {manualShots.map((manual) => (
-                          <button
-                            key={`man-${manual.id}`}
-                            type="button"
-                            className="presence-lane-manual"
-                            title={`${member.name}: manually assigned to Shot ${manual.index}; no timing inferred`}
-                            aria-label={`Inspect manual ${member.name} assignment in Shot ${manual.index}`}
-                            style={{
-                              left: `${(((manual.startSeconds + manual.endSeconds) / 2) / timelineDuration) * 100}%`,
-                            }}
-                            onClick={() => onInspect(manual)}
-                          />
-                        ))}
-
-                        {/* Unresolved Sample Points */}
-                        {project.shots
-                          .flatMap((s) => s.characterAnalysis?.unresolvedTimes ?? [])
-                          .map((unresTime, idx) => (
-                            <div
-                              key={`unres-${unresTime}-${idx}`}
-                              className="presence-lane-unresolved"
-                              title={`Unresolved sample at ${clock(unresTime)}`}
-                              style={{
-                                left: `${(unresTime / timelineDuration) * 100}%`,
-                              }}
-                            />
+                            >
+                              {other.name}
+                            </button>
                           ))}
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    )}
+                  </div>
 
-              {/* Legend */}
-              <div className="presence-arc-legend">
-                <div className="legend-item">
-                  <span className="legend-swatch sampled" />
-                  <span>Sampled interval</span>
-                </div>
-                <div className="legend-item">
-                  <span className="legend-swatch confirmed" />
-                  <span>Confirmed interval</span>
-                </div>
-                <div className="legend-item">
-                  <span className="legend-swatch manual" />
-                  <span>Manual assignment</span>
-                </div>
-                <div className="legend-item">
-                  <span className="legend-swatch unresolved" />
-                  <span>Unresolved sample point</span>
+                  <div className="cast-compare-wrap">
+                    <select
+                      aria-label="Compare with another character"
+                      className="cast-compare-select"
+                      value={comparisonMember ?? ""}
+                      onChange={(e) => setComparisonMember(e.target.value || undefined)}
+                    >
+                      <option value="">Compare</option>
+                      {cast
+                        .filter((m) => m.id !== selectedMemberObj.id)
+                        .map((m) => (
+                          <option key={m.id} value={m.id}>
+                            Compare: {m.name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
-        </div>
 
-        {/* 5. Selected Character Appearances List */}
-        {selectedMemberObj && (
-          <div className="cast-drawer-section appearances-list-section">
-            <div className="appearances-section-head">
-              <h3 className="appearances-section-title">
-                {selectedMemberObj.name.toUpperCase()} — APPEARANCES
-              </h3>
-
-              <div className="compare-dropdown-wrap">
-                <select
-                  aria-label="Compare character presence"
-                  className="cast-compare-select"
-                  value={comparisonMember ?? ""}
-                  onChange={(e) => setComparisonMember(e.target.value || undefined)}
-                >
-                  <option value="">Compare with…</option>
-                  {cast
-                    .filter((m) => m.id !== selectedMemberObj.id)
-                    .map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name}
-                      </option>
-                    ))}
-                </select>
-              </div>
-            </div>
-
-            {/* Comparison Findings if active */}
-            {comparison?.[0] && comparison?.[1] && (
-              <div className="pair-reading-box">
-                <div className="pair-reading-head">
-                  <span className="pair-reading-names">
+              {/* Comparison Findings if active */}
+              {comparison?.[0] && comparison?.[1] && (
+                <div className="cast-comparison-findings">
+                  <span className="comparison-names">
                     {comparison[0].member.name} × {comparison[1].member.name}
                   </span>
-                </div>
-                <div className="pair-findings">
-                  {pairReadings?.shared.length ? (
-                    pairReadings.shared.map((passage, idx) => (
+                  <div className="comparison-pills">
+                    {pairReadings?.shared.length ? (
+                      pairReadings.shared.map((p, idx) => (
+                        <button
+                          key={`sh-${idx}`}
+                          type="button"
+                          className="comparison-pill"
+                          onClick={() => selectPassage(p)}
+                        >
+                          Shared · {formatClock(p.start)}–{formatClock(p.end)}
+                        </button>
+                      ))
+                    ) : (
+                      <span className="muted-text">No shared presence detected.</span>
+                    )}
+                    {pairReadings?.alternating.map((p, idx) => (
                       <button
-                        key={`shared-${idx}`}
+                        key={`alt-${idx}`}
                         type="button"
-                        className="presence-finding-pill"
-                        onClick={() => selectPassage(passage)}
+                        className="comparison-pill"
+                        onClick={() => selectPassage(p)}
                       >
-                        Shared visibility · {clock(passage.start)}–{clock(passage.end)}
+                        Alternation · {formatClock(p.start)}–{formatClock(p.end)}
                       </button>
-                    ))
-                  ) : (
-                    <span className="muted">No sampled shared visibility in this selection.</span>
-                  )}
-                  {pairReadings?.alternating.map((passage, idx) => (
-                    <button
-                      key={`alt-${idx}`}
-                      type="button"
-                      className="presence-finding-pill"
-                      onClick={() => selectPassage(passage)}
-                    >
-                      Separate-shot alternation · {clock(passage.start)}–{clock(passage.end)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Appearance Rows */}
-            <div className="appearances-list">
-              {appearancesList.length > 0 ? (
-                appearancesList.map((item) => {
-                  const shotThumb = thumbnails[item.shot.id] || getAvatarSrc(selectedMemberObj);
-                  return (
-                    <div key={item.id} className="appearance-row">
-                      <div className="appearance-thumb-wrap">
-                        {shotThumb ? (
-                          <img src={shotThumb} alt={`Shot ${item.shot.index}`} className="appearance-thumb" />
-                        ) : (
-                          <div className="appearance-thumb-empty">Shot {item.shot.index}</div>
-                        )}
-                      </div>
-
-                      <div className="appearance-info">
-                        <div className="appearance-title">
-                          {item.isManual && <span className="manual-diamond">◆</span>}
-                          <span>Shot {String(item.shot.index).padStart(3, "0")}</span>
-                          <span className="appearance-timing">
-                            {item.isManual
-                              ? "· manual assignment"
-                              : `· ${clock(item.startSeconds)} – ${clock(item.endSeconds)}`}
-                          </span>
-                        </div>
-                        <div className="appearance-status">
-                          <span className={`status-dot ${item.reviewStatus === "Confirmed" ? "confirmed" : "needs-review"}`} />
-                          <span className="status-text">{item.reviewStatus}</span>
-                        </div>
-                      </div>
-
-                      <div className="appearance-actions">
-                        <button
-                          type="button"
-                          className="appearance-action-btn inspect"
-                          onClick={() => {
-                            onInspect(item.shot);
-                            onSeek(item.startSeconds);
-                          }}
-                          title={`Inspect Shot ${item.shot.index}`}
-                        >
-                          Inspect
-                        </button>
-
-                        {item.reviewStatus !== "Confirmed" && (
-                          <button
-                            type="button"
-                            className="appearance-action-btn confirm"
-                            onClick={() => onConfirmShot(item.shot.id)}
-                            title="Confirm this character match"
-                          >
-                            Confirm
-                          </button>
-                        )}
-
-                        <button
-                          type="button"
-                          className="appearance-action-btn remove"
-                          onClick={() => onRemoveAppearance(item.shot.id, selectedMemberObj.id)}
-                          title="Remove this mistaken match and protect the corrected shot on future scans"
-                          aria-label="Remove appearance"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="appearances-empty-box">
-                  <p className="muted">
-                    No sampled or manual appearances found for {selectedMemberObj.name}.
-                  </p>
+                    ))}
+                  </div>
                 </div>
               )}
-            </div>
+
+              {/* ── ENLARGED: THUMBNAIL GRID ── */}
+              {isEnlarged ? (
+                <div className="appearances-grid-wrap">
+                  {appearancesList.length > 0 ? (
+                    <div className="appearances-grid">
+                      {appearancesList.map((item) => {
+                        const isCurrent = currentAppearanceShot?.id === item.shot.id;
+                        const shotThumb = thumbnails[item.shot.id] || getAvatarSrc(selectedMemberObj);
+
+                        return (
+                          <div
+                            key={item.id}
+                            className={`appearance-card ${isCurrent ? "current-selected" : ""}`}
+                            onClick={() => {
+                              setSelectedShotId(item.shot.id);
+                              onInspect(item.shot);
+                              onSeek(item.startSeconds);
+                            }}
+                          >
+                            <div className="appearance-card-thumb">
+                              {shotThumb ? (
+                                <img
+                                  src={shotThumb}
+                                  alt={`Shot ${item.shot.index}`}
+                                  className="appearance-card-img"
+                                />
+                              ) : (
+                                <div className="appearance-card-placeholder">
+                                  Shot {item.shot.index}
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="appearance-card-meta">
+                              <span className="appearance-shot-label">
+                                Shot {String(item.shot.index).padStart(3, "0")}
+                              </span>
+                              <span
+                                className={`appearance-status-badge ${item.reviewStatus === "Confirmed" ? "confirmed" : "needs-review"}`}
+                              >
+                                {item.reviewStatus}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="appearances-empty">
+                      No appearances recorded for {selectedMemberObj.name}.
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* ── COMPACT: VERTICAL LIST ── */
+                <div className="appearances-list-wrap">
+                  <div className="appearances-list-label">Appearances</div>
+                  {appearancesList.length > 0 ? (
+                    <div className="appearances-vertical-list">
+                      {appearancesList.map((item) => {
+                        const isCurrent = currentAppearanceShot?.id === item.shot.id;
+                        const shotThumb = thumbnails[item.shot.id] || getAvatarSrc(selectedMemberObj);
+
+                        return (
+                          <div
+                            key={item.id}
+                            className={`appearance-list-row ${isCurrent ? "current-selected" : ""}`}
+                            onClick={() => {
+                              setSelectedShotId(item.shot.id);
+                              onInspect(item.shot);
+                              onSeek(item.startSeconds);
+                            }}
+                          >
+                            {isCurrent && <div className="appearance-row-indicator" />}
+
+                            <div className="appearance-row-thumb">
+                              {shotThumb ? (
+                                <img
+                                  src={shotThumb}
+                                  alt={`Shot ${item.shot.index}`}
+                                  className="appearance-row-img"
+                                />
+                              ) : (
+                                <div className="appearance-row-placeholder">
+                                  {item.shot.index}
+                                </div>
+                              )}
+                            </div>
+
+                            <span className="appearance-row-shot-num">
+                              Shot {String(item.shot.index).padStart(3, "0")}
+                            </span>
+
+                            <span
+                              className={`appearance-row-status ${item.reviewStatus === "Confirmed" ? "confirmed" : "needs-review"}`}
+                            >
+                              {item.reviewStatus}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="appearances-empty">
+                      No appearances recorded for {selectedMemberObj.name}.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── BOTTOM ACTION BAR ── */}
+              {currentAppearanceShot && (
+                <div className="cast-bottom-action-bar">
+                  <span className="current-shot-label mono">
+                    Shot {String(currentAppearanceShot.index).padStart(3, "0")}
+                  </span>
+
+                  <div className="bottom-action-buttons">
+                    <button
+                      type="button"
+                      className="bottom-action-btn confirm"
+                      onClick={() => onConfirmShot(currentAppearanceShot.id)}
+                      title="Confirm this character match"
+                    >
+                      Confirm
+                    </button>
+
+                    <button
+                      type="button"
+                      className="bottom-action-btn inspect"
+                      onClick={() => onInspect(currentAppearanceShot)}
+                      title={`Inspect Shot ${currentAppearanceShot.index} in shot inspector`}
+                    >
+                      Inspect
+                    </button>
+
+                    <button
+                      type="button"
+                      className="bottom-action-btn remove"
+                      onClick={() =>
+                        onRemoveAppearance(currentAppearanceShot.id, selectedMemberObj.id)
+                      }
+                      title="Remove character match from this shot"
+                      aria-label="Remove match"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              )}
+            </section>
+          </>
+        ) : (
+          <div className="cast-no-selection">
+            <p>No characters found in this project.</p>
+            <button
+              type="button"
+              className="roster-add-btn"
+              onClick={() => setIsAddingChar(true)}
+            >
+              + Add first character
+            </button>
           </div>
         )}
-      </div>
+      </main>
     </section>
   );
 }

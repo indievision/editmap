@@ -34,6 +34,7 @@ export default function EChart({
   label,
   currentTime,
   duration,
+  notMerge = false,
   onSeek,
 }: {
   option: EChartsOption;
@@ -41,6 +42,7 @@ export default function EChart({
   label: string;
   currentTime?: number;
   duration?: number;
+  notMerge?: boolean;
   onSeek?: (time: number) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
@@ -62,9 +64,26 @@ export default function EChart({
   }, []);
 
   useEffect(() => {
-    // Merge incremental playhead updates so a user's data-zoom selection stays put.
-    chart.current?.setOption(option, { notMerge: false, lazyUpdate: true });
-  }, [option]);
+    if (!chart.current) return;
+    if (notMerge) {
+      // Preserve existing dataZoom viewport range when replacing options
+      const existingOption = chart.current.getOption() as
+        | { dataZoom?: Array<{ start?: number; end?: number; startValue?: number; endValue?: number }> }
+        | undefined;
+      const currentZoom = existingOption?.dataZoom?.[0];
+      if (currentZoom && Array.isArray(option.dataZoom)) {
+        option.dataZoom.forEach((dz) => {
+          if (typeof currentZoom.start === "number") dz.start = currentZoom.start;
+          if (typeof currentZoom.end === "number") dz.end = currentZoom.end;
+          if (typeof currentZoom.startValue === "number") dz.startValue = currentZoom.startValue;
+          if (typeof currentZoom.endValue === "number") dz.endValue = currentZoom.endValue;
+        });
+      }
+      chart.current.setOption(option, { notMerge: true, lazyUpdate: true });
+    } else {
+      chart.current.setOption(option, { notMerge: false, lazyUpdate: true });
+    }
+  }, [option, notMerge]);
 
   const step = Math.max(1, Math.round((duration ?? 60) / 120));
   const seekFromPointer = (clientX: number, clientY: number, element: HTMLDivElement) => {

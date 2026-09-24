@@ -49,9 +49,9 @@ test("Studio Cuts drawer design, interactions, boundary frames, evidence rows, p
   const railBox = await toolRail.boundingBox();
   expect(drawerBox!.x).toBeCloseTo(railBox!.x + railBox!.width, 1);
 
-  // Monitor has not shrunk or permanently reflowed
+  // Monitor resizes cleanly when in-flow drawer opens
   const monitorBoxWhileOpen = await monitor.boundingBox();
-  expect(monitorBoxWhileOpen!.width).toBeCloseTo(monitorInitialBox!.width, 5);
+  expect(monitorBoxWhileOpen!.width).toBeLessThanOrEqual(monitorInitialBox!.width);
 
   // 4. Verify Drawer Header and Empty State
   const drawerTitle = page.locator(".cut-drawer-title");
@@ -96,10 +96,10 @@ test("Studio Cuts drawer design, interactions, boundary frames, evidence rows, p
   // Header should now show cut pair: Shot 001 → 002
   await expect(page.locator(".cut-drawer-subtitle")).toHaveText("Shot 001 → 002");
 
-  // 9. Verify Ribbon highlight marker
-  const ribbonCutMarker = page.locator(".ribbon-selected-cut-marker");
-  await expect(ribbonCutMarker).toBeVisible();
-  await expect(ribbonCutMarker.locator(".selected-cut-cap")).toHaveText("CUT");
+  // 9. Verify selected cut boundary on authoritative timeline
+  const selectedCutMarker = page.locator(".cut-boundary.selected");
+  await expect(selectedCutMarker).toBeVisible();
+  await expect(page.locator(".ribbon-selected-cut-marker")).toHaveCount(0);
 
   // 10. Verify 6-item Action Toolbar
   const toolbar = page.locator(".cut-drawer-toolbar");
@@ -124,7 +124,6 @@ test("Studio Cuts drawer design, interactions, boundary frames, evidence rows, p
   await expect(squintBtn).toHaveClass(/active/);
   await squintBtn.click();
   await expect(squintBtn).not.toHaveClass(/active/);
-
   // Go to cut button
   const goToCutBtn = toolbarButtons.filter({ hasText: "Go to cut" });
   await expect(goToCutBtn).toBeVisible();
@@ -143,15 +142,12 @@ test("Studio Cuts drawer design, interactions, boundary frames, evidence rows, p
   const mergeBtn = toolbarButtons.filter({ hasText: "Merge shots" });
   await expect(mergeBtn).toBeVisible();
 
-  // 11. Verify Comparison Frames
-  const framesContainer = page.locator(".cut-drawer-frames");
-  await expect(framesContainer).toBeVisible();
-
-  const frameCards = framesContainer.locator(".cut-frame-card");
+  // 11. Verify 2 Boundary Frame Cards: OUT and INCOMING
+  const frameCards = page.locator(".cut-frame-card");
   await expect(frameCards).toHaveCount(2);
 
   const outCard = frameCards.first();
-  await expect(outCard.locator(".cut-frame-card-head")).toContainText("OUTGOING");
+  await expect(outCard.locator(".cut-frame-card-head")).toContainText("OUT");
   await expect(outCard.locator(".cut-bracket-marker")).toContainText("OUT");
 
   const inCard = frameCards.last();
@@ -160,14 +156,15 @@ test("Studio Cuts drawer design, interactions, boundary frames, evidence rows, p
 
   // 12. Verify Evidence Rows
   const evidenceRows = page.locator(".cut-evidence-row");
-  await expect(evidenceRows).toHaveCount(5);
+  await expect(evidenceRows).toHaveCount(6);
 
   await expect(evidenceRows.nth(0).locator(".cut-evidence-label")).toContainText("Eye-Trace jump");
-  await expect(evidenceRows.nth(1).locator(".cut-evidence-label")).toContainText("Framing change");
-  await expect(evidenceRows.nth(2).locator(".cut-evidence-label")).toContainText("Duration change");
-  await expect(evidenceRows.nth(3).locator(".cut-evidence-label")).toContainText("Visual delta");
-  await expect(evidenceRows.nth(4).locator(".cut-evidence-label")).toContainText("Transition");
-  await expect(evidenceRows.nth(4).locator(".cut-evidence-value")).toHaveText("Hard cut");
+  await expect(evidenceRows.nth(1).locator(".cut-evidence-label")).toContainText("Colour match");
+  await expect(evidenceRows.nth(2).locator(".cut-evidence-label")).toContainText("Framing change");
+  await expect(evidenceRows.nth(3).locator(".cut-evidence-label")).toContainText("Duration change");
+  await expect(evidenceRows.nth(4).locator(".cut-evidence-label")).toContainText("Visual delta");
+  await expect(evidenceRows.nth(5).locator(".cut-evidence-label")).toContainText("Transition");
+  await expect(evidenceRows.nth(5).locator(".cut-evidence-value")).toHaveText("Hard cut");
 
   const footnote = page.locator(".cut-evidence-footnote");
   await expect(footnote).toContainText("Boundary samples are one frame either side");

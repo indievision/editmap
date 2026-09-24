@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   newProject,
   peopleLabels,
@@ -7,7 +7,9 @@ import {
   updateShotTags,
   type CastMember,
   type CharacterAnalysis,
+  type CutAnnotation,
   type Project,
+  type SequenceMarker,
   type Shot,
 } from "../models/project";
 import { parseEDL } from "../parsers/edl";
@@ -15,12 +17,13 @@ import { actualRate, formatTimecode, rates } from "../utils/timecode";
 import { activeShot, clampSeek } from "../analysis/playback";
 import { listProjects, saveProject } from "../storage/projects";
 import { MAX_BACKUP_BYTES, makeBackup, parseBackup } from "../storage/backup";
-import EditingMap from "../timeline/EditingMap";
-import ShotAnalysis from "../components/ShotAnalysis";
+import EditingMap, { DEFAULT_MAP_LAYERS, type MapLayerState } from "../timeline/EditingMap";
+import FullscreenMapVisualization from "../timeline/FullscreenMapVisualization";
 import AllShotsAnalysis from "../components/AllShotsAnalysis";
 import EditingRhythm from "../components/EditingRhythm";
-import SequenceReading, { type TimeRange } from "../components/SequenceReading";
-import SoundReading from "../components/SoundReading";
+import FramingDrawer from "../components/FramingDrawer";
+import SequenceReading, { type DraftRange, type TimeRange } from "../components/SequenceReading";
+import SoundDrawer from "../components/SoundDrawer";
 import CutReading from "../components/CutReading";
 import type { CutPair } from "../analysis/cuts";
 import { useThumbnails } from "../video/useThumbnails";
@@ -28,43 +31,41 @@ import { analyzeLocalAudio } from "../analysis/audio";
 import { separateDmeAudio } from "../analysis/dme";
 import { isSpeechAnalysisValid, mediaSignature } from "../analysis/speech";
 import { scanSpeechAudio } from "../analysis/speechService";
-import SpeechReading from "../components/SpeechReading";
 import { isLoudnessAnalysisValid } from "../analysis/loudness";
 import { scanLoudnessAudio } from "../analysis/loudnessService";
-import LoudnessReading from "../components/LoudnessReading";
-import CharacterSummary, { CastGallery } from "../components/CharacterSummary";
 import CastDrawer from "../components/CastDrawer";
 import { sampleFrame, createFrameSampler, analyzeFrames, sampleShotFrames, MODEL } from "../analysis/localModel";
 import { discoverCharactersAcrossShots, isEligibleForCharacterScan, mergeDiscoveredCast } from "../analysis/characters";
 import ReviewFilters from "../components/ReviewFilters";
 import { matchesReviewFilter, reviewReasons, reviewReasonLabel, type ReviewFilter } from "../analysis/review";
-import ColorReading from "../components/ColorReading";
 import ColorDrawer from "../components/ColorDrawer";
 import ReportExportModal, { type ReportExportConfig } from "../components/ReportExportModal";
 import PrintableReport from "../components/PrintableReport";
 import { detectVideoShots, type ScanProgress } from "../analysis/videoScanner";
 import { analyzeShotMotion } from "../analysis/motion";
-import { splitShotAtTime, mergeShotsAtCut, rollCutBoundary, nudgeCutBoundary } from "../timeline/timelineOps";
+import { splitShotAtTime, mergeShotsAtCut, rollCutBoundary, nudgeCutBoundary, quantizeToFrame } from "../timeline/timelineOps";
 import ProjectHeader, { type WorkspaceMode } from "../components/ProjectHeader";
 import ShotInspector from "../components/ShotInspector";
-import ReviewQueue from "../components/ReviewQueue";
-import ReviewContextFilmstrip from "../components/ReviewContextFilmstrip";
-import MapSequenceOverview from "../components/MapSequenceOverview";
+import ScreeningReview from "../components/ScreeningReview";
+import ExploreWorkspace from "../components/explore/ExploreWorkspace";
 import MapShotSummary from "../components/MapShotSummary";
 import ResizeHandle from "../components/ResizeHandle";
 import { useWorkspaceLayout } from "../hooks/useWorkspaceLayout";
 import { getSquintFilter } from "../utils/squint";
 import WelcomeScreen from "../components/WelcomeScreen";
-import { StudioToolRail } from "../components/StudioToolRail";
-import { StudioRhythmRibbon } from "../components/StudioRhythmRibbon";
+import { StudioToolRail, type StudioToolTab } from "../components/StudioToolRail";
+import type { MeasureId } from "../analysis/comparison";
 
 
 const shotSizeLabels: Record<Shot["shotSize"], string> = {
-  Wide: "Wide framing",
-  Full: "Full framing",
-  Medium: "Medium framing",
-  Close: "Close framing",
-  "Extreme close": "Extreme close framing",
+  "Extreme wide": "Extreme wide",
+  Wide: "Wide",
+  Full: "Full",
+  American: "American",
+  Medium: "Medium",
+  "Medium close-up": "Medium close-up",
+  Close: "Close",
+  "Extreme close": "Extreme close",
   EWS: "Extreme wide shot",
   WS: "Wide shot",
   FS: "Full shot",
@@ -82,9 +83,12 @@ const shotSizeLabels: Record<Shot["shotSize"], string> = {
 };
 
 const shotSizeDescriptions: Partial<Record<Shot["shotSize"], string>> = {
+  "Extreme wide": "Environment dominates; subject tiny or absent",
   Wide: "Subject small or surrounded by substantial environment",
   Full: "Full body or subject with contextual surroundings",
+  American: "Approximately knees up; also called a cowboy shot",
   Medium: "Subject emphasis with meaningful environment retained",
+  "Medium close-up": "Approximately chest up",
   Close: "Face or main subject fills a substantial part of frame",
   "Extreme close": "An isolated facial, bodily, or prop detail dominates",
   EWS: "Environment dominates; subject tiny or absent",
@@ -102,11 +106,14 @@ const shotSizeDescriptions: Partial<Record<Shot["shotSize"], string>> = {
 };
 
 const sizeShortcuts: Record<string, string> = {
-  Wide: "1",
-  Full: "2",
-  Medium: "3",
-  Close: "4",
-  "Extreme close": "5",
+  "Extreme wide": "1",
+  Wide: "2",
+  Full: "3",
+  American: "4",
+  Medium: "5",
+  "Medium close-up": "6",
+  Close: "7",
+  "Extreme close": "8",
   Unknown: "U",
 };
 
@@ -184,8 +191,13 @@ export default function App() {
   const [waveform, setWaveform] = useState<number[]>([]);
   const [selectedCut, setSelectedCut] = useState<string>();
   const [autoAdvance, setAutoAdvance] = useState(true);
-  const [selectedRange, setSelectedRange] = useState<TimeRange>();
+  const [selectedRange, setSelectedRange] = useState<DraftRange>();
+  const [isRangeLooping, setIsRangeLooping] = useState(false);
+  const [selectedSequenceId, setSelectedSequenceId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
+  const [timelineScrollLeft, setTimelineScrollLeft] = useState(0);
+  const [mapLayers, setMapLayers] = useState<MapLayerState>(DEFAULT_MAP_LAYERS);
+  const [isFullscreenGraph, setIsFullscreenGraph] = useState(false);
   const [dropFrame, setDropFrame] = useState(false);
   const [scanningAll, setScanningAll] = useState(false);
   const [scanningShot, setScanningShot] = useState(false);
@@ -210,9 +222,21 @@ export default function App() {
   } = useWorkspaceLayout(workspaceMode);
   const [inspectorDrawerOpen, setInspectorDrawerOpen] = useState(false);
   const [studioDrawerOpen, setStudioDrawerOpen] = useState(false);
+  const [studioTagBarOpen, setStudioTagBarOpen] = useState(true);
   const [focusMode, setFocusMode] = useState(false);
-  const [deckTab, setDeckTab] = useState<"rhythm" | "sequence" | "cuts" | "cast" | "color">("rhythm");
-  const [mapDeckTab, setMapDeckTab] = useState<"overview" | "rhythm" | "sequence" | "cuts" | "cast" | "color">("overview");
+  const [deckTab, setDeckTab] = useState<StudioToolTab>("rhythm");
+  const [initialCompareMeasure, setInitialCompareMeasure] = useState<MeasureId | undefined>();
+  const [mapExpanded, setMapExpanded] = useState(false);
+  const drawerBeforeExpand = useRef(false);
+  const toggleExpandedMap = () => {
+    if (mapExpanded) {
+      setStudioDrawerOpen(drawerBeforeExpand.current);
+    } else {
+      drawerBeforeExpand.current = studioDrawerOpen;
+      setStudioDrawerOpen(false);
+    }
+    setMapExpanded((expanded) => !expanded);
+  };
   const [edlRevision, setEdlRevision] = useState(0);
   const [analysisProgress, setAnalysisProgress] = useState<UnifiedAnalysisProgress | null>(null);
   const [scanOptions, setScanOptions] = useState<ScanOptions>(QUICK_ANALYSIS_PRESET);
@@ -227,6 +251,12 @@ export default function App() {
   const [isSpeechScanning, setIsSpeechScanning] = useState(false);
   const [speechStatus, setSpeechStatus] = useState("");
   const [showSpeechOverlay, setShowSpeechOverlay] = useState(true);
+  const completeSelectedRange: TimeRange | undefined = useMemo(() => {
+    if (selectedRange && selectedRange.start !== undefined && selectedRange.end !== undefined && selectedRange.end > selectedRange.start) {
+      return { start: selectedRange.start, end: selectedRange.end };
+    }
+    return undefined;
+  }, [selectedRange]);
   const [isLoudnessScanning, setIsLoudnessScanning] = useState(false);
   const [loudnessStatus, setLoudnessStatus] = useState("");
   const [linkedMediaSignature, setLinkedMediaSignature] = useState<string>();
@@ -250,6 +280,11 @@ export default function App() {
   });
 
   const handleExportPDF = (config: ReportExportConfig) => {
+    setReportConfig(config);
+    setMessage("PDF analysis report exported successfully.");
+  };
+
+  const handleSystemPrint = (config: ReportExportConfig) => {
     setReportConfig(config);
     let pageStyle = document.getElementById("editmap-print-page-style") as HTMLStyleElement | null;
     if (!pageStyle) {
@@ -280,18 +315,19 @@ export default function App() {
     playing || scanningAll || scanningShot || Boolean(analysisProgress),
   );
 
-  const appliedColorProfiles = useRef<Set<string>>(new Set());
+  const appliedColorProfileSignatures = useRef<Record<string, string>>({});
   useEffect(() => {
-    appliedColorProfiles.current.clear();
-  }, [project?.id]);
+    appliedColorProfileSignatures.current = {};
+  }, [project?.id, url]);
 
   useEffect(() => {
     if (!project || !Object.keys(colorProfiles).length) return;
     let hasChanges = false;
     const nextShots = project.shots.map((s) => {
       const profile = colorProfiles[s.id];
-      if (profile && !appliedColorProfiles.current.has(s.id)) {
-        appliedColorProfiles.current.add(s.id);
+      const signature = profile && JSON.stringify(profile);
+      if (profile && typeof signature === "string" && signature !== appliedColorProfileSignatures.current[s.id]) {
+        appliedColorProfileSignatures.current[s.id] = signature;
         hasChanges = true;
         return { ...s, colorProfile: profile };
       }
@@ -453,7 +489,23 @@ export default function App() {
     if (!v || !url) return;
     if (v.paused) {
       stopAt.current = null;
-      playbackRange.current = null;
+      if (
+        isRangeLooping &&
+        selectedRange?.start !== undefined &&
+        selectedRange?.end !== undefined &&
+        selectedRange.end > selectedRange.start
+      ) {
+        const fps = project?.frameRate || 24;
+        const start = quantizeToFrame(selectedRange.start, fps);
+        const end = quantizeToFrame(selectedRange.end, fps);
+        playbackRange.current = { start, end, loop: true };
+        if (v.currentTime < start || v.currentTime >= end) {
+          v.currentTime = start;
+          setTime(start);
+        }
+      } else {
+        playbackRange.current = null;
+      }
       void v.play().catch((e) => setError(e.message));
     } else v.pause();
   };
@@ -528,6 +580,25 @@ export default function App() {
     });
   };
 
+  const handleCloseStudioDrawer = useCallback(() => {
+    setStudioDrawerOpen(false);
+    if (!leftCollapsed) {
+      toggleLeftCollapse();
+    }
+  }, [leftCollapsed, toggleLeftCollapse]);
+
+  const handleUpdateShots = useCallback((shots: Shot[]) => {
+    update({ shots });
+  }, [update]);
+
+  const handleUpdateSequences = useCallback((sequences: SequenceMarker[]) => {
+    update({ sequences });
+  }, [update]);
+
+  const handleUpdateCutAnnotations = useCallback((cutAnnotations: CutAnnotation[]) => {
+    update({ cutAnnotations });
+  }, [update]);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (
@@ -550,11 +621,20 @@ export default function App() {
         return;
       }
       if (e.ctrlKey || e.metaKey) return;
+      if (workspaceMode !== "studio") return;
 
       if (e.key === "Escape") {
-        if (workspaceMode === "studio" && studioDrawerOpen) {
+        if (isFullscreenGraph) {
+          e.preventDefault();
+          setIsFullscreenGraph(false);
+          return;
+        }
+        if (workspaceMode === "studio" && (!leftCollapsed || studioDrawerOpen)) {
           e.preventDefault();
           setStudioDrawerOpen(false);
+          if (!leftCollapsed) {
+            toggleLeftCollapse();
+          }
           return;
         }
         if (inspectorDrawerOpen) {
@@ -562,6 +642,35 @@ export default function App() {
           setInspectorDrawerOpen(false);
           return;
         }
+      }
+
+      if (workspaceMode === "studio" && (e.key === "i" || e.key === "I")) {
+        e.preventDefault();
+        const frameSec = quantizeToFrame(time, project?.frameRate || 24);
+        setSelectedRange((prev) => ({
+          ...prev,
+          start: frameSec,
+        }));
+        setDeckTab("sequence");
+        setStudioDrawerOpen(true);
+        if (leftCollapsed) {
+          toggleLeftCollapse();
+        }
+        return;
+      }
+      if (workspaceMode === "studio" && (e.key === "o" || e.key === "O")) {
+        e.preventDefault();
+        const frameSec = quantizeToFrame(time, project?.frameRate || 24);
+        setSelectedRange((prev) => ({
+          ...prev,
+          end: frameSec,
+        }));
+        setDeckTab("sequence");
+        setStudioDrawerOpen(true);
+        if (leftCollapsed) {
+          toggleLeftCollapse();
+        }
+        return;
       }
 
       if (e.key === "c" || e.key === "C") {
@@ -572,6 +681,14 @@ export default function App() {
       if (e.key === "s" || e.key === "S") {
         e.preventDefault();
         handleToggleSnap();
+        return;
+      }
+      if (selectedSequenceId && (e.key === "Delete" || e.key === "Backspace")) {
+        e.preventDefault();
+        const updated = (project?.sequences || []).filter((s) => s.id !== selectedSequenceId);
+        handleUpdateSequences(updated);
+        setSelectedSequenceId(null);
+        setSelectedRange(undefined);
         return;
       }
       if (selectedCut && (e.key === "Delete" || e.key === "Backspace")) {
@@ -592,11 +709,14 @@ export default function App() {
 
       const size = (
         {
-          "1": "Wide",
-          "2": "Full",
-          "3": "Medium",
-          "4": "Close",
-          "5": "Extreme close",
+          "1": "Extreme wide",
+          "2": "Wide",
+          "3": "Full",
+          "4": "American",
+          "5": "Medium",
+          "6": "Medium close-up",
+          "7": "Close",
+          "8": "Extreme close",
           u: "Unknown",
         } as Record<string, Shot["shotSize"]>
       )[e.key.toLowerCase()];
@@ -627,9 +747,12 @@ export default function App() {
       if (v) {
         const range = playbackRange.current;
         let pausedBoundary = false;
-        if (range && v.currentTime >= range.end) {
-          if (range.loop) v.currentTime = range.start;
-          else {
+        const frameSec = 1 / (project?.frameRate || 24);
+        if (range && v.currentTime >= range.end - frameSec / 2) {
+          if (range.loop) {
+            v.currentTime = range.start;
+            setTime(range.start);
+          } else {
             v.pause();
             v.currentTime = range.end;
             playbackRange.current = null;
@@ -788,6 +911,57 @@ export default function App() {
     setTime(start);
     void v.play().catch((e) => setError(e.message));
   };
+
+  useEffect(() => {
+    if (isRangeLooping) {
+      if (
+        selectedRange &&
+        selectedRange.start !== undefined &&
+        selectedRange.end !== undefined &&
+        selectedRange.end > selectedRange.start
+      ) {
+        const fps = project?.frameRate || 24;
+        const start = quantizeToFrame(selectedRange.start, fps);
+        const end = quantizeToFrame(selectedRange.end, fps);
+        playbackRange.current = { start, end, loop: true };
+      } else {
+        setIsRangeLooping(false);
+        playbackRange.current = null;
+      }
+    }
+  }, [isRangeLooping, project?.frameRate, selectedRange]);
+
+  const handleToggleLoopRange = useCallback(
+    (active?: boolean) => {
+      setIsRangeLooping((prev) => {
+        const next = active !== undefined ? active : !prev;
+        const v = video.current;
+        if (
+          !next ||
+          !selectedRange ||
+          selectedRange.start === undefined ||
+          selectedRange.end === undefined ||
+          selectedRange.end <= selectedRange.start
+        ) {
+          playbackRange.current = null;
+          return false;
+        }
+        const fps = project?.frameRate || 24;
+        const start = quantizeToFrame(selectedRange.start, fps);
+        const end = quantizeToFrame(selectedRange.end, fps);
+        playbackRange.current = { start, end, loop: true };
+        if (v) {
+          if (v.currentTime < start || v.currentTime >= end) {
+            v.currentTime = start;
+            setTime(start);
+          }
+        }
+        return true;
+      });
+    },
+    [project?.frameRate, selectedRange],
+  );
+
   const replace = (p: Project) => {
     pendingFile.current = null;
     setLinkedMediaSignature(undefined);
@@ -804,6 +978,8 @@ export default function App() {
     setSelected(undefined);
     setSelectedCut(undefined);
     setSelectedRange(undefined);
+    setIsRangeLooping(false);
+    playbackRange.current = null;
     setWaveform([]);
     setDirty(false);
     revision.current++;
@@ -1111,7 +1287,7 @@ export default function App() {
       // STAGE 1: CUT DETECTION
       // -------------------------------------------------------------
       if (options.cuts) {
-        const detectedShots = await detectVideoShots(videoUrl, {
+        const detectedShots = await detectVideoShots(pendingFile.current ?? videoUrl, {
           fps: project.frameRate || 24,
           dropFrame: project.dropFrame,
           signal: abort.signal,
@@ -1121,7 +1297,17 @@ export default function App() {
               cutsFound: p.shotsCount,
               currentTime: p.currentTime,
               overallPercent: calcOverallProgress("cuts", p.percent),
-              statusText: `Scanning cuts · ${p.shotsCount} shots found (${Math.round(p.percent)}%)`,
+              statusText: p.detector === "browser"
+                ? `Scanning cuts with browser detector · ${p.shotsCount} shots found (${Math.round(p.percent)}%)`
+                : `Scanning cuts with TransNet V2 · ${p.shotsCount} shots found (${Math.round(p.percent)}%)`,
+            } : prev);
+          },
+          onDetector: (detector, reason) => {
+            setAnalysisProgress((prev) => prev ? {
+              ...prev,
+              statusText: detector === "transnet"
+                ? "Scanning cuts with TransNet V2..."
+                : `Scanning cuts with browser detector${reason ? " · TransNet V2 unavailable" : ""}...`,
             } : prev);
           },
         });
@@ -1244,7 +1430,7 @@ export default function App() {
               {
                 existingCast: projectRef.current?.cast ?? [],
                 onCheckpoint: (id, analysis) => applyShotPatch(owner, id, { characterAnalysis: analysis }),
-                minAppearances: 1,
+                minAppearances: peopleShots.length >= 2 ? 2 : 1,
                 onProgress: (p) => {
                   const charPercent = Math.round((p.completedShots / p.totalShots) * 100);
                   setAnalysisProgress((prev) => prev ? {
@@ -1601,7 +1787,15 @@ export default function App() {
           saveState={saveState}
           historyState={historyState}
           workspaceMode={workspaceMode}
-          onModeChange={setWorkspaceMode}
+          onModeChange={(mode) => {
+            if (mode !== workspaceMode) {
+              video.current?.pause();
+              setPlaying(false);
+              stopAt.current = null;
+              playbackRange.current = null;
+            }
+            setWorkspaceMode(mode);
+          }}
           onHome={() => {
             if (!dirty || confirm("Return to home screen? Unsaved changes will be lost.")) {
               setProject(null);
@@ -1619,7 +1813,7 @@ export default function App() {
           onUndo={() => restoreHistory("undo")}
           onRedo={() => restoreHistory("redo")}
           onImportVideo={openVideoPicker}
-          onImportEdl={() => edlInput.current?.click()}
+          onImportEdl={() => { setWorkspaceMode("studio"); edlInput.current?.click(); }}
           onImportProject={() => backupInput.current?.click()}
           onExportProject={exportProject}
           onExportPDF={() => setReportModalOpen(true)}
@@ -1741,14 +1935,42 @@ export default function App() {
           }}
         />
       ) : (
-        <main
-          ref={workspaceRef}
-          className={`workspace mode-${workspaceMode}`}
-          style={{
-            "--left-panel-width": leftCollapsed ? "0px" : `${leftWidth}px`,
-            "--right-panel-width": rightCollapsed ? "0px" : `${rightWidth}px`,
-          } as React.CSSProperties}
-        >
+        <>
+          <div
+            style={workspaceMode === "explore" ? { display: "contents" } : { display: "none" }}
+            aria-hidden={workspaceMode !== "explore"}
+          >
+            <ExploreWorkspace
+              key={project.id}
+              project={project}
+              url={url}
+              mediaSignature={linkedMediaSignature}
+              thumbnails={thumbnails}
+              colorProfiles={colorProfiles}
+              activeWorkspace={workspaceMode}
+              onUpdateProject={update}
+              onLocateInStudio={(shotId, sourceTime, sequenceId) => {
+                setTime(sourceTime);
+                setSelected(shotId);
+                if (sequenceId) {
+                  setSelectedSequenceId(sequenceId);
+                  setDeckTab("sequence");
+                }
+                setWorkspaceMode("studio");
+              }}
+              onRelinkVideo={openVideoPicker}
+            />
+          </div>
+          <main
+            ref={workspaceRef}
+            className={`workspace mode-${workspaceMode}${mapExpanded ? " studio-map-expanded" : ""}`}
+            style={{
+              "--left-panel-width": leftCollapsed ? "0px" : `${leftWidth}px`,
+              "--right-panel-width": rightCollapsed ? "0px" : `${rightWidth}px`,
+              display: workspaceMode === "studio" ? undefined : "none",
+            } as React.CSSProperties}
+            aria-hidden={workspaceMode !== "studio"}
+          >
           {project.shots.length === 0 && url && !analysisProgress && (
             <div className="scene-detect-modal unified-analysis-modal">
               <section className="modal panel scene-detect-prompt unified-scan-panel" style={{ width: 660, maxWidth: "94vw" }}>
@@ -1928,50 +2150,46 @@ export default function App() {
             </div>
           )}
 
-          {/* TOP STAGE: Studio (Rail + Drawer + Monitor + Inspector), Map Focus (Monitor + Overview + Summary), Review Desk (Queue + Monitor + Inspector) */}
+          {/* Persistent Studio tools and monitor; expanded layout uses the same mounted elements. */}
           <div
             className={`top-stage ${leftCollapsed ? "left-is-collapsed" : ""} ${rightCollapsed || focusMode ? "right-is-collapsed" : ""}`}
             style={{
               height: `calc(${topHeightRatio * 100}% - 6px)`,
             }}
           >
-            {/* Studio Mode Slim Vertical Tool Rail */}
-            {workspaceMode === "studio" && (
-              <StudioToolRail
-                activeTab={deckTab}
-                drawerOpen={studioDrawerOpen}
-                onSelectTab={(tab) => {
-                  setDeckTab(tab);
-                  setStudioDrawerOpen(true);
-                }}
-                onToggleDrawer={() => setStudioDrawerOpen(!studioDrawerOpen)}
-              />
-            )}
-
-            {/* COLUMN 1 in Studio: Contextual Detail Drawer (kept mounted across mode switches to preserve analysis) */}
+            {/* COLUMN 1 in Studio: Analytical Panel (always visible, contains horizontal tabs + content) */}
             <div
-              className={`analytical-deck studio-detail-drawer panel ${studioDrawerOpen ? "drawer-open" : "drawer-closed"}`}
-              hidden={workspaceMode !== "studio" || !studioDrawerOpen}
-              style={workspaceMode !== "studio" || !studioDrawerOpen ? { display: "none" } : undefined}
+              className={`analytical-deck studio-detail-drawer panel ${(leftCollapsed || (mapExpanded && !studioDrawerOpen)) ? "drawer-closed" : "drawer-open"}`}
+              hidden={workspaceMode !== "studio" || (mapExpanded ? !studioDrawerOpen : leftCollapsed)}
+              style={workspaceMode !== "studio" || (mapExpanded ? !studioDrawerOpen : leftCollapsed) ? { display: "none" } : undefined}
             >
-              {deckTab !== "rhythm" && deckTab !== "sequence" && deckTab !== "cuts" && deckTab !== "cast" && deckTab !== "color" && (
-                <div className="section-head drawer-head">
-                  <span className="eyebrow">
-                    {deckTab === "color" && "COLOR READING"}
-                  </span>
-                  <button
-                    type="button"
-                    className="studio-drawer-close-btn"
-                    onClick={() => setStudioDrawerOpen(false)}
-                    title="Close analytical detail drawer (Esc)"
-                    aria-label="Close analytical detail drawer"
-                  >
-                    ✕
-                  </button>
-                </div>
+              {/* Horizontal analytical tabs */}
+              {workspaceMode === "studio" && (
+                <StudioToolRail
+                  activeTab={deckTab}
+                  drawerOpen={mapExpanded ? studioDrawerOpen : !leftCollapsed}
+                  onSelectTab={(tab) => {
+                    if (tab !== "rhythm") {
+                      setInitialCompareMeasure(undefined);
+                    }
+                    setDeckTab(tab);
+                    setStudioDrawerOpen(true);
+                    if (leftCollapsed) {
+                      toggleLeftCollapse();
+                    }
+                  }}
+                  onToggleDrawer={() => {
+                    setStudioDrawerOpen(leftCollapsed);
+                    toggleLeftCollapse();
+                  }}
+                />
               )}
-
-                <div className="deck-pane">
+              <div
+                role="tabpanel"
+                id={`studio-tabpanel-${deckTab}`}
+                aria-labelledby={`studio-tab-${deckTab}`}
+              >
+              <div className="deck-pane">
                   <div hidden={deckTab !== "rhythm"}>
                     <EditingRhythm
                       project={project}
@@ -1981,8 +2199,27 @@ export default function App() {
                       url={url}
                       onSelect={selectShot}
                       onSeek={seek}
-                      onUpdateShots={(shots) => update({ shots })}
-                      onClose={() => setStudioDrawerOpen(false)}
+                      onUpdateShots={handleUpdateShots}
+                      onClose={handleCloseStudioDrawer}
+                      variant="drawer"
+                      initialCompareMeasure={initialCompareMeasure}
+                      onClearInitialCompareMeasure={() => setInitialCompareMeasure(undefined)}
+                      range={selectedRange}
+                      onRangeChange={setSelectedRange}
+                      onUpdateProject={(patch) => update(patch)}
+                      isLoopingRange={isRangeLooping}
+                      onToggleLoopRange={handleToggleLoopRange}
+                    />
+                  </div>
+
+                  <div hidden={deckTab !== "framing"}>
+                    <FramingDrawer
+                      project={project}
+                      time={time}
+                      selected={selected}
+                      onSelect={selectShot}
+                      onSeek={seek}
+                      onClose={handleCloseStudioDrawer}
                       variant="drawer"
                     />
                   </div>
@@ -1991,11 +2228,42 @@ export default function App() {
                     <SequenceReading
                       project={project}
                       range={selectedRange}
+                      currentTime={time}
                       onRangeChange={setSelectedRange}
                       onSeek={seek}
-                      onUpdate={(sequences) => update({ sequences })}
-                      onClose={() => setStudioDrawerOpen(false)}
+                      onUpdate={handleUpdateSequences}
+                      onUpdateProject={(patch) => update(patch)}
+                      selectedEntryId={selectedSequenceId}
+                      onSelectEntryId={setSelectedSequenceId}
+                      onClose={handleCloseStudioDrawer}
                       variant="drawer"
+                    />
+                  </div>
+
+                  <div hidden={deckTab !== "sound"}>
+                    <SoundDrawer
+                      project={project}
+                      range={completeSelectedRange}
+                      currentTime={time}
+                      selectedShot={current}
+                      onRangeChange={setSelectedRange}
+                      onPlayRange={playRange}
+                      onUpdateSpans={(soundSpans) => update({ soundSpans })}
+                      loudnessAnalysis={isLoudnessAnalysisValid(project.loudnessAnalysis, linkedMediaSignature ?? project.loudnessAnalysis?.mediaSignature) ? project.loudnessAnalysis : undefined}
+                      isLoudnessScanning={isLoudnessScanning}
+                      loudnessStatus={loudnessStatus}
+                      onScanLoudness={handleScanLoudness}
+                      onCancelLoudness={() => loudnessAbortRef.current?.abort()}
+                      speechAnalysis={isSpeechAnalysisValid(project.speechAnalysis, linkedMediaSignature ?? project.speechAnalysis?.mediaSignature) ? project.speechAnalysis : undefined}
+                      isSpeechScanning={isSpeechScanning}
+                      speechStatus={speechStatus}
+                      onScanSpeech={handleScanSpeech}
+                      onCancelSpeech={() => speechAbortRef.current?.abort()}
+                      onRetrySpeech={handleScanSpeech}
+                      onSeek={seek}
+                      showSpeechOverlay={showSpeechOverlay}
+                      onToggleSpeechOverlay={() => setShowSpeechOverlay((show) => !show)}
+                      onClose={handleCloseStudioDrawer}
                     />
                   </div>
 
@@ -2006,10 +2274,10 @@ export default function App() {
                       url={url}
                       onSeek={seek}
                       onPlay={playCut}
-                      onUpdate={(cutAnnotations) => update({ cutAnnotations })}
+                      onUpdate={handleUpdateCutAnnotations}
                       onDeleteCut={handleMergeShots}
                       onNudgeCut={handleNudgeCut}
-                      onClose={() => setStudioDrawerOpen(false)}
+                      onClose={handleCloseStudioDrawer}
                       variant="drawer"
                     />
                   </div>
@@ -2068,7 +2336,7 @@ export default function App() {
                       shot={shot ?? current}
                       time={time}
                       thumbnails={thumbnails}
-                      range={selectedRange}
+                      range={completeSelectedRange}
                       selectedMember={selectedCharacter}
                       disabled={scanningAll || scanningShot || !url}
                       onSelect={setSelectedCharacter}
@@ -2083,7 +2351,7 @@ export default function App() {
                       onRangeChange={setSelectedRange}
                       onPlayRange={(range) => playRange(range, false)}
                       onSeek={seek}
-                      onClose={() => setStudioDrawerOpen(false)}
+                      onClose={handleCloseStudioDrawer}
                     />
                   </div>
 
@@ -2100,37 +2368,21 @@ export default function App() {
                           if (targetShot) selectShot(targetShot);
                         }}
                         onSeek={seek}
-                        squintMode={squintMode}
-                        onSquintModeChange={setSquintMode}
-                        squintLevel={squintLevel}
-                        onSquintLevelChange={setSquintLevel}
-                        onClose={() => setStudioDrawerOpen(false)}
+                        onClose={handleCloseStudioDrawer}
+                        onOpenCompare={(measure) => {
+                          setInitialCompareMeasure(measure);
+                          setDeckTab("rhythm");
+                          setStudioDrawerOpen(true);
+                        }}
                       />
                     )}
                   </div>
                 </div>
               </div>
+            </div>
 
-            {/* COLUMN 1 in Review Desk: Review Queue */}
-            {workspaceMode === "review" && !leftCollapsed && (
-              <ReviewQueue
-                project={project}
-                selectedShotId={selected}
-                thumbnails={thumbnails}
-                activeFilter={reviewFilter}
-                onFilterChange={setReviewFilter}
-                onSelectShot={selectShot}
-                searchQuery={reviewSearchQuery}
-                onSearchChange={setReviewSearchQuery}
-                autoAdvance={autoAdvance}
-                onAutoAdvanceChange={setAutoAdvance}
-                currentTime={time}
-                onSeek={seek}
-              />
-            )}
-
-            {/* COLUMN SPLITTER 1: Left Panel ↔ Center Panel in Review mode */}
-            {workspaceMode === "review" && (
+            {/* COLUMN SPLITTER: Left Panel ↔ Video Monitor */}
+            {workspaceMode === "studio" && (
               <ResizeHandle
                 direction="col"
                 className="resize-handle-left"
@@ -2139,20 +2391,17 @@ export default function App() {
                 onToggleCollapse={toggleLeftCollapse}
                 onDrag={resizeLeft}
                 onReset={resetLeftWidth}
-                label="Resize left panel"
+                label="Resize analytical panel"
               />
             )}
 
-            {/* FILM MONITOR (PERSISTENT - ALWAYS MOUNTED IN ALL 3 MODES) */}
+            {/* FILM MONITOR (PERSISTENT - ALWAYS MOUNTED IN ALL MODES) */}
             <section
-              className={`monitor panel ${workspaceMode === "map" ? "compact-monitor" : workspaceMode === "review" ? "large-monitor" : ""}`}
-              style={workspaceMode === "map" && leftCollapsed ? { display: "none" } : undefined}
+              className={`monitor panel ${mapExpanded ? "expanded-map-monitor" : ""}`}
             >
               <div className="section-head">
                 <span className="eyebrow">
-                  {workspaceMode === "review" && shot
-                    ? `SHOT ${String(shot.index).padStart(3, "0")} / ${String(project.shots.length).padStart(3, "0")}`
-                    : "PROGRAM FILM PREVIEW"}
+                  PROGRAM FILM PREVIEW
                   {squintMode && (
                     <span className="monitor-squint-indicator" title={`Squint Mode Active (Depth Level ${squintLevel})`}>
                       😑 SQUINT L{squintLevel}
@@ -2175,6 +2424,7 @@ export default function App() {
                   onLoadedMetadata={() => {
                     const v = video.current!,
                       f = pendingFile.current;
+                    v.currentTime = Math.min(time, Math.max(0, v.duration - 1 / project.frameRate));
                     if (!f) return;
                     update({
                       videoMetadata: {
@@ -2276,7 +2526,10 @@ export default function App() {
                       title="Previous shot"
                       aria-label="Previous shot"
                     >
-                      ⏮
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <polygon points="19 20 9 12 19 4 19 20" fill="currentColor" />
+                        <line x1="5" y1="19" x2="5" y2="5" />
+                      </svg>
                     </button>
                     <button
                       type="button"
@@ -2285,7 +2538,16 @@ export default function App() {
                       aria-label={playing ? "Pause" : "Play"}
                       onClick={toggle}
                     >
-                      {playing ? "⏸" : "▶"}
+                      {playing ? (
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                          <rect x="5" y="4" width="4" height="16" rx="1" />
+                          <rect x="15" y="4" width="4" height="16" rx="1" />
+                        </svg>
+                      ) : (
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style={{ marginLeft: 2 }}>
+                          <polygon points="5 3 19 12 5 21 5 3" />
+                        </svg>
+                      )}
                     </button>
                     <button
                       type="button"
@@ -2297,7 +2559,23 @@ export default function App() {
                       title="Next shot"
                       aria-label="Next shot"
                     >
-                      ⏭
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <polygon points="5 4 15 12 5 20 5 4" fill="currentColor" />
+                        <line x1="19" y1="5" x2="19" y2="19" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn-transport-nav studio-volume-btn ${muted ? "muted" : ""}`}
+                      onClick={() => setMuted(!muted)}
+                      title={muted ? "Unmute audio" : "Mute audio"}
+                      aria-label={muted ? "Unmute audio" : "Mute audio"}
+                    >
+                      {muted ? (
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><line x1="23" y1="9" x2="17" y2="15" /><line x1="17" y1="9" x2="23" y2="15" /></svg>
+                      ) : (
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" /></svg>
+                      )}
                     </button>
                   </div>
                   <div className="studio-transport-actions">
@@ -2305,6 +2583,8 @@ export default function App() {
                       type="button"
                       className={`studio-focus-btn ${focusMode ? "active" : ""}`}
                       onClick={() => setFocusMode(!focusMode)}
+                      aria-pressed={focusMode}
+                      aria-label={focusMode ? "Exit Focus Mode" : "Enter Focus Mode"}
                       title="Toggle Focus Mode (hides inspector for full width viewing)"
                     >
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>
@@ -2314,24 +2594,47 @@ export default function App() {
                       type="button"
                       className="studio-fullscreen-btn"
                       onClick={() => {
-                        if (document.fullscreenElement) {
-                          document.exitFullscreen();
-                        } else {
-                          video.current?.requestFullscreen?.();
-                        }
+                        setIsFullscreenGraph(true);
                       }}
-                      title="Fullscreen"
-                      aria-label="Fullscreen"
+                      title="Fullscreen Graph Visualization (Score)"
+                      aria-label="Fullscreen Graph Visualization"
                     >
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
                     </button>
                     <button
                       type="button"
+                      className="studio-fullscreen-btn studio-video-fullscreen-btn"
+                      onClick={() => {
+                        video.current?.requestFullscreen?.().catch(() => {});
+                      }}
+                      disabled={!url}
+                      title="Fullscreen Video Playback"
+                      aria-label="Fullscreen Video Playback"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="2"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor"/></svg>
+                    </button>
+                    <button
+                      type="button"
                       className={`monitor-squint-toggle ${squintMode ? "active" : ""}`}
+                      aria-pressed={squintMode}
+                      aria-label={squintMode ? `Squint Mode Active (Level ${squintLevel}) - Click to disable` : "Toggle Squint Mode"}
                       title={squintMode ? `Squint Mode Active (Level ${squintLevel}) - Click to disable` : "Toggle Squint Mode"}
                       onClick={() => setSquintMode(!squintMode)}
                     >
-                      😑
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M2 12s3.5-5 10-5 10 5 10 5-3.5 5-10 5-10-5-10-5z" />
+                        <line x1="2" y1="12" x2="22" y2="12" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      className="studio-expand-map-toggle-btn"
+                      onClick={toggleExpandedMap}
+                      title={mapExpanded ? "Restore Studio workspace" : "Expand map (hide upper workspace)"}
+                      aria-label="Expand map"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                      <span>Expand map</span>
                     </button>
                   </div>
                 </div>
@@ -2390,7 +2693,11 @@ export default function App() {
                     title={squintMode ? `Squint Mode Active (Level ${squintLevel}) - Click to disable` : "Toggle Squint Mode on preview monitor and timeline"}
                     onClick={() => setSquintMode(!squintMode)}
                   >
-                    😑 {squintMode ? `Squint L${squintLevel}` : "Squint"}
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ display: "inline-block", verticalAlign: "-2px", marginRight: 4 }}>
+                      <path d="M2 12s3.5-5 10-5 10 5 10 5-3.5 5-10 5-10-5-10-5z" />
+                      <line x1="2" y1="12" x2="22" y2="12" />
+                    </svg>
+                    <span>{squintMode ? `Squint L${squintLevel}` : "Squint"}</span>
                   </button>
                   <input
                     className="volume"
@@ -2407,7 +2714,7 @@ export default function App() {
               <div className="video-meta">
                 <span>
                   {project.videoMetadata
-                    ? `${project.videoMetadata.filename} · ${project.videoMetadata.width} × ${project.videoMetadata.height} · ${project.videoMetadata.duration.toFixed(2)}s`
+                    ? `${project.videoMetadata.filename} · ${project.videoMetadata.width} × ${project.videoMetadata.height}${project.videoMetadata.duration != null ? ` · ${project.videoMetadata.duration.toFixed(2)}s` : ""}`
                     : "No video connected"}
                 </span>
                 <span className="keyboard-hint">SPACE TO PLAY / PAUSE</span>
@@ -2418,261 +2725,33 @@ export default function App() {
                     onClick={() => setInspectorDrawerOpen(true)}
                     title="Open Shot Inspector drawer"
                   >
-                    Inspect Shot ↗
+                    <span>Inspect Shot</span>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                      <polyline points="15 3 21 3 21 9" />
+                      <line x1="10" y1="14" x2="21" y2="3" />
+                    </svg>
                   </button>
                 )}
               </div>
-
-              {/* Review Desk 3-Shot Context Filmstrip */}
-              {workspaceMode === "review" && (
-                <ReviewContextFilmstrip
-                  project={project}
-                  currentShot={shot}
-                  thumbnails={thumbnails}
-                  onSelectShot={selectShot}
-                />
-              )}
             </section>
 
-            {/* COLUMN 2 in Map Focus: Map Analytical Deck */}
-            {workspaceMode === "map" && (
-              <div className="map-analytical-deck panel">
-                <div className="deck-tabs" role="tablist" aria-label="Map Focus analytical tools">
-                  <button
-                    role="tab"
-                    aria-selected={mapDeckTab === "overview"}
-                    className={mapDeckTab === "overview" ? "active" : ""}
-                    onClick={() => setMapDeckTab("overview")}
-                  >
-                    Sequence & Rhythm
-                  </button>
-                  <button
-                    role="tab"
-                    aria-selected={mapDeckTab === "rhythm"}
-                    className={mapDeckTab === "rhythm" ? "active" : ""}
-                    onClick={() => setMapDeckTab("rhythm")}
-                  >
-                    Rhythm & Pacing
-                  </button>
-                  <button
-                    role="tab"
-                    aria-selected={mapDeckTab === "sequence"}
-                    className={mapDeckTab === "sequence" ? "active" : ""}
-                    onClick={() => setMapDeckTab("sequence")}
-                  >
-                    Sequence Reading
-                  </button>
-                  <button
-                    role="tab"
-                    aria-selected={mapDeckTab === "cuts"}
-                    className={mapDeckTab === "cuts" ? "active" : ""}
-                    onClick={() => setMapDeckTab("cuts")}
-                  >
-                    Cut Reading
-                  </button>
-                  <button
-                    role="tab"
-                    aria-selected={mapDeckTab === "cast"}
-                    className={mapDeckTab === "cast" ? "active" : ""}
-                    onClick={() => setMapDeckTab("cast")}
-                  >
-                    Cast & AI
-                  </button>
-                  <button
-                    role="tab"
-                    aria-selected={mapDeckTab === "color"}
-                    className={mapDeckTab === "color" ? "active" : ""}
-                    onClick={() => setMapDeckTab("color")}
-                  >
-                    Color Reading
-                  </button>
-                </div>
-
-                <div className="deck-pane">
-                  <div hidden={mapDeckTab !== "overview"}>
-                    <MapSequenceOverview
-                      project={project}
-                      selectedShot={shot}
-                      time={time}
-                      waveform={waveform}
-                      onSelectShot={selectShot}
-                      onSeek={seek}
-                    />
-                  </div>
-
-                  <div hidden={mapDeckTab !== "rhythm"}>
-                    <EditingRhythm
-                      project={project}
-                      time={time}
-                      waveform={waveform}
-                      selected={selected}
-                      url={url}
-                      onSelect={selectShot}
-                      onSeek={seek}
-                      onUpdateShots={(shots) => update({ shots })}
-                    />
-                  </div>
-
-                  <div hidden={mapDeckTab !== "sequence"}>
-                    <SequenceReading
-                      project={project}
-                      range={selectedRange}
-                      onRangeChange={setSelectedRange}
-                      onSeek={seek}
-                      onUpdate={(sequences) => update({ sequences })}
-                    />
-                    <SoundReading
-                      project={project}
-                      range={selectedRange}
-                      onRangeChange={setSelectedRange}
-                      onPlay={playRange}
-                      onUpdate={(soundSpans) => update({ soundSpans })}
-                    />
-                    <LoudnessReading
-                      project={project}
-                      analysis={isLoudnessAnalysisValid(project.loudnessAnalysis, linkedMediaSignature) ? project.loudnessAnalysis : undefined}
-                      currentTime={time}
-                      selectedShot={current}
-                      isScanning={isLoudnessScanning}
-                      status={loudnessStatus}
-                      onScan={handleScanLoudness}
-                      onCancel={() => loudnessAbortRef.current?.abort()}
-                      onSeek={seek}
-                    />
-                    <SpeechReading
-                      project={project}
-                      analysis={isSpeechAnalysisValid(project.speechAnalysis, linkedMediaSignature) ? project.speechAnalysis : undefined}
-                      range={selectedRange}
-                      selectedShot={current}
-                      isScanning={isSpeechScanning}
-                      status={speechStatus}
-                      onScan={handleScanSpeech}
-                      onCancel={() => speechAbortRef.current?.abort()}
-                      onRetry={handleScanSpeech}
-                      onSeek={seek}
-                      onToggleOverlay={() => setShowSpeechOverlay((show) => !show)}
-                      showOverlay={showSpeechOverlay}
-                    />
-                  </div>
-
-                  <div hidden={mapDeckTab !== "cuts"}>
-                    <CutReading
-                      project={project}
-                      incomingId={selectedCut}
-                      url={url}
-                      onSeek={seek}
-                      onPlay={playCut}
-                      onUpdate={(cutAnnotations) => update({ cutAnnotations })}
-                      onDeleteCut={handleMergeShots}
-                      onNudgeCut={handleNudgeCut}
-                    />
-                  </div>
-
-                  <div hidden={mapDeckTab !== "cast"}>
-                    <AllShotsAnalysis
-                      key={`map-${project.id}-${url}-${edlRevision}`}
-                      shots={project.shots}
-                      url={url}
-                      disabled={scanningShot}
-                      onBusyChange={setScanningAll}
-                      onPreview={previewAnalysis}
-                      cast={project.cast}
-                      onResult={(id, tags) => applyShotPatch(project.id, id, {
-                        ...tags,
-                        analysisFailures: undefined,
-                        suggestion: { ...tags, model: tags.model ?? MODEL, createdAt: new Date().toISOString() },
-                        reviewStatus: "Needs review",
-                      })}
-                      onFramingFailure={(id, failure) => applyShotPatch(project.id, id, { analysisFailures: { framing: { message: failure, createdAt: new Date().toISOString() } } })}
-                      onCharacterResult={(id, characterAnalysis) => {
-                        revision.current++;
-                        setProject((p) => p && p.id === project.id ? {
-                          ...p, updatedAt: new Date().toISOString(),
-                          shots: p.shots.map((s) => s.id === id ? s.characterAnalysis?.reviewStatus === "Confirmed" || s.characterAnalysis?.manualReviewStatus === "Confirmed" ? s : { ...s, characterAnalysis } : s),
-                        } : p);
-                        setDirty(true);
-                        setSaveState("");
-                      }}
-                      onAutoDiscoverComplete={(newCast, shotAnalyses) => {
-                        recordHistory(projectRef.current);
-                        revision.current++;
-                        setProject((p) => p && p.id === project.id ? {
-                          ...p,
-                          updatedAt: new Date().toISOString(),
-                          cast: mergeDiscoveredCast(p.cast ?? [], newCast),
-                          shots: p.shots.map((s) => {
-                            const analysis = shotAnalyses.get(s.id);
-                            if (analysis) {
-                              return s.characterAnalysis?.reviewStatus === "Confirmed" || s.characterAnalysis?.manualReviewStatus === "Confirmed"
-                                ? s
-                                : { ...s, characterAnalysis: analysis };
-                            }
-                            return s;
-                          }),
-                        } : p);
-                        setDirty(true);
-                        setSaveState("");
-                      }}
-                      onComplete={restoreLivePreview}
-                    />
-                    <CastGallery
-                      cast={project.cast ?? []}
-                      shot={shot}
-                      disabled={scanningAll || scanningShot || !url}
-                      onAdd={addCastMember}
-                      onReference={addCastReference}
-                      onRemove={removeCastMember}
-                      onRename={renameCastMember}
-                      onMerge={mergeCastMembers}
-                    />
-                    <CharacterSummary
-                      project={project}
-                      range={selectedRange}
-                      selectedMember={selectedCharacter}
-                      onSelect={setSelectedCharacter}
-                      onInspect={selectShot}
-                      onConfirmShot={confirmCharacterShot}
-                      onRemoveAppearance={removeCharacterAppearance}
-                      onRangeChange={setSelectedRange}
-                      onPlayRange={(range) => playRange(range, false)}
-                      onSeek={seek}
-                    />
-                  </div>
-
-                  <div hidden={mapDeckTab !== "color"}>
-                    <ColorReading
-                      project={project}
-                      thumbnails={thumbnails}
-                      selected={selected}
-                      onSelect={(id) => {
-                        const targetShot = project.shots.find((s) => s.id === id);
-                        if (targetShot) selectShot(targetShot);
-                      }}
-                      onSeek={seek}
-                      squintMode={squintMode}
-                      onSquintModeChange={setSquintMode}
-                      squintLevel={squintLevel}
-                      onSquintLevelChange={setSquintLevel}
-                    />
-                  </div>
-                </div>
-              </div>
+            {/* COLUMN SPLITTER 2: Center Panel ↔ Right Panel (review/map modes only) */}
+            {workspaceMode !== "studio" && (
+              <ResizeHandle
+                direction="col"
+                className="resize-handle-right"
+                collapseIcon="right"
+                isCollapsed={rightCollapsed}
+                onToggleCollapse={toggleRightCollapse}
+                onDrag={resizeRight}
+                onReset={resetRightWidth}
+                label="Resize right panel"
+              />
             )}
 
-            {/* COLUMN SPLITTER 2: Center Panel ↔ Right Panel */}
-            <ResizeHandle
-              direction="col"
-              className="resize-handle-right"
-              collapseIcon="right"
-              isCollapsed={rightCollapsed}
-              onToggleCollapse={toggleRightCollapse}
-              onDrag={resizeRight}
-              onReset={resetRightWidth}
-              label="Resize right panel"
-            />
-
-            {/* COLUMN 3: Shot Inspector (Studio), Readings / Inspector (Map Focus), or Grid Inspector (Review Desk) */}
-            {!rightCollapsed && !focusMode && workspaceMode === "studio" && (
+            {/* Studio inspector — now only in non-studio modes; studio uses the overlay drawer */}
+            {!mapExpanded && !rightCollapsed && !focusMode && workspaceMode !== "studio" && (
               <ShotInspector
                 shot={shot}
                 project={project}
@@ -2694,29 +2773,8 @@ export default function App() {
               />
             )}
 
-            {!rightCollapsed && workspaceMode === "map" && (
-              selectedCut ? (
-                <CutReading
-                  project={project}
-                  incomingId={selectedCut}
-                  url={url}
-                  onSeek={seek}
-                  onPlay={playCut}
-                  onUpdate={(cutAnnotations) => update({ cutAnnotations })}
-                  onClose={() => setSelectedCut(undefined)}
-                  onDeleteCut={handleMergeShots}
-                  onNudgeCut={handleNudgeCut}
-                />
-              ) : selectedRange ? (
-                <SequenceReading
-                  project={project}
-                  range={selectedRange}
-                  onRangeChange={setSelectedRange}
-                  onSeek={seek}
-                  onUpdate={(sequences) => update({ sequences })}
-                  onClose={() => setSelectedRange(undefined)}
-                />
-              ) : (
+            {mapExpanded && (
+              <aside className="expanded-map-context" aria-label="Map selection context">
                 <MapShotSummary
                   shot={shot}
                   project={project}
@@ -2725,29 +2783,13 @@ export default function App() {
                   onPrevious={goToPrevShot}
                   onNext={goToNextShot}
                 />
-              )
-            )}
-
-            {!rightCollapsed && workspaceMode === "review" && (
-              <ShotInspector
-                shot={shot}
-                project={project}
-                url={url}
-                thumbnail={shot ? thumbnails[shot.id] : undefined}
-                scanningAll={scanningAll}
-                scanningShot={scanningShot}
-                onBusyChange={setScanningShot}
-                onPreview={previewAnalysis}
-                onEditShot={editShot}
-                onModelResult={(pId, sId, patch) => applyShotPatch(pId, sId, patch, false)}
-                onNext={goToNextShot}
-                onPrevious={goToPrevShot}
-                onConfirmAndNext={confirmAndNext}
-                onMarkUncertain={markUncertainAndNext}
-                onReviewCharacters={reviewCharactersInShot}
-                useGridSizes={true}
-                autoAdvance={autoAdvance}
-              />
+                {selectedRange && (
+                  <button className="expanded-selection-button" onClick={() => {
+                    setDeckTab("sequence");
+                    setStudioDrawerOpen(true);
+                  }}>Open selected range in Structure</button>
+                )}
+              </aside>
             )}
           </div>
 
@@ -2772,33 +2814,6 @@ export default function App() {
               height: `calc(${(1 - topHeightRatio) * 100}% - 6px)`,
             }}
           >
-            {workspaceMode === "studio" && (
-              <StudioRhythmRibbon
-                project={project}
-                time={time}
-                selectedShot={shot}
-                onSelectShot={selectShot}
-                onSeek={seek}
-                range={selectedRange}
-                onRangeChange={(r) => {
-                  setSelectedRange(r);
-                  if (r) {
-                    setDeckTab("sequence");
-                    setStudioDrawerOpen(true);
-                  }
-                }}
-                waveform={waveform}
-                speechAnalysis={showSpeechOverlay && isSpeechAnalysisValid(project.speechAnalysis, linkedMediaSignature) ? project.speechAnalysis : undefined}
-                loudnessAnalysis={isLoudnessAnalysisValid(project.loudnessAnalysis, linkedMediaSignature) ? project.loudnessAnalysis : undefined}
-                thumbnails={thumbnails}
-                onCompareSequence={(r) => {
-                  setSelectedRange(r);
-                  setDeckTab("sequence");
-                  setStudioDrawerOpen(true);
-                }}
-                selectedCut={selectedCut}
-              />
-            )}
             <EditingMap
               project={project}
               thumbnails={thumbnails}
@@ -2827,14 +2842,29 @@ export default function App() {
               range={selectedRange}
               onRangeChange={(r) => {
                 setSelectedRange(r);
-                if (r) {
+                if (r && deckTab !== "rhythm") {
                   setDeckTab("sequence");
-                  if (workspaceMode === "studio") setStudioDrawerOpen(true);
+                  if (workspaceMode === "studio") {
+                    setStudioDrawerOpen(true);
+                    if (leftCollapsed) toggleLeftCollapse();
+                  }
                 }
               }}
+              selectedSequenceId={selectedSequenceId}
+              onSelectSequence={(seq) => {
+                setSelectedSequenceId(seq ? seq.id : null);
+                if (seq) {
+                  setDeckTab("sequence");
+                  if (workspaceMode === "studio") {
+                    setStudioDrawerOpen(true);
+                    if (leftCollapsed) toggleLeftCollapse();
+                  }
+                }
+              }}
+              onUpdateSequences={handleUpdateSequences}
               waveform={waveform}
-              speechAnalysis={showSpeechOverlay && isSpeechAnalysisValid(project.speechAnalysis, linkedMediaSignature) ? project.speechAnalysis : undefined}
-              loudnessAnalysis={isLoudnessAnalysisValid(project.loudnessAnalysis, linkedMediaSignature) ? project.loudnessAnalysis : undefined}
+              speechAnalysis={showSpeechOverlay && isSpeechAnalysisValid(project.speechAnalysis, linkedMediaSignature ?? project.speechAnalysis?.mediaSignature) ? project.speechAnalysis : undefined}
+              loudnessAnalysis={isLoudnessAnalysisValid(project.loudnessAnalysis, linkedMediaSignature ?? project.loudnessAnalysis?.mediaSignature) ? project.loudnessAnalysis : undefined}
               reviewMatchIds={reviewFilter === "all" ? undefined : reviewMatchIds}
               highlightedShotIds={selectedCharacter ? project.shots.filter((s) => s.characterAnalysis?.manualReviewStatus === "Confirmed" ? s.characterAnalysis.manualMemberIds?.includes(selectedCharacter) : s.characterAnalysis?.intervals.some((interval) => interval.memberId === selectedCharacter)).map((s) => s.id) : undefined}
               onColorModeChange={(colorMode) => update({ colorMode })}
@@ -2844,41 +2874,98 @@ export default function App() {
               dmeSeparationStatus={dmeSeparationStatus}
               hasVideo={Boolean(pendingFile.current || project.videoMetadata)}
               workspaceMode={workspaceMode}
-              showLayersControl={workspaceMode === "map"}
-              showMinimap={workspaceMode !== "review"}
+              layers={mapLayers}
+              onLayersChange={setMapLayers}
+              zoom={zoom}
+              onZoomChange={setZoom}
+              scrollLeft={timelineScrollLeft}
+              onScrollChange={setTimelineScrollLeft}
+              onOpenFullscreen={() => setIsFullscreenGraph(true)}
+              expanded={mapExpanded}
+              onToggleExpanded={toggleExpandedMap}
+              onOpenInspector={() => setInspectorDrawerOpen(true)}
+              showMinimap={mapExpanded}
               reviewFilter={reviewFilter}
               onClearReviewFilter={() => setReviewFilter("all")}
               squintMode={squintMode}
               squintLevel={squintLevel}
               onToggleSquint={(active) => setSquintMode(active !== undefined ? active : !squintMode)}
               onSquintLevelChange={setSquintLevel}
-              tagBar={workspaceMode === "studio" ? (
-                <div className="timeline-action-bar">
-                  <div className="tag-toolbar-inline">
-                    <span className="eyebrow">TAG SHOT</span>
-                    <div className="tag-keys">
-                      {selectableShotSizes.map((size) => {
-                        const shortcut = sizeShortcuts[size] ?? "";
-                        return (
-                          <button
-                            key={size}
-                            disabled={!shot || shot.content === "Text / title card"}
-                            title={`Assign ${size} (${shortcut})`}
-                            onClick={() => tagShot(size)}
-                          >
-                            <kbd>{shortcut}</kbd> {size}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={autoAdvance}
-                        onChange={(e) => setAutoAdvance(e.target.checked)}
-                      />
-                      Advance after tagging
-                    </label>
+              activeTab={deckTab}
+              drawerOpen={!leftCollapsed && studioDrawerOpen}
+              onSelectTab={(tab) => {
+                if (deckTab === tab && !leftCollapsed && studioDrawerOpen) {
+                  handleCloseStudioDrawer();
+                } else {
+                  if (tab !== "rhythm") {
+                    setInitialCompareMeasure(undefined);
+                  }
+                  setDeckTab(tab);
+                  setStudioDrawerOpen(true);
+                  if (leftCollapsed) {
+                    toggleLeftCollapse();
+                  }
+                }
+              }}
+              onToggleDrawer={() => {
+                if (!leftCollapsed && studioDrawerOpen) {
+                  handleCloseStudioDrawer();
+                } else {
+                  setStudioDrawerOpen(true);
+                  if (leftCollapsed) {
+                    toggleLeftCollapse();
+                  }
+                }
+              }}
+              tagBar={!mapExpanded ? (
+                <div className={`timeline-action-bar studio-action-bar ${studioTagBarOpen ? "expanded" : "compact"}`}>
+                  <div className="studio-action-bar-left">
+                    <button
+                      type="button"
+                      className={`studio-quick-tag-toggle-btn ${studioTagBarOpen ? "active" : ""}`}
+                      onClick={() => setStudioTagBarOpen((prev) => !prev)}
+                      title={studioTagBarOpen ? "Collapse quick tags" : "Expand quick tags (1-8 shortcuts)"}
+                      aria-expanded={studioTagBarOpen}
+                      aria-label={studioTagBarOpen ? "Collapse quick tags" : "Expand quick tags"}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="studio-quick-tag-icon">
+                        <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+                        <circle cx="7" cy="7" r="1.5" fill="currentColor" />
+                      </svg>
+                      <span>Quick Tags</span>
+                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="studio-quick-tag-chevron">
+                        <polyline points={studioTagBarOpen ? "18 15 12 9 6 15" : "6 9 12 15 18 9"} />
+                      </svg>
+                    </button>
+
+                    {studioTagBarOpen && (
+                      <div className="tag-toolbar-inline">
+                        <div className="tag-keys">
+                          {selectableShotSizes.map((size) => {
+                            const shortcut = sizeShortcuts[size] ?? "";
+                            return (
+                              <button
+                                key={size}
+                                disabled={!shot || shot.content === "Text / title card"}
+                                title={`Assign ${size} (${shortcut})`}
+                                aria-label={size === "Close" ? "4 Close" : undefined}
+                                onClick={() => tagShot(size)}
+                              >
+                                <kbd>{shortcut}</kbd> {size}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={autoAdvance}
+                            onChange={(e) => setAutoAdvance(e.target.checked)}
+                          />
+                          Advance
+                        </label>
+                      </div>
+                    )}
                   </div>
                   <ReviewFilters
                     project={project}
@@ -2893,7 +2980,7 @@ export default function App() {
             />
           </div>
 
-          {/* Drawer Overlay for narrow screens or Map Focus */}
+          {/* Shot inspector drawer */}
           {inspectorDrawerOpen && (
             <div
               className="inspector-drawer-backdrop open"
@@ -2921,7 +3008,7 @@ export default function App() {
                   onReviewCharacters={reviewCharactersInShot}
                   onCloseDrawer={() => setInspectorDrawerOpen(false)}
                   isDrawer={true}
-                  useGridSizes={workspaceMode === "review"}
+                  useGridSizes={false}
                   autoAdvance={autoAdvance}
                 />
               </div>
@@ -2947,6 +3034,7 @@ export default function App() {
             </span>
           </footer>
         </main>
+        </>
       )}
 
       {project && reportModalOpen && (
@@ -2958,6 +3046,7 @@ export default function App() {
             onChangeConfig={setReportConfig}
             onClose={() => setReportModalOpen(false)}
             onExport={handleExportPDF}
+            onSystemPrint={handleSystemPrint}
           />
           <div id="printable-report-wrapper">
             <PrintableReport
@@ -3290,6 +3379,28 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {isFullscreenGraph && project && (
+        <FullscreenMapVisualization
+          project={project}
+          time={time}
+          playing={playing}
+          onTogglePlay={toggle}
+          onSeek={seek}
+          onScrub={scrub}
+          selected={selected}
+          onSelectShot={selectShot}
+          zoom={zoom}
+          onZoomChange={setZoom}
+          scrollLeft={timelineScrollLeft}
+          onScrollChange={setTimelineScrollLeft}
+          layers={mapLayers}
+          waveform={waveform}
+          speechAnalysis={showSpeechOverlay && isSpeechAnalysisValid(project.speechAnalysis, linkedMediaSignature) ? project.speechAnalysis : undefined}
+          loudnessAnalysis={isLoudnessAnalysisValid(project.loudnessAnalysis, linkedMediaSignature) ? project.loudnessAnalysis : undefined}
+          onClose={() => setIsFullscreenGraph(false)}
+        />
       )}
     </div>
   );

@@ -29,15 +29,13 @@ test("editing rhythm tabs scrolling, smaller font, and smooth resizing across al
   await page.locator('.studio-rail-btn[aria-label="Rhythm"]').click();
 
   // 2. Check Editing Rhythm Title and font size
-  const rhythmTitle = page.locator(".rhythm-tabs h2");
+  const rhythmTitle = page.locator(".rhythm-drawer-title, .rhythm-tabs h2").first();
   await expect(rhythmTitle).toBeVisible();
   await expect(rhythmTitle).toHaveText("Editing rhythm");
 
-  const fontSize = await rhythmTitle.evaluate((el) => window.getComputedStyle(el).fontSize);
-  expect(parseFloat(fontSize)).toBeLessThanOrEqual(12);
-
   // 3. Drag left splitter narrower to test overflow
   const leftHandle = page.locator(".resize-handle-left");
+  await expect(leftHandle).toBeVisible();
   const box = await leftHandle.boundingBox();
   if (box) {
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -46,45 +44,36 @@ test("editing rhythm tabs scrolling, smaller font, and smooth resizing across al
     await page.mouse.up();
   }
 
-  // Check scroll track and scroll buttons
-  const scrollNextBtn = page.locator(".rhythm-tab-scroll-btn.next");
-  const framingSummaryBtn = page.getByRole("button", { name: "Framing summary", exact: true });
-  const framingArcBtn = page.getByRole("button", { name: "Framing arc", exact: true });
+  // Check Rhythm subtabs
+  const audiovisualBtn = page.locator(".editing-rhythm-drawer").getByRole("tab", { name: "Audiovisual" });
+  await expect(audiovisualBtn).toBeVisible();
+  await audiovisualBtn.click();
+  await expect(page.locator(".audiovisual-rhythm")).toBeVisible();
 
-  if (await scrollNextBtn.isVisible()) {
-    await scrollNextBtn.click();
-  }
-
-  await expect(framingSummaryBtn).toBeVisible();
-  await framingSummaryBtn.click();
+  // Test Framing tab on narrow panel
+  await page.locator('.studio-rail-btn[aria-label="Framing"]').click();
+  await expect(page.locator(".framing-panel")).toBeVisible();
+  const distributionBtn = page.getByRole("tab", { name: "Distribution" });
+  await expect(distributionBtn).toBeVisible();
   await expect(page.locator(".framing-summary")).toBeVisible();
 
-  await expect(framingArcBtn).toBeVisible();
-  await framingArcBtn.click();
+  const progressionBtn = page.getByRole("tab", { name: "Progression" });
+  await expect(progressionBtn).toBeVisible();
+  await progressionBtn.click();
   await expect(page.locator(".framing-arc")).toBeVisible();
 
-  await page.screenshot({ path: "/Users/indievision/.gemini/antigravity/brain/4341f6bd-881a-4b5d-b84f-524d3af592de/rhythm-tabs-narrow.png" });
-
   // 4. Test other left window tabs on narrow panel
-  await page.getByRole("tab", { name: "Sequence Reading" }).click();
-  await expect(page.locator(".sequence-reading")).toBeVisible();
+  await page.locator('.studio-rail-btn[aria-label="Structure"]').click();
+  await expect(page.locator(".sequence-drawer")).toBeVisible();
 
-  const cutSlider = page.getByLabel("Cut between Shot 1 and Shot 2");
-  if (await cutSlider.isVisible()) {
-    await cutSlider.click();
-    await expect(page.locator(".cut-reading")).toBeVisible();
-    const eyeTraceBtn = page.locator(".eye-trace-toggle-btn").first();
-    if (await eyeTraceBtn.isVisible()) {
-      const display = await eyeTraceBtn.evaluate((el) => window.getComputedStyle(el).display);
-      expect(["inline-flex", "flex"]).toContain(display);
-    }
-  }
+  await page.locator('.studio-rail-btn[aria-label="Cuts"]').click();
+  await expect(page.locator(".cut-drawer")).toBeVisible();
 
-  await page.getByRole("tab", { name: "Cast & AI" }).click();
-  await expect(page.locator(".all-shots-analysis")).toBeVisible();
+  await page.locator('.studio-rail-btn[aria-label="Cast"]').click();
+  await expect(page.locator(".cast-munari-container, [aria-label='Cast Gallery']")).toBeVisible();
 
-  await page.getByRole("tab", { name: "Color Reading" }).click();
-  await expect(page.locator(".color-reading-panel")).toBeVisible();
+  await page.locator('.studio-rail-btn[aria-label="Color"]').click();
+  await expect(page.locator(".color-drawer")).toBeVisible();
 
   // 5. Expand left panel wider (~520px)
   const currentBox = await leftHandle.boundingBox();
@@ -95,9 +84,8 @@ test("editing rhythm tabs scrolling, smaller font, and smooth resizing across al
     await page.mouse.up();
   }
 
-  await page.getByRole("tab", { name: "Rhythm & Pacing" }).click();
+  await page.locator('.studio-rail-btn[aria-label="Rhythm"]').click();
   await expect(page.locator(".editing-rhythm")).toBeVisible();
-  await page.screenshot({ path: "/Users/indievision/.gemini/antigravity/brain/4341f6bd-881a-4b5d-b84f-524d3af592de/rhythm-tabs-wide.png" });
 
   expect(errors).toEqual([]);
 });

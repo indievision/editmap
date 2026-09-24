@@ -20,3 +20,6 @@ server/:memory:.ses
 .artifacts/
 output/
 tmp/
+logs/
+EditMap.app/
+.impeccable/

@@ -33,7 +33,7 @@ export default function MapShotSummary({
 
   // Find sequence if any
   const sequence = project.sequences?.find(
-    (seq) => shot.startSeconds >= seq.startSeconds && shot.endSeconds <= seq.endSeconds
+    (seq) => (seq.kind ?? "passage") === "passage" && shot.startSeconds >= seq.startSeconds && shot.endSeconds <= seq.endSeconds
   );
 
   // Cast in shot

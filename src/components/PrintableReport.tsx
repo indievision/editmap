@@ -162,7 +162,7 @@ export default function PrintableReport({
   return (
     <div className={`printable-report-root ${formatClass} ${themeClass}`}>
       {/* Header */}
-      <header className="report-header">
+      <div className="report-header">
         <div className="report-header-left">
           <h1>{project.name || "Untitled Film"}</h1>
           <div className="report-meta-pills">
@@ -184,7 +184,7 @@ export default function PrintableReport({
           <div><strong>EDITMAP Film Analysis Report</strong></div>
           <div>{currentDate}</div>
         </div>
-      </header>
+      </div>
 
       {/* Grid of Sections */}
       <div className="report-grid">
@@ -570,22 +570,28 @@ export default function PrintableReport({
                   <table className="report-table" style={{ marginBottom: "12px" }}>
                     <thead>
                       <tr>
-                        <th>Sequence Name</th>
-                        <th>Start - End Time</th>
+                        <th>Entry / Story Beat</th>
+                        <th>Timecode</th>
                         <th>Notes</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {sequenceList.map((seq) => (
-                        <tr key={seq.id}>
-                          <td style={{ fontWeight: "600" }}>{seq.name}</td>
-                          <td>
-                            {formatTimecode(seq.startSeconds, project.frameRate)} -{" "}
-                            {formatTimecode(seq.endSeconds, project.frameRate)}
-                          </td>
-                          <td>{seq.notes || "—"}</td>
-                        </tr>
-                      ))}
+                      {sequenceList.map((seq) => {
+                        const isMoment = seq.kind === "moment";
+                        return (
+                          <tr key={seq.id}>
+                            <td style={{ fontWeight: "600" }}>
+                              {seq.beat ? `${seq.beat} · ${seq.name}` : seq.name}
+                            </td>
+                            <td>
+                              {isMoment
+                                ? formatTimecode(seq.startSeconds, project.frameRate, project.dropFrame)
+                                : `${formatTimecode(seq.startSeconds, project.frameRate, project.dropFrame)} - ${formatTimecode(seq.endSeconds, project.frameRate, project.dropFrame)}`}
+                            </td>
+                            <td>{seq.notes || "—"}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 )}

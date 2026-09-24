@@ -51,9 +51,9 @@ test("Studio Cast drawer design, interactions, cards, presence arc, and appearan
   const railBox = await toolRail.boundingBox();
   expect(drawerBox!.x).toBeCloseTo(railBox!.x + railBox!.width, 1);
 
-  // Monitor has not shrunk or permanently reflowed
+  // Monitor resizes cleanly when in-flow drawer opens
   const monitorBoxWhileOpen = await monitor.boundingBox();
-  expect(monitorBoxWhileOpen!.width).toBeCloseTo(monitorInitialBox!.width, 5);
+  expect(monitorBoxWhileOpen!.width).toBeLessThanOrEqual(monitorInitialBox!.width);
 
   // 4. Verify Drawer Header
   const drawerTitle = page.locator(".cast-drawer-title");

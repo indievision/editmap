@@ -115,3 +115,61 @@ export function lufsToNormalized(lufs: number, minLufs = -60, maxLufs = 0): numb
   if (lufs >= maxLufs) return 1;
   return (lufs - minLufs) / (maxLufs - minLufs);
 }
+
+export interface RangeLoudnessMetrics {
+  avgMomentary: number;
+  maxShortTerm: number;
+  minShortTerm: number;
+  shortTermRange: number;
+  peakTruePeak: number;
+}
+
+/**
+ * Computes loudness metrics for an arbitrary selected time range.
+ */
+export function getRangeLoudness(
+  range: { start: number; end: number },
+  analysis: LoudnessAnalysis,
+): RangeLoudnessMetrics {
+  const duration = analysis.duration || 1;
+  const binCount = analysis.binCount || analysis.momentary?.length || 0;
+  if (!binCount || !Array.isArray(analysis.momentary) || analysis.momentary.length === 0) {
+    return {
+      avgMomentary: -70,
+      maxShortTerm: -70,
+      minShortTerm: -70,
+      shortTermRange: 0,
+      peakTruePeak: -70,
+    };
+  }
+  const binDuration = duration / binCount;
+  const start = Math.max(0, Math.min(range.start, range.end));
+  const end = Math.min(duration, Math.max(range.start, range.end));
+  const startBin = Math.max(0, Math.min(binCount - 1, Math.floor(start / binDuration)));
+  const endBin = Math.max(startBin, Math.min(binCount - 1, Math.ceil(end / binDuration)));
+
+  const mSlice = analysis.momentary.slice(startBin, endBin + 1);
+  const sSlice = analysis.shortTerm ? analysis.shortTerm.slice(startBin, endBin + 1) : [];
+  const tpSlice = analysis.truePeaks ? analysis.truePeaks.slice(startBin, endBin + 1) : [];
+
+  const validM = mSlice.filter((v) => Number.isFinite(v));
+  const avgM = validM.length
+    ? validM.reduce((sum, v) => sum + v, 0) / validM.length
+    : -70;
+
+  const validS = sSlice.filter((v) => Number.isFinite(v));
+  const maxS = validS.length ? Math.max(...validS) : -70;
+  const minS = validS.length ? Math.min(...validS) : -70;
+  const sRange = validS.length ? Math.max(0, maxS - minS) : 0;
+
+  const validTP = tpSlice.filter((v) => Number.isFinite(v));
+  const peakTP = validTP.length ? Math.max(...validTP) : -70;
+
+  return {
+    avgMomentary: Math.round(avgM * 10) / 10,
+    maxShortTerm: Math.round(maxS * 10) / 10,
+    minShortTerm: Math.round(minS * 10) / 10,
+    shortTermRange: Math.round(sRange * 10) / 10,
+    peakTruePeak: Math.round(peakTP * 10) / 10,
+  };
+}

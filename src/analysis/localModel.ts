@@ -9,10 +9,10 @@ export const MODEL = "CinemaCLIP-1.0.0:shot.framing";
 
 // The classifier needs only four short enum values. Keeping the image and
 // generation budget compact substantially lowers local vision-model work.
-const FRAME_WIDTH = 336;
-const FRAME_JPEG_QUALITY = 0.75;
+const FRAME_WIDTH = 640;
+const FRAME_JPEG_QUALITY = 0.85;
 
-// Accept retained legacy labels on import, but only emit the active five-rung
+// Accept retained legacy labels on import, but only emit the active eight-rung
 // taxonomy from the CinemaCLIP backend and manual controls.
 const sizes = [...shotSizes];
 
@@ -93,17 +93,30 @@ export async function fetchLocalModel(path: string, options: RequestInit): Promi
     if (sessionToken) headers.set("X-Editmap-Token", sessionToken);
     return { ...options, headers };
   };
-  let response = await fetchTransport(path, withToken());
-  if (response.status === 401) {
-    options.signal?.throwIfAborted();
-    const session = await fetchTransport("/api/session", { method: "GET", signal: options.signal, cache: "no-store" });
-    if (!session.ok) throw new Error("Could not establish a local CV session.");
-    const data = await session.json();
-    if (typeof data.token !== "string") throw new Error("Invalid local CV session.");
-    sessionToken = data.token;
+
+  let response: Response | undefined;
+  const maxAttempts = 4;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     response = await fetchTransport(path, withToken());
+    if (response.status === 401) {
+      options.signal?.throwIfAborted();
+      const session = await fetchTransport("/api/session", { method: "GET", signal: options.signal, cache: "no-store" });
+      if (!session.ok) throw new Error("Could not establish a local CV session.");
+      const data = await session.json();
+      if (typeof data.token !== "string") throw new Error("Invalid local CV session.");
+      sessionToken = data.token;
+      response = await fetchTransport(path, withToken());
+    }
+
+    if (response.status === 429 && attempt < maxAttempts - 1) {
+      if (options.signal?.aborted) break;
+      await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+      continue;
+    }
+
+    return response;
   }
-  return response;
+  return response!;
 }
 
 export async function analyzeFrames(

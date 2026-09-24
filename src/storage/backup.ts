@@ -13,6 +13,7 @@ import {
   type Shot,
 } from "../models/project";
 import { rates } from "../utils/timecode";
+import { isValidVocabularyId } from "../models/structureVocabularies";
 
 export const BACKUP_FORMAT = "editmap-project";
 export const BACKUP_VERSION = 1;
@@ -68,14 +69,43 @@ function colorProfile(raw: unknown): ColorProfile {
     return hex;
   });
   if (palette.length > 16) throw new Error("Palette is too large.");
-  return { palette, luminance: bounded(v.luminance, "Luminance", 0, 1), temperature: bounded(v.temperature, "Temperature", -1, 1), saturation: bounded(v.saturation, "Saturation", 0, 1), mood: string(v.mood, "Mood"), harmony: {
+  const result: ColorProfile = { palette, luminance: bounded(v.luminance, "Luminance", 0, 1), temperature: bounded(v.temperature, "Temperature", -1, 1), saturation: bounded(v.saturation, "Saturation", 0, 1), mood: string(v.mood, "Mood"), harmony: {
     type: oneOf(h.type, ["teal-orange", "complementary", "analogous", "monochromatic", "triadic", "neutral"] as const, "Harmony type"),
     label: string(h.label, "Harmony label"), confidence: bounded(h.confidence, "Harmony confidence", 0, 1), dominantHue: bounded(h.dominantHue, "Hue", 0, 360),
   } };
+  if (v.temporal !== undefined) {
+    const temporal = object(v.temporal, "Temporal colour reading");
+    const samples = array(temporal.samples, "Temporal colour samples").map((sample) => {
+      const item = object(sample, "Temporal colour sample");
+      const samplePalette = array(item.palette, "Temporal sample palette").map((color) => string(color, "Temporal palette color"));
+      if (samplePalette.length > 5 || samplePalette.some((color) => !/^#[0-9a-f]{6}$/i.test(color))) throw new Error("Invalid temporal palette color.");
+      return { time: number(item.time, "Temporal sample time"), luminance: bounded(item.luminance, "Temporal luminance", 0, 1), temperature: bounded(item.temperature, "Temporal temperature", -1, 1), saturation: bounded(item.saturation, "Temporal saturation", 0, 1), palette: samplePalette };
+    });
+    if (samples.length < 3 || samples.length > 5) throw new Error("Temporal colour reading must have 3 to 5 samples.");
+    const reading = { samples, deltaLuminance: bounded(temporal.deltaLuminance, "Temporal luma delta", 0, 1), deltaTemperature: bounded(temporal.deltaTemperature, "Temporal temperature delta", 0, 2), deltaSaturation: bounded(temporal.deltaSaturation, "Temporal saturation delta", 0, 1), deltaPalette: bounded(temporal.deltaPalette, "Temporal palette delta", 0, 1), changeScore: bounded(temporal.changeScore, "Temporal change score", 0, 1), changed: boolean(temporal.changed, "Temporal changed") };
+    if (temporal.boundary !== undefined) {
+      const boundary = object(temporal.boundary, "Temporal colour boundary evidence");
+      const readBoundary = (raw: unknown, label: string) => {
+        const item = object(raw, label);
+        const palette = array(item.palette, `${label} palette`).map((color) => string(color, `${label} palette color`));
+        if (palette.length > 5 || palette.some((color) => !/^#[0-9a-f]{6}$/i.test(color))) throw new Error(`Invalid ${label} palette color.`);
+        return { time: number(item.time, `${label} time`), luminance: bounded(item.luminance, `${label} luminance`, 0, 1), temperature: bounded(item.temperature, `${label} temperature`, -1, 1), saturation: bounded(item.saturation, `${label} saturation`, 0, 1), palette };
+      };
+      result.temporal = { ...reading, boundary: { start: readBoundary(boundary.start, "Boundary start"), end: readBoundary(boundary.end, "Boundary end") } };
+    } else result.temporal = reading;
+  }
+  return result;
 }
 function motionProfile(raw: unknown): MotionProfile {
   const v = object(raw, "Motion profile");
-  return { cameraMovement: oneOf(v.cameraMovement, cameraMovementTypes, "Camera movement"), cameraEnergy: bounded(v.cameraEnergy, "Camera energy", 0, 100), subjectEnergy: bounded(v.subjectEnergy, "Subject energy", 0, 100), totalKineticEnergy: bounded(v.totalKineticEnergy, "Kinetic energy", 0, 100), confidence: bounded(v.confidence, "Motion confidence", 0, 1) };
+  return {
+    cameraMovement: oneOf(v.cameraMovement, cameraMovementTypes, "Camera movement"),
+    cameraEnergy: bounded(v.cameraEnergy, "Camera energy", 0, 100),
+    subjectEnergy: bounded(v.subjectEnergy, "Subject energy", 0, 100),
+    totalKineticEnergy: bounded(v.totalKineticEnergy, "Kinetic energy", 0, 100),
+    confidence: bounded(v.confidence, "Motion confidence", 0, 1),
+    ...(v.kineticDelta !== undefined ? { kineticDelta: bounded(v.kineticDelta, "Kinetic delta", -100, 100) } : {}),
+  };
 }
 function focalPoint(raw: unknown): FocalPoint {
   const v = object(raw, "Focal point");
@@ -218,8 +248,55 @@ export function parseBackup(text: string): Project {
       processingSeconds: bounded(v.processingSeconds, "Loudness processing time", 0, Number.MAX_SAFE_INTEGER),
     };
   }
-  if (p.videoMetadata !== undefined) { const m = object(p.videoMetadata, "Video metadata"); project.videoMetadata = { filename: string(m.filename, "Video filename"), duration: number(m.duration, "Video duration"), width: number(m.width, "Video width"), height: number(m.height, "Video height"), size: number(m.size, "Video size") }; }
-  if (p.sequences !== undefined) project.sequences = array(p.sequences, "Sequences").map((x, i) => { const v = object(x, `Sequence ${i + 1}`); return { id: string(v.id, "Sequence id"), name: string(v.name, "Sequence name"), startSeconds: number(v.startSeconds, "Sequence start"), endSeconds: number(v.endSeconds, "Sequence end"), ...(v.notes === undefined ? {} : { notes: string(v.notes, "Sequence notes") }) }; });
+  if (p.structureVocabulary !== undefined) {
+    project.structureVocabulary = isValidVocabularyId(p.structureVocabulary)
+      ? p.structureVocabulary
+      : "freeform";
+  }
+  if (p.customStoryBeats !== undefined) {
+    project.customStoryBeats = array(p.customStoryBeats, "Custom story beats")
+      .map((x, i) => string(x, `Custom story beat ${i + 1}`).trim())
+      .filter(Boolean);
+  }
+  if (p.screeningMarks !== undefined) {
+    const seen = new Set<string>();
+    const marks = array(p.screeningMarks, "Screening marks");
+    if (marks.length > 10000) throw new Error("Too many screening marks.");
+    project.screeningMarks = marks.map(raw => {
+      const v = object(raw, "Screening mark");
+      const id = string(v.id, "Screening mark id");
+      if (seen.has(id)) throw new Error("Duplicate screening mark id.");
+      seen.add(id);
+      const time = bounded(v.time, "Reaction time", 0, Number.MAX_SAFE_INTEGER);
+      const anchorTime = bounded(v.anchorTime, "Anchor time", 0, time);
+      const frames = (value: unknown, label: string) => { const n = bounded(value, label, 0, 1000000); if (!Number.isInteger(n)) throw new Error(`${label} must be whole frames.`); return n; };
+      return { id, passId: string(v.passId, "Screening pass"), time, anchorTime,
+        ...(v.incomingId === undefined ? {} : { incomingId: string(v.incomingId, "Incoming shot"), outgoingId: string(v.outgoingId, "Outgoing shot") }),
+        createdAt: string(v.createdAt, "Mark date"), mirror: boolean(v.mirror, "Mirror"), darken: boolean(v.darken, "Darken"), muted: boolean(v.muted, "Muted"),
+        notes: string(v.notes, "Mark notes"), resolved: boolean(v.resolved, "Mark resolved"),
+        ...(v.trimFrames === undefined ? {} : { trimFrames: frames(v.trimFrames, "Trim frames") }),
+        ...(v.audioLeadFrames === undefined ? {} : { audioLeadFrames: frames(v.audioLeadFrames, "Audio lead frames") }),
+      };
+    });
+  }
+  if (p.sequences !== undefined) project.sequences = array(p.sequences, "Sequences").map((x, i) => {
+    const v = object(x, `Sequence ${i + 1}`);
+    const startSeconds = number(v.startSeconds, `Sequence ${i + 1} start`);
+    const endSeconds = number(v.endSeconds, `Sequence ${i + 1} end`);
+    if (startSeconds < 0 || endSeconds < startSeconds) throw new Error(`Sequence ${i + 1} has invalid boundaries.`);
+    const kind = v.kind !== undefined ? oneOf(v.kind, ["moment", "passage"] as const, `Sequence ${i + 1} kind`) : undefined;
+    const beat = v.beat !== undefined ? string(v.beat, `Sequence ${i + 1} beat`) : undefined;
+    const notes = v.notes !== undefined ? string(v.notes, `Sequence ${i + 1} notes`) : undefined;
+    return {
+      id: string(v.id, `Sequence ${i + 1} id`),
+      name: string(v.name, `Sequence ${i + 1} name`),
+      startSeconds,
+      endSeconds,
+      ...(notes !== undefined ? { notes } : {}),
+      ...(kind !== undefined ? { kind } : {}),
+      ...(beat !== undefined ? { beat } : {}),
+    };
+  });
   if (p.soundSpans !== undefined) project.soundSpans = array(p.soundSpans, "Sound spans").map((x, i) => { const v = object(x, `Sound span ${i + 1}`); return { id: string(v.id, "Sound span id"), kind: oneOf(v.kind, soundKinds, "Sound kind"), startSeconds: number(v.startSeconds, "Sound start"), endSeconds: number(v.endSeconds, "Sound end"), notes: string(v.notes, "Sound notes") }; });
   if (p.cutAnnotations !== undefined) project.cutAnnotations = array(p.cutAnnotations, "Cut annotations").map((x, i) => { const v = object(x, `Cut annotation ${i + 1}`); const outgoingId = string(v.outgoingId, "Cut outgoing shot"); const incomingId = string(v.incomingId, "Cut incoming shot"); if (!ids.has(outgoingId) || !ids.has(incomingId)) throw new Error("A cut annotation references a missing shot."); return { outgoingId, incomingId, interpretation: oneOf(v.interpretation, cutInterpretations, "Cut interpretation"), notes: string(v.notes, "Cut notes"), ...(v.eyeTrace === undefined ? {} : { eyeTrace: eyeTrace(v.eyeTrace) }) }; });
   if (p.cast !== undefined) project.cast = array(p.cast, "Cast").map((x, i) => { const v = object(x, `Cast member ${i + 1}`); return { id: string(v.id, "Cast id"), name: string(v.name, "Cast name"), references: array(v.references, "Cast references").map((ref, j) => { const r = object(ref, `Reference ${j + 1}`); const shotId = string(r.shotId, "Reference shot id"); if (!ids.has(shotId)) throw new Error("A cast reference points to a missing shot."); return { id: string(r.id, "Reference id"), image: image(r.image, "Reference image"), shotId, time: number(r.time, "Reference time") }; }) }; });
@@ -227,5 +304,65 @@ export function parseBackup(text: string): Project {
   if (castIds.size !== (project.cast ?? []).length) throw new Error("Duplicate cast identifier.");
   for (const shot of project.shots) for (const id of shot.characterAnalysis?.manualMemberIds ?? []) if (!castIds.has(id)) throw new Error("Manual character evidence references a missing cast member.");
   for (const shot of project.shots) for (const interval of shot.characterAnalysis?.intervals ?? []) if (!castIds.has(interval.memberId)) throw new Error("Character evidence references a missing cast member.");
+  if (p.savedExploreSequences !== undefined) {
+    project.savedExploreSequences = array(p.savedExploreSequences, "Saved explore sequences").map((x, i) => {
+      const v = object(x, `Saved explore sequence ${i + 1}`);
+      const filtersObj = object(v.filters, `Saved explore sequence ${i + 1} filters`);
+      const arrangeObj = object(v.arrange, `Saved explore sequence ${i + 1} arrange`);
+      const shotIds = array(v.shotIds, `Saved explore sequence ${i + 1} shot ids`).map((id) => string(id, "Shot id"));
+      return {
+        id: string(v.id, `Saved explore sequence ${i + 1} id`),
+        name: string(v.name, `Saved explore sequence ${i + 1} name`),
+        filters: {
+          ...(filtersObj.characterId !== undefined ? { characterId: string(filtersObj.characterId, "Character id") } : {}),
+          ...(filtersObj.onlyThisCharacter !== undefined ? { onlyThisCharacter: boolean(filtersObj.onlyThisCharacter, "Only this character") } : {}),
+          ...(filtersObj.composition !== undefined ? { composition: oneOf(filtersObj.composition, Object.keys(peopleLabels), "Composition") as keyof typeof peopleLabels } : {}),
+          ...(filtersObj.shotSize !== undefined ? { shotSize: oneOf(filtersObj.shotSize, shotSizes, "Shot size") } : {}),
+          ...(filtersObj.minDuration !== undefined ? { minDuration: number(filtersObj.minDuration, "Min duration") } : {}),
+          ...(filtersObj.maxDuration !== undefined ? { maxDuration: number(filtersObj.maxDuration, "Max duration") } : {}),
+        },
+        arrange: {
+          measure: oneOf(arrangeObj.measure, ["original", "duration", "brightness", "loudness", "motion"] as const, "Arrange measure"),
+          direction: oneOf(arrangeObj.direction, ["asc", "desc"] as const, "Arrange direction"),
+        },
+        shotIds,
+        createdAt: string(v.createdAt, "Created date"),
+        updatedAt: string(v.updatedAt, "Updated date"),
+      };
+    });
+  }
+  if (p.savedExploreComparisons !== undefined) {
+    project.savedExploreComparisons = array(p.savedExploreComparisons, "Saved explore comparisons").map((x, i) => {
+      const v = object(x, `Saved explore comparison ${i + 1}`);
+      const note = v.note !== undefined ? string(v.note, `Saved explore comparison ${i + 1} note`) : undefined;
+      return {
+        id: string(v.id, `Saved explore comparison ${i + 1} id`),
+        name: string(v.name, `Saved explore comparison ${i + 1} name`),
+        passageAId: string(v.passageAId, `Saved explore comparison ${i + 1} passage A id`),
+        passageBId: string(v.passageBId, `Saved explore comparison ${i + 1} passage B id`),
+        ...(note !== undefined ? { note } : {}),
+        createdAt: string(v.createdAt, "Created date"),
+        updatedAt: string(v.updatedAt, "Updated date"),
+      };
+    });
+  }
+  if (p.comparisonObservations !== undefined) {
+    project.comparisonObservations = array(p.comparisonObservations, "Comparison observations").map((x, i) => {
+      const v = object(x, `Comparison observation ${i + 1}`);
+      const measures = array(v.selectedMeasures, `Comparison observation ${i + 1} measures`).map((m) =>
+        oneOf(m, ["cutRate", "luminance", "motion"] as const, `Comparison observation ${i + 1} measure`)
+      );
+      return {
+        id: string(v.id, `Comparison observation ${i + 1} id`),
+        startSeconds: number(v.startSeconds, `Comparison observation ${i + 1} startSeconds`),
+        endSeconds: number(v.endSeconds, `Comparison observation ${i + 1} endSeconds`),
+        notes: string(v.notes, `Comparison observation ${i + 1} notes`),
+        selectedMeasures: measures,
+        ...(v.pacingWindow !== undefined ? { pacingWindow: number(v.pacingWindow, `Comparison observation ${i + 1} pacingWindow`) } : {}),
+        createdAt: string(v.createdAt, `Comparison observation ${i + 1} createdAt`),
+        ...(v.updatedAt !== undefined ? { updatedAt: string(v.updatedAt, `Comparison observation ${i + 1} updatedAt`) } : {}),
+      };
+    });
+  }
   return project;
 }

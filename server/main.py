@@ -1,5 +1,7 @@
 import os
 import logging
+import shutil
+import tempfile
 from typing import Any, List, Optional
 from uuid import UUID
 from fastapi import FastAPI, HTTPException, status, UploadFile, File, Form
@@ -60,14 +62,20 @@ motion_analyzer = MotionAnalyzer()
 shot_boundary_detector = ShotBoundaryDetector()
 
 
+# Pre-warm character recognition engine to eliminate first-request latency
+try:
+    character_recognizer._init_engine()
+except Exception as e:
+    logger.warning("Could not pre-warm character recognizer: %s", e)
+
 # Keep shared native inference engines single-flight without blocking the ASGI loop.
 from functools import wraps
 cv_lock = Lock()
 def serialized_cv(fn):
     @wraps(fn)
     def wrapped(*args, **kwargs):
-        if not cv_lock.acquire(blocking=False):
-            raise HTTPException(429, "CV engine is busy. Retry after the current frame.")
+        if not cv_lock.acquire(timeout=60):
+            raise HTTPException(429, "CV engine is busy. Timeout waiting for previous frame.")
         try:
             return fn(*args, **kwargs)
         finally:
@@ -121,6 +129,7 @@ class DetectedFace(BaseModel):
     score: float
     crop: str
     area: int
+    time: Optional[float] = None
 
 
 class DetectShotFacesRequest(BaseModel):
@@ -135,6 +144,26 @@ class DetectShotFacesResponse(BaseModel):
     time: Optional[float] = None
 
 
+class TrackedFrame(BaseModel):
+    image: str = Field(..., max_length=8 * 1024 * 1024)
+    time: float = Field(ge=0, allow_inf_nan=False)
+
+
+class TrackShotFacesRequest(BaseModel):
+    shotId: Optional[str] = None
+    frames: List[TrackedFrame] = Field(min_length=1, max_length=5)
+
+
+class TrackedFace(DetectedFace):
+    trackId: str
+    time: float
+
+
+class TrackShotFacesResponse(BaseModel):
+    faces: List[TrackedFace]
+    shotId: Optional[str] = None
+
+
 class FaceSample(BaseModel):
     shotId: str
     time: float = Field(ge=0, allow_inf_nan=False)
@@ -142,6 +171,7 @@ class FaceSample(BaseModel):
     crop: str = Field(max_length=256 * 1024)
     score: float = Field(default=1.0, ge=0, le=1, allow_inf_nan=False)
     area: int = Field(default=100, ge=1, le=16_000_000)
+    trackId: Optional[str] = None
 
     @field_validator("embedding")
     @classmethod
@@ -271,7 +301,13 @@ class DetectShotsResponse(BaseModel):
     video_path: str
     total_shots: int
     fps: float
+    model_backend: str
     shots: List[ShotIntervalResponse]
+
+
+class DetectShotsStatusResponse(BaseModel):
+    available: bool
+    model_backend: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -314,9 +350,62 @@ async def detect_shots(req: DetectShotsRequest):
         return DetectShotsResponse(**result)
     except (FileNotFoundError, ValueError) as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ModelUnavailableError:
+        raise
     except Exception as e:
         logger.error("Error detecting shot boundaries: %s", e)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@app.get("/api/detect-shots-status", response_model=DetectShotsStatusResponse)
+def detect_shots_status():
+    """Let the browser select the detector before it uploads a whole video."""
+    return DetectShotsStatusResponse(
+        available=shot_boundary_detector.pretrained_weights_available(),
+        model_backend=shot_boundary_detector.model.backend,
+    )
+
+
+@app.post("/api/detect-shots-upload", response_model=DetectShotsResponse)
+async def detect_shots_upload(
+    file: UploadFile = File(...),
+    threshold: float = Form(0.5, ge=0.0, le=1.0),
+    min_shot_len_frames: int = Form(10, ge=1, le=10000),
+):
+    """Run TransNet V2 over a browser-selected local video without accepting a path."""
+    suffix = os.path.splitext(file.filename or "")[1].lower()
+    if not suffix or len(suffix) > 12 or not suffix[1:].isalnum():
+        suffix = ".mp4"
+    temp_path = ""
+    try:
+        if not shot_boundary_detector.pretrained_weights_available():
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="TransNet V2 weights are not available locally.")
+        with tempfile.NamedTemporaryFile(prefix="editmap-shots-", suffix=suffix, delete=False) as temp:
+            temp_path = temp.name
+            await run_in_threadpool(shutil.copyfileobj, file.file, temp)
+        result = await run_in_threadpool(
+            shot_boundary_detector.detect_shots,
+            video_path=temp_path,
+            threshold=threshold,
+            min_shot_len_frames=min_shot_len_frames,
+        )
+        # The temporary name is implementation detail, never project evidence.
+        result["video_path"] = file.filename or "local-video"
+        return DetectShotsResponse(**result)
+    except (FileNotFoundError, ValueError) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error detecting uploaded shot boundaries: %s", e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    finally:
+        await file.close()
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
 
 
 @app.post("/api/analyze-shot", response_model=AnalyzeShotResponse)
@@ -394,6 +483,24 @@ def detect_shot_faces(req: DetectShotFacesRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Face extraction failed: {str(e)}"
         )
+
+
+@app.post("/api/track-shot-faces", response_model=TrackShotFacesResponse)
+@serialized_cv
+def track_shot_faces(req: TrackShotFacesRequest):
+    """Associate face detections across ordered samples from one shot only."""
+    try:
+        frames = [(decode_base64_image(frame.image), frame.time) for frame in req.frames]
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid tracking frame: {str(e)}")
+    try:
+        faces_data = character_recognizer.track_faces_across_frames(frames)
+        return TrackShotFacesResponse(faces=[TrackedFace(**face) for face in faces_data], shotId=req.shotId)
+    except ModelUnavailableError:
+        raise
+    except Exception as e:
+        logger.error("Error tracking shot faces: %s", e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Face tracking failed: {str(e)}")
 
 
 @app.post("/api/cluster-faces", response_model=ClusterFacesResponse)

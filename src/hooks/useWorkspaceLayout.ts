@@ -23,37 +23,26 @@ export interface WorkspaceLayoutConfig {
 
 const DEFAULT_CONFIGS: Record<WorkspaceMode, WorkspaceLayoutConfig> = {
   studio: {
-    defaultLeftWidth: 380,
+    defaultLeftWidth: 520,
     defaultRightWidth: 360,
     defaultTopHeightRatio: 0.58,
-    minLeftWidth: 240,
-    maxLeftWidth: 700,
+    minLeftWidth: 320,
+    maxLeftWidth: 900,
     minRightWidth: 260,
     maxRightWidth: 650,
     minTopHeightRatio: 0.25,
     maxTopHeightRatio: 0.82,
   },
-  map: {
-    defaultLeftWidth: 340,
-    defaultRightWidth: 360,
-    defaultTopHeightRatio: 0.38,
-    minLeftWidth: 240,
-    maxLeftWidth: 600,
-    minRightWidth: 260,
-    maxRightWidth: 650,
-    minTopHeightRatio: 0.2,
-    maxTopHeightRatio: 0.75,
-  },
-  review: {
-    defaultLeftWidth: 340,
+  explore: {
+    defaultLeftWidth: 900,
     defaultRightWidth: 380,
-    defaultTopHeightRatio: 0.68,
-    minLeftWidth: 240,
-    maxLeftWidth: 650,
+    defaultTopHeightRatio: 0.58,
+    minLeftWidth: 400,
+    maxLeftWidth: 1200,
     minRightWidth: 280,
-    maxRightWidth: 700,
-    minTopHeightRatio: 0.3,
-    maxTopHeightRatio: 0.85,
+    maxRightWidth: 650,
+    minTopHeightRatio: 0.35,
+    maxTopHeightRatio: 0.75,
   },
 };
 
@@ -86,8 +75,11 @@ export function useWorkspaceLayout(mode: WorkspaceMode) {
     (Object.keys(DEFAULT_CONFIGS) as WorkspaceMode[]).forEach((m) => {
       const c = DEFAULT_CONFIGS[m];
       const s = saved[m] || {};
+      const savedWidth = typeof s.leftWidth === "number" && (m !== "studio" || s.leftWidth !== 380)
+        ? Math.max(c.minLeftWidth, Math.min(c.maxLeftWidth, s.leftWidth))
+        : c.defaultLeftWidth;
       result[m] = {
-        leftWidth: typeof s.leftWidth === "number" ? Math.max(c.minLeftWidth, Math.min(c.maxLeftWidth, s.leftWidth)) : c.defaultLeftWidth,
+        leftWidth: savedWidth,
         rightWidth: typeof s.rightWidth === "number" ? Math.max(c.minRightWidth, Math.min(c.maxRightWidth, s.rightWidth)) : c.defaultRightWidth,
         topHeightRatio: typeof s.topHeightRatio === "number" ? Math.max(c.minTopHeightRatio, Math.min(c.maxTopHeightRatio, s.topHeightRatio)) : c.defaultTopHeightRatio,
         leftCollapsed: Boolean(s.leftCollapsed),

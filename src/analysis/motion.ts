@@ -208,31 +208,42 @@ export async function extractClientMotion(
 
         let subjectDivergence = 0;
         let movingBlocks = 0;
+        let totalDisp = 0;
 
         for (const v of vectors) {
+          const mag = Math.sqrt(v.dx * v.dx + v.dy * v.dy);
+          totalDisp += mag;
+          if (mag > 0.4) {
+            movingBlocks++;
+          }
           const distFromGlobal = Math.sqrt((v.dx - medianDx) ** 2 + (v.dy - medianDy) ** 2);
           if (distFromGlobal > 1.2) {
             subjectDivergence += distFromGlobal;
-            movingBlocks++;
           }
         }
 
+        const avgDisp = totalDisp / vectors.length;
+        const activeRatio = movingBlocks / vectors.length;
         const avgSubjectMotion = movingBlocks > 0 ? subjectDivergence / movingBlocks : 0;
+
+        // Unified kinetic energy flow (aggregate scene velocity + active area coverage)
+        const aggregateKinetic = Math.min(100, Math.round(avgDisp * 24 + activeRatio * 32));
 
         const cameraEnergy = Math.min(100, Math.round(globalShift * 22));
         const subjectEnergy = Math.min(
           100,
-          Math.round(avgSubjectMotion * 24 + (movingBlocks / vectors.length) * 35)
+          Math.round(avgSubjectMotion * 24 + activeRatio * 35)
         );
-        const totalKineticEnergy = Math.min(
+        const decomposedEnergy = Math.min(
           100,
           Math.round(cameraEnergy * 0.55 + subjectEnergy * 0.45)
         );
+        const totalKineticEnergy = Math.max(aggregateKinetic, decomposedEnergy);
 
         let cameraMovement: CameraMovementType = "Static";
-        if (cameraEnergy < 8) {
+        if (cameraEnergy < 8 && totalKineticEnergy < 12) {
           cameraMovement = "Static";
-        } else if (cameraEnergy > 45) {
+        } else if (totalKineticEnergy > 50) {
           cameraMovement = "Dynamic / Action";
         } else if (Math.abs(medianDx) > 1.8 * Math.max(0.5, Math.abs(medianDy))) {
           cameraMovement = "Pan";
@@ -327,3 +338,61 @@ export async function analyzeShotMotion(
     confidence: results[0].confidence,
   };
 }
+
+/**
+ * Categorizes a kinetic energy value (0-100) into intuitive editorial velocity tiers.
+ */
+export function classifyKineticVelocity(energy: number): string {
+  if (energy <= 15) return "Still";
+  if (energy <= 38) return "Gentle Flow";
+  if (energy <= 68) return "Dynamic Flow";
+  return "High Velocity";
+}
+
+/**
+ * Calculates cut momentum transitions (energy delta into each shot) across sequential shots.
+ */
+export function calculateKineticDeltas(shots: Shot[]): Shot[] {
+  let prevEnergy: number | null = null;
+  return shots.map((s) => {
+    if (!s.motionProfile) {
+      return s;
+    }
+    const currentEnergy = s.motionProfile.totalKineticEnergy;
+    const kineticDelta =
+      prevEnergy !== null ? Math.round(currentEnergy - prevEnergy) : undefined;
+    prevEnergy = currentEnergy;
+
+    return {
+      ...s,
+      motionProfile: {
+        ...s.motionProfile,
+        kineticDelta,
+      },
+    };
+  });
+}
+
+export type MomentumTransitionType = "accelerando" | "match" | "decrescendo" | "initial";
+
+/**
+ * Describes the dramatic effect of an energy transition across a cut.
+ */
+export function classifyMomentumTransition(delta?: number): {
+  label: string;
+  type: MomentumTransitionType;
+  deltaPercent: number;
+} {
+  if (delta === undefined) {
+    return { label: "Initial Flow Beat", type: "initial", deltaPercent: 0 };
+  }
+  if (delta >= 25) {
+    return { label: `+${delta}% Accelerando`, type: "accelerando", deltaPercent: delta };
+  }
+  if (delta <= -25) {
+    return { label: `${delta}% Decrescendo`, type: "decrescendo", deltaPercent: delta };
+  }
+  const prefix = delta >= 0 ? `+${delta}%` : `${delta}%`;
+  return { label: `${prefix} Flow Match`, type: "match", deltaPercent: delta };
+}
+
