@@ -40,6 +40,20 @@ export async function listProjects(): Promise<Project[]> {
   }
 }
 
+export async function getProject(id: string): Promise<Project | undefined> {
+  const db = await database();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction("projects", "readonly");
+      const r = tx.objectStore("projects").get(id);
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+
 export async function deleteProject(id: string): Promise<void> {
   const db = await database();
   try {

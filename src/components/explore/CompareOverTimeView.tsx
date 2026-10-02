@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useRef, useCallback } from "react";
 import type { SequenceMarker, SpeechAnalysis } from "../../models/project";
 import type { PassageShotSegment } from "../../analysis/passageComparison";
 import {
@@ -73,36 +73,63 @@ export default function CompareOverTimeView({
     return `${m.toString().padStart(2, "0")}:${rem.toString().padStart(2, "0")}`;
   };
 
-  // Convert click on a side's graph to target localTime and sourceTime
-  const handleGraphClick = (
-    side: "A" | "B",
-    e: React.MouseEvent<HTMLDivElement>,
-  ) => {
-    const passage = side === "A" ? passageA : passageB;
-    if (!passage) return;
-    const dur = side === "A" ? durA : durB;
+  // Pointer-capture drag scrubbing for Passage A / B graphs
+  const isDraggingSideRef = useRef<"A" | "B" | null>(null);
 
-    const rect = e.currentTarget.getBoundingClientRect();
-    const clickX = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
-    const ratio = rect.width > 0 ? clickX / rect.width : 0;
+  const seekSideFromClientX = useCallback(
+    (side: "A" | "B", clientX: number, trackEl: HTMLElement) => {
+      const passage = side === "A" ? passageA : passageB;
+      if (!passage) return;
+      const dur = side === "A" ? durA : durB;
 
-    let targetLocal = 0;
-    if (timeMode === "relative") {
-      targetLocal = ratio * dur;
-    } else {
-      // Actual time mode: graph width spans maxActualDuration
-      const targetSecs = ratio * maxActualDuration;
-      targetLocal = Math.min(dur, targetSecs);
+      const rect = trackEl.getBoundingClientRect();
+      const clickX = Math.max(0, Math.min(rect.width, clientX - rect.left));
+      const ratio = rect.width > 0 ? clickX / rect.width : 0;
+
+      let targetLocal = 0;
+      if (timeMode === "relative") {
+        targetLocal = ratio * dur;
+      } else {
+        const targetSecs = ratio * maxActualDuration;
+        targetLocal = Math.min(dur, targetSecs);
+      }
+
+      const pIn = passage.startSeconds;
+      const targetSource = pIn + targetLocal;
+
+      onSeek(side, {
+        passageId: passage.id,
+        localTime: targetLocal,
+        sourceTime: targetSource,
+      });
+    },
+    [durA, durB, maxActualDuration, onSeek, passageA, passageB, timeMode],
+  );
+
+  const handlePointerDown = (side: "A" | "B", e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    isDraggingSideRef.current = side;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
     }
+    seekSideFromClientX(side, e.clientX, e.currentTarget);
+  };
 
-    const pIn = passage.startSeconds;
-    const targetSource = pIn + targetLocal;
+  const handlePointerMove = (side: "A" | "B", e: React.PointerEvent<HTMLDivElement>) => {
+    if (isDraggingSideRef.current !== side) return;
+    seekSideFromClientX(side, e.clientX, e.currentTarget);
+  };
 
-    onSeek(side, {
-      passageId: passage.id,
-      localTime: targetLocal,
-      sourceTime: targetSource,
-    });
+  const handlePointerUp = (side: "A" | "B", e: React.PointerEvent<HTMLDivElement>) => {
+    if (isDraggingSideRef.current !== side) return;
+    isDraggingSideRef.current = null;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
   };
 
   // Playhead position % calculation
@@ -241,11 +268,15 @@ export default function CompareOverTimeView({
               </div>
             )}
 
-            {/* Clickable Graph Surface */}
+            {/* Clickable and Draggable Graph Surface */}
             <div
               className="compare-overtime-track"
-              onClick={(e) => handleGraphClick("A", e)}
-              title="Click to seek Passage A"
+              onPointerDown={(e) => handlePointerDown("A", e)}
+              onPointerMove={(e) => handlePointerMove("A", e)}
+              onPointerUp={(e) => handlePointerUp("A", e)}
+              onPointerCancel={(e) => handlePointerUp("A", e)}
+              style={{ cursor: "ew-resize", touchAction: "none" }}
+              title="Click or drag to seek Passage A"
             >
               {/* Inner passage container sized according to actual / relative duration */}
               <div
@@ -442,11 +473,15 @@ export default function CompareOverTimeView({
               </div>
             )}
 
-            {/* Clickable Graph Surface */}
+            {/* Clickable and Draggable Graph Surface */}
             <div
               className="compare-overtime-track"
-              onClick={(e) => handleGraphClick("B", e)}
-              title="Click to seek Passage B"
+              onPointerDown={(e) => handlePointerDown("B", e)}
+              onPointerMove={(e) => handlePointerMove("B", e)}
+              onPointerUp={(e) => handlePointerUp("B", e)}
+              onPointerCancel={(e) => handlePointerUp("B", e)}
+              style={{ cursor: "ew-resize", touchAction: "none" }}
+              title="Click or drag to seek Passage B"
             >
               {/* Inner passage container sized according to actual / relative duration */}
               <div

@@ -343,4 +343,131 @@ class ApiTests(unittest.TestCase):
             if os.path.exists(wav_path):
                 os.unlink(wav_path)
 
+    def test_scanners_status_and_update(self):
+        # 1. Unauthenticated request should be 401
+        res = self.client.get("/api/scanners/status", headers={"Origin": "http://127.0.0.1:5179"})
+        self.assertEqual(res.status_code, 401)
+
+        # 2. Authenticated status request
+        res = self.client.get("/api/scanners/status", headers=self.headers)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["service"], "editmap-cv-engine")
+        self.assertIn("engines", data)
+        self.assertGreaterEqual(len(data["engines"]), 6)
+        engine_ids = [e["id"] for e in data["engines"]]
+        self.assertIn("framing", engine_ids)
+        self.assertIn("characters", engine_ids)
+        self.assertIn("shots", engine_ids)
+        self.assertIn("dme", engine_ids)
+        self.assertIn("speech", engine_ids)
+        self.assertIn("loudness", engine_ids)
+
+        # 3. Authenticated update request
+        update_res = self.client.post("/api/scanners/update", headers=self.headers, json={"checkOnly": False})
+        self.assertEqual(update_res.status_code, 200)
+        update_data = update_res.json()
+        self.assertTrue(update_data["success"])
+        self.assertTrue(update_data["updated"])
+        self.assertIn("All local scanner models", update_data["message"])
+
+    def test_analyze_eye_trace_with_optical_flow_momentum(self):
+        from PIL import Image
+        import io, base64
+
+        def make_b64(r, g, b, shift=0):
+            img = Image.new("RGB", (160, 90), color=(r, g, b))
+            # Draw a bright spot to track
+            for y in range(40, 50):
+                for x in range(70 + shift, 90 + shift):
+                    img.putpixel((x, y), (255, 255, 255))
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG")
+            return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+        prev_b64 = make_b64(20, 20, 20, shift=-5)
+        out_b64 = make_b64(20, 20, 20, shift=0)
+        in_b64 = make_b64(20, 20, 20, shift=15)
+
+        res = self.client.post(
+            "/api/analyze-eye-trace",
+            headers=self.headers,
+            json={
+                "outgoingImage": out_b64,
+                "incomingImage": in_b64,
+                "prevOutgoingImage": prev_b64,
+            },
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("outgoingFocalPoint", data)
+        self.assertIn("incomingFocalPoint", data)
+        self.assertIn("jumpDistancePercent", data)
+        self.assertIn("momentum", data)
+        momentum = data["momentum"]
+        self.assertIn("vx", momentum)
+        self.assertIn("vy", momentum)
+        self.assertIn("alignment", momentum)
+
+    def test_eye_trace_saliency_sharpness_weighting(self):
+        """Verify that EyeTraceAnalyzer scores sharp in-focus faces above out-of-focus blurry foreground faces."""
+        from cv_engine import EyeTraceAnalyzer
+        # Create a test image with two regions:
+        # Region A: large, uniform / smooth blurry gradient
+        # Region B: smaller, but sharp high-frequency checkerboard (in-focus face)
+        img_np = np.full((120, 200, 3), 120, dtype=np.uint8)
+
+        # Region A: Blurry large foreground element (x: 0..80, y: 0..100)
+        for y in range(100):
+            for x in range(80):
+                img_np[y, x] = int(100 + 20 * np.sin(x * 0.05))
+
+        # Region B: In-focus subject with high contrast edges (x: 110..160, y: 20..80)
+        for y in range(20, 80):
+            for x in range(110, 160):
+                val = 220 if ((x // 3) + (y // 3)) % 2 == 0 else 40
+                img_np[y, x] = val
+
+        # Region A bbox (area: 80 * 100 = 8000)
+        bbox_a = (0, 0, 80, 100)
+        # Region B bbox (area: 50 * 60 = 3000)
+        bbox_b = (110, 20, 160, 80)
+
+        score_a = EyeTraceAnalyzer._compute_face_saliency_score(img_np, bbox_a, 0.95, 200, 120)
+        score_b = EyeTraceAnalyzer._compute_face_saliency_score(img_np, bbox_b, 0.95, 200, 120)
+
+        # Sharpness of in-focus subject must overcome larger blurry foreground area
+        self.assertGreater(score_b, score_a)
+
+    def test_eye_trace_axis_clash_and_character_replacement(self):
+        """Verify 180° axis clash, character replacement, and depth accommodation detection."""
+        from cv_engine import EyeTraceAnalyzer
+        analyzer = EyeTraceAnalyzer()
+
+        # Mock two focal points on screen-right facing screen-left (180° axis clash)
+        with patch.object(analyzer, "extract_focal_point") as mock_focal:
+            mock_focal.side_effect = [
+                {
+                    "x": 0.75, "y": 0.35, "type": "eyes", "confidence": 0.9,
+                    "gazeDirection": "screen-left", "sharpness": 220.0, "areaPercent": 15.0
+                },
+                {
+                    "x": 0.72, "y": 0.38, "type": "eyes", "confidence": 0.9,
+                    "gazeDirection": "screen-left", "sharpness": 35.0, "areaPercent": 6.0
+                }
+            ]
+            dummy_img = Image.new("RGB", (64, 36), (100, 100, 100))
+            res = analyzer.analyze_cut(dummy_img, dummy_img)
+
+            # Option A rating: <= 18% jump -> anchored
+            self.assertEqual(res["rating"], "anchored")
+            # 180° Axis clash must be flagged
+            self.assertTrue(res["axisClash"])
+            self.assertIn("180° line cross", res["axisClashDetail"])
+            # Character replacement pop must be flagged (dx=0.03, dy=0.03 -> distance ~4%)
+            self.assertTrue(res["characterReplacement"])
+            # Depth shift from high sharpness (220) to blurry (35)
+            self.assertEqual(res["depthShift"]["shift"], "near-to-far")
+
 if __name__ == "__main__": unittest.main()
+

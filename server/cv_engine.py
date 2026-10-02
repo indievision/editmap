@@ -465,7 +465,7 @@ class ShotClassifier:
 
 
 class CharacterRecognizer:
-    def __init__(self, similarity_threshold: float = 0.45):
+    def __init__(self, similarity_threshold: float = 0.38):
         self.similarity_threshold = similarity_threshold
         self._engine = None
         self._engine_type = None
@@ -634,23 +634,25 @@ class CharacterRecognizer:
                     continue
                 norm_embedding = (embedding / norm).tolist()
                 score = float(face.det_score) if hasattr(face, "det_score") else 1.0
-                if score < 0.65:
+                if score < 0.45:
                     continue
                 bbox = [int(v) for v in face.bbox]
 
                 x1, y1, x2, y2 = bbox
                 bw = max(1, x2 - x1)
                 bh = max(1, y2 - y1)
-                if bw < 36 or bh < 36:
+                if bw < 32 or bh < 32:
                     continue
 
-                # 1. Pose filter: Ignore backs of heads and severe downward looking angles (scalp/floor)
+                # 1. Pose filter: Ignore true backs of heads (>85° yaw) and extreme vertical tilt (>50° pitch)
+                yaw = 0.0
                 if hasattr(face, "pose") and face.pose is not None:
                     try:
                         pitch, yaw, roll = face.pose
-                        if abs(float(yaw)) > 50.0:
+                        yaw = float(yaw)
+                        if abs(yaw) > 75.0:
                             continue
-                        if float(pitch) > 30.0 or float(pitch) < -30.0:
+                        if float(pitch) > 45.0 or float(pitch) < -45.0:
                             continue
                     except Exception:
                         pass
@@ -659,18 +661,21 @@ class CharacterRecognizer:
                 if hasattr(face, "kps") and face.kps is not None:
                     try:
                         kps = face.kps
-                        eye_dist = np.linalg.norm(kps[0] - kps[1])
-                        if eye_dist < (bw * 0.18):
-                            continue
+                        # Only apply horizontal eye separation check for frontal/semi-frontal faces;
+                        # in profile view (abs(yaw) >= 40°), the distant eye is foreshortened near the nose.
+                        if abs(yaw) < 40.0:
+                            eye_dist = np.linalg.norm(kps[0] - kps[1])
+                            if eye_dist < (bw * 0.10):
+                                continue
                         eye_mid = (kps[0] + kps[1]) / 2.0
                         mouth_mid = (kps[3] + kps[4]) / 2.0
                         face_vec = mouth_mid - eye_mid
                         face_height = np.linalg.norm(face_vec)
-                        if face_height < (bh * 0.22):
+                        if face_height < (bh * 0.18):
                             continue
-                        # Nose must lie between eyes and mouth along face vertical axis
+                        # Nose must lie roughly between eyes and mouth along face vertical axis
                         nose_proj = float(np.dot(kps[2] - eye_mid, face_vec) / max(1e-6, face_height ** 2))
-                        if nose_proj < 0.12 or nose_proj > 0.88:
+                        if nose_proj < 0.08 or nose_proj > 0.92:
                             continue
                     except Exception:
                         pass
@@ -693,7 +698,7 @@ class CharacterRecognizer:
                     crop_np = np.array(face_crop)
                     gray = cv2.cvtColor(crop_np, cv2.COLOR_RGB2GRAY) if crop_np.ndim == 3 else crop_np
                     blur_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-                    if blur_var < 50.0:
+                    if blur_var < 30.0:
                         continue
                 except Exception:
                     pass
@@ -791,7 +796,7 @@ class CharacterRecognizer:
                     overlap = self._bbox_iou(face["bbox"], track["bbox"])
                     # Fast movement requires a strong embedding match; lower
                     # matches also need screen-position continuity.
-                    if similarity < 0.42 or (similarity < 0.62 and overlap < 0.04):
+                    if similarity < 0.36 or (similarity < 0.55 and overlap < 0.03):
                         continue
                     score = similarity * 0.85 + overlap * 0.15
                     if score > best_score:
@@ -1336,21 +1341,233 @@ class EyeTraceAnalyzer:
         self.character_recognizer = character_recognizer
         self.shot_classifier = shot_classifier
 
-    def extract_focal_point(self, img: Image.Image) -> Dict[str, Any]:
+    @staticmethod
+    def _compute_face_metrics(
+        np_img: np.ndarray,
+        bbox: Any,
+        det_score: float,
+        img_w: int,
+        img_h: int,
+        kps: Any = None,
+        landmarks: Any = None,
+    ) -> Dict[str, Any]:
         """
-        Extracts the primary visual focal point (normalized x, y in [0.0, 1.0]),
-        prioritizing eyes/face, then person silhouette, then edge saliency with center-bias.
+        Calculates cinematic visual saliency, sharpness, lighting, area, and gaze direction (yaw).
         """
-        w, h = img.size
+        import cv2
 
-        # Priority 1: Face / Eyes detection via CharacterRecognizer
-        if self.character_recognizer:
+        x1, y1, x2, y2 = [float(v) for v in bbox]
+        x1_i = max(0, min(img_w - 1, int(round(x1))))
+        y1_i = max(0, min(img_h - 1, int(round(y1))))
+        x2_i = max(x1_i + 2, min(img_w, int(round(x2))))
+        y2_i = max(y1_i + 2, min(img_h, int(round(y2))))
+
+        bw = x2_i - x1_i
+        bh = y2_i - y1_i
+        area = bw * bh
+        area_factor = float(np.sqrt(max(1.0, area)))
+
+        face_patch = np_img[y1_i:y2_i, x1_i:x2_i]
+        gray = cv2.cvtColor(face_patch, cv2.COLOR_RGB2GRAY) if face_patch.ndim == 3 else face_patch
+
+        try:
+            lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        except Exception:
+            lap_var = 100.0
+
+        if lap_var < 35.0:
+            sharpness_weight = 0.15 + (lap_var / 35.0) * 0.25
+        elif lap_var < 90.0:
+            sharpness_weight = 0.40 + ((lap_var - 35.0) / 55.0) * 0.60
+        else:
+            sharpness_weight = min(2.5, 1.0 + float(np.log10(lap_var / 90.0 + 1.0)) * 1.5)
+
+        mean_luma = float(np.mean(gray))
+        luma_weight = float(np.clip(mean_luma / 110.0, 0.45, 1.4))
+
+        is_edge = (x1_i <= 2 or x2_i >= img_w - 2 or y1_i <= 2 or y2_i >= img_h - 2)
+        edge_weight = 0.65 if (is_edge and lap_var < 80.0) else 1.0
+
+        saliency = float(area_factor * det_score * sharpness_weight * luma_weight * edge_weight)
+
+        # Gaze direction / Head yaw (detects 180° eyelines)
+        gaze_direction = "direct"
+        try:
+            if kps is not None and len(kps) >= 3:
+                eye_cx = float(kps[0][0] + kps[1][0]) / 2.0
+                eye_span = max(4.0, abs(float(kps[1][0] - kps[0][0])))
+                nose_x = float(kps[2][0])
+                diff = (nose_x - eye_cx) / eye_span
+                if diff < -0.14:
+                    gaze_direction = "screen-left"
+                elif diff > 0.14:
+                    gaze_direction = "screen-right"
+            elif landmarks is not None:
+                eye_pts = landmarks.get("left_eye", []) + landmarks.get("right_eye", [])
+                nose_pts = landmarks.get("nose_tip", []) or landmarks.get("nose_bridge", [])
+                if eye_pts and nose_pts:
+                    eye_cx = sum(p[0] for p in eye_pts) / float(len(eye_pts))
+                    nose_x = sum(p[0] for p in nose_pts) / float(len(nose_pts))
+                    eye_span = max(5.0, abs(max(p[0] for p in eye_pts) - min(p[0] for p in eye_pts)))
+                    diff = (nose_x - eye_cx) / eye_span
+                    if diff < -0.14:
+                        gaze_direction = "screen-left"
+                    elif diff > 0.14:
+                        gaze_direction = "screen-right"
+            else:
+                box_cx = (x1 + x2) / 2.0
+                if (box_cx / img_w) > 0.62:
+                    gaze_direction = "screen-left"
+                elif (box_cx / img_w) < 0.38:
+                    gaze_direction = "screen-right"
+        except Exception:
+            gaze_direction = "direct"
+
+        return {
+            "saliency": saliency,
+            "sharpness": round(lap_var, 1),
+            "meanLuma": round(mean_luma, 1),
+            "areaPercent": round(float(area) / float(img_w * img_h) * 100.0, 1),
+            "gazeDirection": gaze_direction,
+        }
+
+    @classmethod
+    def _compute_face_saliency_score(cls, np_img: np.ndarray, bbox: Any, det_score: float, img_w: int, img_h: int) -> float:
+        return cls._compute_face_metrics(np_img, bbox, det_score, img_w, img_h)["saliency"]
+
+    def _detect_primary_face_eyes(self, img: Image.Image) -> Optional[Dict[str, Any]]:
+        """
+        Directly detects face and eye landmarks from CharacterRecognizer engines (InsightFace or
+        face_recognition) prioritizing sharp, in-focus, and well-lit subjects over blurry foreground bokeh.
+        """
+        if not self.character_recognizer:
+            return None
+        w, h = img.size
+        try:
+            self.character_recognizer._init_engine()
+        except Exception as e:
+            logger.warning("Character engine init in EyeTraceAnalyzer failed: %s", e)
+            return None
+
+        np_img = np.array(img)
+
+        # 1. InsightFace: has 5 facial keypoints (kps[0]=left eye, kps[1]=right eye)
+        if getattr(self.character_recognizer, "_engine_type", None) == "insightface":
             try:
-                faces = self.character_recognizer.extract_faces_with_crops(img)
+                engine = self.character_recognizer._engine
+                bgr_img = np_img[:, :, ::-1] if np_img.ndim == 3 else np_img
+                faces = engine.get(bgr_img)
                 if faces:
-                    # Pick largest face
-                    faces.sort(key=lambda f: f.get("area", 0), reverse=True)
-                    best_face = faces[0]
+                    candidates = []
+                    for f in faces:
+                        score = float(getattr(f, "det_score", 0.9))
+                        if score < 0.35:
+                            continue
+                        bbox = getattr(f, "bbox", None)
+                        if bbox is None or len(bbox) != 4:
+                            continue
+                        bw = float(bbox[2] - bbox[0])
+                        bh = float(bbox[3] - bbox[1])
+                        if bw < 20 or bh < 20:
+                            continue
+                        kps = getattr(f, "kps", None)
+                        metrics = self._compute_face_metrics(np_img, bbox, score, w, h, kps=kps)
+                        candidates.append((f, metrics))
+
+                    if candidates:
+                        # Prioritize faces with highest visual saliency (focus/sharpness, key lighting, composition, size)
+                        candidates.sort(key=lambda item: item[1]["saliency"], reverse=True)
+                        best_face, best_metrics = candidates[0]
+
+                        # Check for keypoints (eyes)
+                        if hasattr(best_face, "kps") and best_face.kps is not None and len(best_face.kps) >= 2:
+                            kps = best_face.kps
+                            eye_cx = float(kps[0][0] + kps[1][0]) / 2.0
+                            eye_cy = float(kps[0][1] + kps[1][1]) / 2.0
+                            return {
+                                "x": round(max(0.02, min(0.98, eye_cx / w)), 3),
+                                "y": round(max(0.02, min(0.98, eye_cy / h)), 3),
+                                "type": "eyes",
+                                "confidence": round(float(getattr(best_face, "det_score", 0.9)), 2),
+                                "gazeDirection": best_metrics["gazeDirection"],
+                                "sharpness": best_metrics["sharpness"],
+                                "areaPercent": best_metrics["areaPercent"],
+                            }
+                        else:
+                            x1, y1, x2, y2 = [float(v) for v in best_face.bbox]
+                            cx = (x1 + x2) / 2.0
+                            eyeline_y = y1 + 0.35 * (y2 - y1)
+                            return {
+                                "x": round(max(0.02, min(0.98, cx / w)), 3),
+                                "y": round(max(0.02, min(0.98, eyeline_y / h)), 3),
+                                "type": "eyes",
+                                "confidence": round(float(getattr(best_face, "det_score", 0.9)), 2),
+                                "gazeDirection": best_metrics["gazeDirection"],
+                                "sharpness": best_metrics["sharpness"],
+                                "areaPercent": best_metrics["areaPercent"],
+                            }
+            except Exception as e:
+                logger.warning("InsightFace direct eye detection failed: %s", e)
+
+        # 2. face_recognition engine
+        elif getattr(self.character_recognizer, "_engine_type", None) == "face_recognition":
+            try:
+                engine = self.character_recognizer._engine
+                locations = engine.face_locations(np_img)
+                if locations:
+                    candidates = []
+                    for loc in locations:
+                        top, right, bottom, left = loc
+                        bbox = (float(left), float(top), float(right), float(bottom))
+                        landmarks_list = engine.face_landmarks(np_img, [loc])
+                        lm = landmarks_list[0] if landmarks_list else None
+                        metrics = self._compute_face_metrics(np_img, bbox, 0.9, w, h, landmarks=lm)
+                        candidates.append((loc, lm, metrics))
+
+                    candidates.sort(key=lambda item: item[2]["saliency"], reverse=True)
+                    best_loc, lm, best_metrics = candidates[0]
+                    top, right, bottom, left = best_loc
+                    if lm and ("left_eye" in lm or "right_eye" in lm):
+                        eye_pts = lm.get("left_eye", []) + lm.get("right_eye", [])
+                        if eye_pts:
+                            eye_x = sum(p[0] for p in eye_pts) / float(len(eye_pts))
+                            eye_y = sum(p[1] for p in eye_pts) / float(len(eye_pts))
+                            return {
+                                "x": round(max(0.02, min(0.98, eye_x / w)), 3),
+                                "y": round(max(0.02, min(0.98, eye_y / h)), 3),
+                                "type": "eyes",
+                                "confidence": 0.92,
+                                "gazeDirection": best_metrics["gazeDirection"],
+                                "sharpness": best_metrics["sharpness"],
+                                "areaPercent": best_metrics["areaPercent"],
+                            }
+                    cx = float(left + right) / 2.0
+                    eyeline_y = float(top) + 0.35 * float(bottom - top)
+                    return {
+                        "x": round(max(0.02, min(0.98, cx / w)), 3),
+                        "y": round(max(0.02, min(0.98, eyeline_y / h)), 3),
+                        "type": "eyes",
+                        "confidence": 0.88,
+                        "gazeDirection": best_metrics["gazeDirection"],
+                        "sharpness": best_metrics["sharpness"],
+                        "areaPercent": best_metrics["areaPercent"],
+                    }
+            except Exception as e:
+                logger.warning("face_recognition eye detection failed: %s", e)
+
+        # 3. Fallback: extract_faces_with_crops if direct extraction was not applicable
+        try:
+            faces = self.character_recognizer.extract_faces_with_crops(img)
+            if faces:
+                candidates = []
+                for f in faces:
+                    bbox = f.get("bbox", [])
+                    if len(bbox) == 4:
+                        metrics = self._compute_face_metrics(np_img, tuple(bbox), float(f.get("score", 0.9)), w, h)
+                        candidates.append((f, metrics))
+                if candidates:
+                    candidates.sort(key=lambda item: item[1]["saliency"], reverse=True)
+                    best_face, best_metrics = candidates[0]
                     bbox = best_face.get("bbox", [])
                     if len(bbox) == 4:
                         x1, y1, x2, y2 = bbox
@@ -1361,10 +1578,26 @@ class EyeTraceAnalyzer:
                             "y": round(max(0.02, min(0.98, eyeline_y / h)), 3),
                             "type": "eyes",
                             "confidence": round(float(best_face.get("score", 0.9)), 2),
+                            "gazeDirection": best_metrics["gazeDirection"],
+                            "sharpness": best_metrics["sharpness"],
+                            "areaPercent": best_metrics["areaPercent"],
                         }
-            except Exception as e:
-                logger.warning("Face detection in EyeTraceAnalyzer failed: %s", e)
+        except Exception:
+            pass
 
+        return None
+
+    def extract_focal_point(self, img: Image.Image) -> Dict[str, Any]:
+        """
+        Extracts the primary visual focal point (normalized x, y in [0.0, 1.0]),
+        prioritizing eyes/face, then person silhouette, then peak edge saliency.
+        """
+        w, h = img.size
+
+        # Priority 1: Face & Eyes detection
+        face_result = self._detect_primary_face_eyes(img)
+        if face_result:
+            return face_result
 
         # Priority 2: Person detection via ShotClassifier (YOLO)
         if self.shot_classifier:
@@ -1385,19 +1618,23 @@ class EyeTraceAnalyzer:
                                 people_boxes.append((area, xyxy, conf))
                         if people_boxes:
                             people_boxes.sort(key=lambda p: p[0], reverse=True)
-                            _, xyxy, conf = people_boxes[0]
+                            area, xyxy, conf = people_boxes[0]
                             cx = (xyxy[0] + xyxy[2]) / 2.0
-                            upper_y = xyxy[1] + 0.15 * (xyxy[3] - xyxy[1]) # Top 15% is closer to head
+                            upper_y = xyxy[1] + 0.16 * (xyxy[3] - xyxy[1])
+                            gaze_dir = "screen-left" if (cx / w) > 0.58 else "screen-right" if (cx / w) < 0.42 else "direct"
                             return {
                                 "x": round(max(0.02, min(0.98, cx / w)), 3),
                                 "y": round(max(0.02, min(0.98, upper_y / h)), 3),
                                 "type": "person",
                                 "confidence": round(conf, 2),
+                                "gazeDirection": gaze_dir,
+                                "sharpness": 80.0,
+                                "areaPercent": round(float(area) / float(w * h) * 100.0, 1),
                             }
             except Exception as e:
                 logger.warning("YOLO person detection in EyeTraceAnalyzer failed: %s", e)
 
-        # Priority 3: Visual Saliency via Sobel Gradient + Gaussian Center-Bias
+        # Priority 3: Peak Visual Saliency via Sobel Gradient + Gaussian Filter Peak
         try:
             small = img.resize((160, 90)).convert("L")
             arr = np.array(small, dtype=np.float32)
@@ -1409,24 +1646,33 @@ class EyeTraceAnalyzer:
             gy[1:-1, :] = arr[2:, :] - arr[:-2, :]
             grad = np.sqrt(gx * gx + gy * gy)
 
+            # Rule-of-thirds / center prior
             y_coords, x_coords = np.mgrid[0:sh, 0:sw]
             norm_x = x_coords / sw
             norm_y = y_coords / sh
             cdx = norm_x - 0.5
             cdy = norm_y - 0.45
-            center_bias = np.exp(-(cdx * cdx + cdy * cdy) / 0.28)
+            center_prior = np.exp(-(cdx * cdx + cdy * cdy) / 0.35)
 
-            saliency = grad * center_bias
-            total_weight = np.sum(saliency)
+            saliency = grad * center_prior
 
-            if total_weight > 0:
-                focal_x = np.sum(norm_x * saliency) / total_weight
-                focal_y = np.sum(norm_y * saliency) / total_weight
+            # Convolve with 9x9 box to locate primary salient cluster peak
+            import cv2
+            smoothed = cv2.GaussianBlur(saliency, (9, 9), 0)
+            max_val = float(np.max(smoothed))
+
+            if max_val > 6.0:
+                max_idx = np.unravel_index(np.argmax(smoothed), smoothed.shape)
+                peak_y = (float(max_idx[0]) + 0.5) / sh
+                peak_x = (float(max_idx[1]) + 0.5) / sw
                 return {
-                    "x": round(float(max(0.05, min(0.95, focal_x))), 3),
-                    "y": round(float(max(0.05, min(0.95, focal_y))), 3),
+                    "x": round(float(max(0.05, min(0.95, peak_x))), 3),
+                    "y": round(float(max(0.05, min(0.95, peak_y))), 3),
                     "type": "saliency",
                     "confidence": 0.70,
+                    "gazeDirection": "direct",
+                    "sharpness": round(max_val * 10.0, 1),
+                    "areaPercent": 6.0,
                 }
         except Exception as e:
             logger.warning("Saliency calculation failed: %s", e)
@@ -1436,9 +1682,118 @@ class EyeTraceAnalyzer:
             "y": 0.45,
             "type": "center",
             "confidence": 0.5,
+            "gazeDirection": "direct",
+            "sharpness": 50.0,
+            "areaPercent": 5.0,
         }
 
-    def analyze_cut(self, outgoing_img: Image.Image, incoming_img: Image.Image) -> Dict[str, Any]:
+    def compute_gaze_momentum(
+        self,
+        prev_img: Image.Image,
+        curr_img: Image.Image,
+        p1: Dict[str, Any],
+        p2: Dict[str, Any],
+        outgoing_frames: Optional[List[Image.Image]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Calculates gaze momentum vector and alignment with saccadic jump vector
+        using multi-frame optical flow around the outgoing focal point.
+        """
+        import cv2
+
+        w, h = 160, 90
+        frames_list = []
+        if outgoing_frames and len(outgoing_frames) >= 2:
+            frames_list = [np.array(f.resize((w, h)).convert("L")) for f in outgoing_frames]
+        else:
+            frames_list = [
+                np.array(prev_img.resize((w, h)).convert("L")),
+                np.array(curr_img.resize((w, h)).convert("L")),
+            ]
+
+        focal_x = int(round(p1["x"] * w))
+        focal_y = int(round(p1["y"] * h))
+
+        # Sample 3x3 local cluster centered on focal point + grid anchors
+        pts = []
+        for dy in (-10, 0, 10):
+            for dx in (-10, 0, 10):
+                qx = max(2, min(w - 3, focal_x + dx))
+                qy = max(2, min(h - 3, focal_y + dy))
+                pts.append([[float(qx), float(qy)]])
+
+        all_displacements = []
+        for i in range(len(frames_list) - 1):
+            gray_a = frames_list[i]
+            gray_b = frames_list[i + 1]
+            pts_a = np.array(pts, dtype=np.float32)
+            pts_b, status, _ = cv2.calcOpticalFlowPyrLK(
+                gray_a, gray_b, pts_a, None,
+                winSize=(15, 15), maxLevel=2,
+                criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03)
+            )
+            good_a = pts_a[status == 1]
+            good_b = pts_b[status == 1]
+            if len(good_a) >= 3:
+                all_displacements.append(good_b - good_a)
+
+        if not all_displacements:
+            return {
+                "vx": 0.0,
+                "vy": 0.0,
+                "velocity": 0,
+                "alignment": "static",
+                "cosineScore": 0.0,
+                "trajectoryAngle": 0,
+            }
+
+        concat_disp = np.concatenate(all_displacements, axis=0)
+        med_dx = float(np.median(concat_disp[:, 0]))
+        med_dy = float(np.median(concat_disp[:, 1]))
+
+        # Normalized velocities (-1.0 to 1.0)
+        vx = round(float(np.clip(med_dx / 6.0, -1.0, 1.0)), 3)
+        vy = round(float(np.clip(med_dy / 6.0, -1.0, 1.0)), 3)
+        vel_mag = float(np.sqrt(vx * vx + vy * vy))
+        velocity = min(100, int(round(vel_mag * 100)))
+
+        # Saccade vector from p1 to p2
+        sx = p2["x"] - p1["x"]
+        sy = p2["y"] - p1["y"]
+        s_mag = float(np.sqrt(sx * sx + sy * sy))
+
+        angle_rad = float(np.arctan2(vy, vx))
+        angle_deg = int(round(np.degrees(angle_rad))) % 360
+
+        if vel_mag < 0.08 or s_mag < 0.04:
+            alignment = "static"
+            cosine_score = 0.0
+        else:
+            cosine = (vx * sx + vy * sy) / (vel_mag * s_mag)
+            cosine_score = round(float(np.clip(cosine, -1.0, 1.0)), 3)
+            if cosine >= 0.40:
+                alignment = "momentum-match"
+            elif cosine <= -0.40:
+                alignment = "momentum-collision"
+            else:
+                alignment = "neutral"
+
+        return {
+            "vx": vx,
+            "vy": vy,
+            "velocity": velocity,
+            "alignment": alignment,
+            "cosineScore": cosine_score,
+            "trajectoryAngle": angle_deg,
+        }
+
+    def analyze_cut(
+        self,
+        outgoing_img: Image.Image,
+        incoming_img: Image.Image,
+        prev_outgoing_img: Optional[Image.Image] = None,
+        outgoing_frames: Optional[List[Image.Image]] = None,
+    ) -> Dict[str, Any]:
         p1 = self.extract_focal_point(outgoing_img)
         p2 = self.extract_focal_point(incoming_img)
 
@@ -1447,12 +1802,13 @@ class EyeTraceAnalyzer:
         jump_distance = float(np.sqrt(dx * dx + dy * dy))
         jump_distance_percent = min(100, int(round(jump_distance * 100)))
 
+        # Option A Gaze Ratings (Anchored / Shifted / Scattered)
         if jump_distance_percent <= 18:
-            rating = "smooth"
+            rating = "anchored"
         elif jump_distance_percent <= 38:
-            rating = "natural"
+            rating = "shifted"
         else:
-            rating = "jarring"
+            rating = "scattered"
 
         screen_direction = "neutral"
         if dx > 0.12:
@@ -1460,14 +1816,82 @@ class EyeTraceAnalyzer:
         elif dx < -0.12:
             screen_direction = "right-to-left"
 
-        return {
+        # 1. 180° Axis Clash Warning
+        axis_clash = False
+        axis_clash_detail = None
+        gaze1 = p1.get("gazeDirection", "direct")
+        gaze2 = p2.get("gazeDirection", "direct")
+        is_same_side = (p1["x"] > 0.50 and p2["x"] > 0.50) or (p1["x"] < 0.50 and p2["x"] < 0.50)
+
+        if is_same_side and gaze1 in ("screen-left", "screen-right") and gaze1 == gaze2:
+            axis_clash = True
+            side_str = "screen-right" if p1["x"] > 0.50 else "screen-left"
+            dir_str = "screen-left" if gaze1 == "screen-left" else "screen-right"
+            axis_clash_detail = f"Both subjects framed {side_str} facing {dir_str} (180° line cross)"
+        elif is_same_side and abs(dx) < 0.22 and p1.get("type") in ("eyes", "face") and p2.get("type") in ("eyes", "face"):
+            if gaze1 == gaze2 and gaze1 != "direct":
+                axis_clash = True
+                axis_clash_detail = "Eyelines clash across edit boundary (180° axis violation)"
+
+        # 2. Character Replacement / Jump-Cut Collision Detector
+        character_replacement = False
+        character_replacement_detail = None
+        if jump_distance_percent <= 12 and p1.get("type") in ("eyes", "face", "person") and p2.get("type") in ("eyes", "face", "person"):
+            character_replacement = True
+            character_replacement_detail = f"Subject substituted in place ({jump_distance_percent}% hop)"
+
+        # 3. Depth / Focal Plane Accommodation Shift
+        s1 = float(p1.get("sharpness", 100.0))
+        s2 = float(p2.get("sharpness", 100.0))
+        a1 = float(p1.get("areaPercent", 10.0))
+        a2 = float(p2.get("areaPercent", 10.0))
+
+        if (s1 > 100.0 and s2 < 45.0 and a1 > a2 * 1.5) or (s1 > 180.0 and s2 < 55.0):
+            depth_shift = {
+                "outgoingSharpness": round(s1, 1),
+                "incomingSharpness": round(s2, 1),
+                "shift": "near-to-far",
+                "magnitude": "high" if s1 > 200.0 else "moderate",
+            }
+        elif (s2 > 100.0 and s1 < 45.0 and a2 > a1 * 1.5) or (s2 > 180.0 and s1 < 55.0):
+            depth_shift = {
+                "outgoingSharpness": round(s1, 1),
+                "incomingSharpness": round(s2, 1),
+                "shift": "far-to-near",
+                "magnitude": "high" if s2 > 200.0 else "moderate",
+            }
+        else:
+            depth_shift = {
+                "outgoingSharpness": round(s1, 1),
+                "incomingSharpness": round(s2, 1),
+                "shift": "constant",
+                "magnitude": "subtle",
+            }
+
+        result: Dict[str, Any] = {
             "outgoingFocalPoint": p1,
             "incomingFocalPoint": p2,
             "jumpDistance": round(jump_distance, 3),
             "jumpDistancePercent": jump_distance_percent,
             "rating": rating,
             "screenDirection": screen_direction,
+            "axisClash": axis_clash,
+            "axisClashDetail": axis_clash_detail,
+            "characterReplacement": character_replacement,
+            "characterReplacementDetail": character_replacement_detail,
+            "depthShift": depth_shift,
         }
+
+        if prev_outgoing_img is not None or (outgoing_frames and len(outgoing_frames) >= 2):
+            result["momentum"] = self.compute_gaze_momentum(
+                prev_outgoing_img or outgoing_frames[0],
+                outgoing_img,
+                p1,
+                p2,
+                outgoing_frames=outgoing_frames,
+            )
+
+        return result
 
 
 # ---------------------------------------------------------------------------

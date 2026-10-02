@@ -166,8 +166,8 @@ test("Studio timeline simplification, interactions, viewports, and mode verifica
 
   // Range overlay should be visible and drawer opens to sequence/structure
   await expect(page.locator(".map-range")).toBeVisible();
-  await expect(detailDrawer).toBeVisible();
-  await expect(page.locator(".sequence-drawer-title")).toHaveText(/sequence reading/i);
+  await expect(page.locator(".sequence-drawer-title")).toHaveCount(0);
+  await expect(page.locator(".sr-header-controls")).toBeVisible();
 
   // Close detail drawer
   await page.keyboard.press("Escape");
@@ -216,8 +216,12 @@ test("Studio timeline simplification, interactions, viewports, and mode verifica
   await expect(page.locator(".map .section-head .eyebrow")).toHaveText("FILM MAP");
   await expect(page.locator(".studio-layer-menu")).toBeVisible();
 
-  // Whole-film minimap is visible in Expanded Studio
+  // Timeline nav bar is hidden when 100% in view, appears when zoomed in
+  await expect(page.locator(".studio-top-overview")).not.toBeVisible();
+  await page.keyboard.press("KeyW");
   await expect(page.locator(".studio-top-overview")).toBeVisible();
+  await page.keyboard.press("KeyF");
+  await expect(page.locator(".studio-top-overview")).not.toBeVisible();
 
   // Restore Studio
   await page.getByRole("button", { name: "Restore Studio" }).click();

@@ -1,0 +1,3426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DUET - Cinema Screening & Review Console</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    :root {
+      --bg-theater: #0b0c10;
+      --panel-theater: #12141a;
+      --border-theater: #1d212b;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+    }
+    body { background-color: var(--bg-theater); }
+    .theater-panel { background-color: var(--panel-theater); }
+    .theater-border { border-color: var(--border-theater); }
+
+    /* Custom dark scrollbar */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: #0b0c10; }
+    ::-webkit-scrollbar-thumb { background: #1d212b; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #2d3343; }
+
+    /* Audience pulse glow */
+    .pulse-amber {
+      background: radial-gradient(ellipse at center, rgba(245, 158, 11, 0.55) 0%, rgba(245, 158, 11, 0.22) 45%, rgba(245, 158, 11, 0) 75%);
+      filter: blur(5px);
+    }
+    .pulse-purple {
+      background: radial-gradient(ellipse at center, rgba(168, 85, 247, 0.6) 0%, rgba(168, 85, 247, 0.25) 45%, rgba(168, 85, 247, 0) 75%);
+      filter: blur(5px);
+    }
+
+    /* Key press pop animation */
+    @keyframes keyPop {
+      0% { transform: scale(1); }
+      50% { transform: scale(0.9); }
+      100% { transform: scale(1); }
+    }
+    .key-pressed { animation: keyPop 0.15s ease-out; }
+
+    /* Avatar token hover & tooltip */
+    .avatar-token {
+      transform: translateX(-50%);
+      transition: transform 0.15s ease-out, filter 0.15s ease-out;
+    }
+    .avatar-token:hover {
+      transform: translateX(-50%) scale(1.18);
+      z-index: 50 !important;
+    }
+    .avatar-token .token-tooltip {
+      display: none;
+    }
+    .avatar-token:hover .token-tooltip {
+      display: flex;
+    }
+
+    /* Cinema Screening Hub card & token styles */
+    .card-surface {
+      background-color: #12151b;
+      border: 1px solid #1c222c;
+    }
+    .card-inner-surface {
+      background-color: #0b0d11;
+      border: 1px solid #1a202a;
+    }
+
+    /* Pencil Toolbar */
+    .wax {
+      position: absolute;
+      bottom: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      height: 34px;
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      padding: 0 13px;
+      border-radius: 7px;
+      border: 1px solid #40505a;
+      background: #111922f0;
+      white-space: nowrap;
+      color: #c8d2d7;
+      font-size: 11px;
+      z-index: 20;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(8px);
+    }
+    .wax b { font-weight: 690; margin-right: 1px; color: #f0f2f3; }
+    .swatch {
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      background: var(--c);
+      display: inline-block;
+      border: none;
+      cursor: pointer;
+      padding: 0;
+      transition: transform 0.15s ease, outline 0.15s ease;
+    }
+    .swatch:hover { transform: scale(1.18); }
+    .swatch.sel {
+      outline: 2px solid var(--c);
+      outline-offset: 3px;
+      box-shadow: 0 0 10px var(--c);
+    }
+    .wax .divide { height: 17px; width: 1px; background: #3d4950; margin: 0 1px; }
+    .wax .clear {
+      color: #aeb9bf;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      font-size: 11px;
+      font-family: inherit;
+      padding: 0;
+      transition: color 0.15s ease;
+    }
+    .wax .clear:hover { color: #ef5266; }
+
+    /* Cue item & sheet styling */
+    .cue-item {
+      position: relative;
+      border-bottom: 1px solid #27323e;
+      transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .cue-item.selected {
+      border-color: #70523c !important;
+      background: #201b1b !important;
+      box-shadow: 0 0 0 1px #70523c, 0 4px 12px rgba(0,0,0,0.5) !important;
+    }
+    .cue-dot {
+      background-color: var(--c);
+    }
+    .cue-item.selected .cue-dot {
+      box-shadow: 0 0 0 3px #57373d;
+    }
+    .avatar-emoji {
+      font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+      font-size: 17px;
+      line-height: 1;
+      filter: none;
+    }
+    .tiny-avatar {
+      font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+      font-size: 13px;
+      line-height: 1;
+    }
+
+    /* Clarify + Layout + Distill Setup Styling */
+    #onboardingScreen {
+      min-height: 100vh;
+      background: radial-gradient(ellipse 75% 55% at 50% -20%, #18202b 0%, transparent 72%), #0b0d11;
+      color: #e8e9ec;
+      overflow-y: auto;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .setup-shell {
+      width: 100%;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .setup-main {
+      width: 100%;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 48px 40px 72px;
+      box-sizing: border-box;
+    }
+    .eyebrow {
+      font: 600 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: .17em;
+      color: #c6a45f;
+      text-transform: uppercase;
+      margin: 0 0 11px;
+    }
+    .intro {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 28px;
+      margin-bottom: 32px;
+    }
+    .intro h1 {
+      font-size: 34px;
+      line-height: 1.1;
+      letter-spacing: -.04em;
+      font-weight: 660;
+      color: #f5f5f2;
+      margin: 0 0 9px;
+    }
+    .intro p {
+      font-size: 14px;
+      line-height: 1.5;
+      color: #969eaa;
+      margin: 0;
+    }
+    .intro-note {
+      color: #737d89;
+      font-size: 12px;
+      max-width: 250px;
+      text-align: right;
+      line-height: 1.45;
+    }
+    .work {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(420px, .9fr);
+      gap: 18px;
+      align-items: stretch;
+    }
+    .panel {
+      background: #13171d;
+      border: 1px solid #29303a;
+      border-radius: 12px;
+      padding: 25px;
+      box-shadow: 0 16px 28px rgba(0, 0, 0, 0.2);
+      display: flex;
+      flex-direction: column;
+      box-sizing: border-box;
+    }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 19px;
+    }
+    .step {
+      font: 600 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #d4b36b;
+      background: #29281f;
+      border: 1px solid #514733;
+      border-radius: 5px;
+      padding: 6px 7px;
+      white-space: nowrap;
+    }
+    .panel-head h2 {
+      font-size: 17px;
+      letter-spacing: -.015em;
+      margin: 0;
+      font-weight: 620;
+      color: #f2f3f5;
+    }
+    .panel-head p {
+      font-size: 12px;
+      color: #85909d;
+      margin: 3px 0 0;
+    }
+    .method {
+      display: flex;
+      background: #0c0f14;
+      border: 1px solid #282f38;
+      border-radius: 7px;
+      padding: 3px;
+      gap: 2px;
+      width: max-content;
+      max-width: 100%;
+      margin-bottom: 16px;
+    }
+    .method button, .role button {
+      padding: 8px 15px;
+      font-size: 12px;
+      color: #89939f;
+      border-radius: 5px;
+      white-space: nowrap;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      font-family: inherit;
+      transition: all 0.15s ease;
+    }
+    .method button.selected, .role button.selected {
+      color: #f3f4f6;
+      background: #303845;
+      font-weight: 650;
+    }
+    .method button:focus-visible, .role button:focus-visible {
+      outline: 2px solid #d4b36b;
+      outline-offset: 1px;
+    }
+    .dropzone {
+      height: 296px;
+      border: 1px dashed #46515e;
+      background: #0d1117;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      text-align: center;
+      padding: 24px;
+      cursor: pointer;
+      transition: border-color 0.2s, background-color 0.2s;
+      box-sizing: border-box;
+      outline: none;
+    }
+    .dropzone:hover, .dropzone:focus-visible, .dropzone.drag-active {
+      border-color: #d7b773;
+      background: #10151e;
+    }
+    .dropzone:focus-visible {
+      box-shadow: 0 0 0 2px rgba(212, 179, 107, 0.35);
+    }
+    .upload {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      border: 1px solid #3d4652;
+      background: #1a222c;
+      color: #d5bc7c;
+      font-size: 21px;
+      margin-bottom: 17px;
+    }
+    .dropzone strong {
+      font-size: 16px;
+      font-weight: 650;
+      color: #f5f5f2;
+      max-width: 90%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .dropzone small {
+      font-size: 12px;
+      color: #8c96a4;
+      line-height: 1.5;
+      margin-top: 7px;
+    }
+    .dropzone .browse {
+      font-size: 12px;
+      font-weight: 650;
+      color: #d7b773;
+      margin-top: 17px;
+    }
+    .helper {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-top: 14px;
+      color: #85909d;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+    .helper b {
+      font-weight: 550;
+      color: #a6afba;
+    }
+    .role {
+      display: flex;
+      background: #0c0f14;
+      border: 1px solid #282f38;
+      border-radius: 7px;
+      padding: 3px;
+      gap: 2px;
+      width: 100%;
+      margin-bottom: 18px;
+    }
+    .role button {
+      flex: 1;
+      text-align: center;
+    }
+    .fields {
+      display: grid;
+      grid-template-columns: 1fr 1.25fr;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .field label, .token-label {
+      display: block;
+      margin-bottom: 7px;
+      color: #9ca5b1;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .input-box {
+      height: 42px;
+      border: 1px solid #303844;
+      background: #0b0e13;
+      border-radius: 7px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      color: #eff1f4;
+      font-size: 13px;
+      box-sizing: border-box;
+      width: 100%;
+    }
+    .input-box.code-box {
+      font: 650 16px ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: .08em;
+    }
+    .input-box input {
+      height: 100%;
+      width: 100%;
+      background: transparent;
+      border: none;
+      color: #eff1f4;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+    }
+    .input-box input::placeholder {
+      color: #556170;
+    }
+    .input-box:focus-within {
+      border-color: #d1a653;
+      box-shadow: 0 0 0 1px rgba(209, 166, 83, 0.35);
+    }
+    .input-box .copy {
+      font: 500 11px Inter, -apple-system, sans-serif;
+      letter-spacing: 0;
+      color: #c2aa75;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      padding: 2px 4px;
+      white-space: nowrap;
+    }
+    .input-box .copy:hover {
+      color: #eeddb7;
+    }
+    .avatar-preview-badge {
+      font-size: 17px;
+      background: #1d2530;
+      border: 1px solid #3b4755;
+      border-radius: 5px;
+      padding: 2px 4px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+      flex-shrink: 0;
+    }
+    .token-sub {
+      font-size: 11px;
+      color: #7f8995;
+      margin-left: 6px;
+      font-weight: 400;
+    }
+    .tokens {
+      display: grid;
+      grid-template-columns: repeat(10, minmax(0, 1fr));
+      gap: 5px;
+      margin-top: 9px;
+    }
+    .token-btn {
+      height: 35px;
+      border: 1px solid #303743;
+      border-radius: 6px;
+      background: #1b2029;
+      display: grid;
+      place-items: center;
+      font-size: 17px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      outline: none;
+      padding: 0;
+    }
+    .token-btn:hover {
+      border-color: #4f5a6b;
+      background: #242c38;
+      transform: translateY(-1px);
+    }
+    .token-btn.selected {
+      border-color: #d1a653 !important;
+      background: #393025 !important;
+      box-shadow: 0 0 0 1px rgba(209, 166, 83, 0.35) !important;
+      transform: scale(1.05);
+    }
+    .token-btn:focus-visible {
+      outline: 2px solid #d4b36b;
+      outline-offset: 1px;
+    }
+    .launch {
+      border-top: 1px solid #2b313a;
+      margin-top: 20px;
+      padding-top: 18px;
+    }
+    .primary {
+      width: 100%;
+      height: 43px;
+      background: #e2e5e9;
+      border: 0;
+      border-radius: 7px;
+      color: #11151a;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.15s ease, transform 0.1s ease;
+      font-family: inherit;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .primary:hover {
+      background: #ffffff;
+    }
+    .primary:active {
+      background: #d0d4da;
+      transform: scale(0.99);
+    }
+    .primary:focus-visible {
+      outline: 2px solid #d4b36b;
+      outline-offset: 2px;
+    }
+    .launch-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .launch-foot span {
+      font-size: 11px;
+      color: #89939f;
+    }
+    .projector {
+      color: #d6b873;
+      font-size: 11px;
+      border: 0;
+      background: transparent;
+      padding: 4px 0;
+      cursor: pointer;
+      font-family: inherit;
+      white-space: nowrap;
+      transition: color 0.15s ease;
+    }
+    .projector:hover {
+      color: #eeddb7;
+      text-decoration: underline;
+    }
+    .projector:focus-visible {
+      outline: 2px solid #d4b36b;
+      outline-offset: 2px;
+    }
+    .recent {
+      margin-top: 34px;
+    }
+    .recent-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      border-bottom: 1px solid #29303a;
+      padding-bottom: 12px;
+      margin-bottom: 13px;
+    }
+    .recent h2 {
+      font-size: 15px;
+      margin: 0;
+      font-weight: 620;
+      color: #f2f3f5;
+    }
+    .recent-head span {
+      font-size: 11px;
+      color: #818c99;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .recent-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .recent-item {
+      border: 1px solid #29303a;
+      background: #12161c;
+      border-radius: 8px;
+      padding: 13px 15px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      cursor: pointer;
+      transition: border-color 0.15s, background-color 0.15s;
+      outline: none;
+      min-width: 0;
+      width: 100%;
+      text-align: left;
+      overflow: hidden;
+    }
+    .recent-item:hover, .recent-item:focus-visible {
+      border-color: #3b4452;
+      background: #161b22;
+    }
+    .recent-item:focus-visible {
+      box-shadow: 0 0 0 1px #d1a653;
+    }
+    .recent-item-info,
+    .recent-item > div {
+      min-width: 0;
+      flex: 1 1 0%;
+      overflow: hidden;
+    }
+    .recent-item strong {
+      display: block;
+      font-size: 12px;
+      font-weight: 580;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: #eff1f4;
+      min-width: 0;
+      max-width: 100%;
+    }
+    .recent-item small {
+      display: block;
+      font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #84909d;
+      margin-top: 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+      max-width: 100%;
+    }
+    .recent-item .arrow {
+      color: #8f9aa7;
+      font-size: 13px;
+      flex-shrink: 0;
+      transition: transform 0.15s ease;
+    }
+    .recent-item:hover .arrow {
+      transform: translate(2px, -2px);
+      color: #d7b773;
+    }
+    .recent-empty {
+      grid-column: 1 / -1;
+      border: 1px dashed #282f38;
+      background: #0e1116;
+      border-radius: 8px;
+      padding: 24px;
+      text-align: center;
+      color: #84909d;
+    }
+    .recent-empty p {
+      margin: 0 0 6px;
+      font-size: 13px;
+      font-weight: 500;
+      color: #cbd5e1;
+    }
+    .recent-empty small {
+      font-size: 11px;
+      color: #64748b;
+    }
+
+    @media (max-width: 900px) {
+      .setup-main { padding: 32px 24px 48px; }
+      .intro-note { display: none; }
+      .work { grid-template-columns: 1fr; }
+      .dropzone { height: 230px; }
+      .recent-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 600px) {
+      .setup-main { padding: 24px 16px 40px; }
+      .intro { margin-bottom: 24px; }
+      .intro h1 { font-size: 28px; }
+      .intro p { font-size: 13px; }
+      .panel { padding: 18px 16px; border-radius: 10px; }
+      .panel-head h2 { font-size: 16px; }
+      .dropzone { height: 210px; padding: 16px; }
+      .work { gap: 14px; }
+      .fields { grid-template-columns: 1fr 1.2fr; gap: 8px; }
+      .tokens { grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 3px; }
+      .token-btn { height: 30px; font-size: 15px; }
+      .launch-foot { flex-direction: column; align-items: flex-start; gap: 8px; }
+      .recent { margin-top: 28px; }
+      .recent-grid { grid-template-columns: 1fr; }
+      .helper { flex-direction: column; align-items: flex-start; gap: 4px; }
+    }
+
+    /* Embedded mode overrides (Single EDITMAP header) */
+    body.is-embedded #duetConsoleHeader {
+      display: none !important;
+    }
+    body.is-embedded #screeningModeOverlay {
+      top: 0 !important;
+    }
+
+    /* Legible dark cinema shortcuts legend */
+    .shortcuts-legend {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      margin-top: 24px;
+      color: #94a3b8;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+    }
+    .shortcuts-legend kbd {
+      margin-right: 3px;
+      padding: 3px 6px;
+      border: 1px solid #334155;
+      border-radius: 4px;
+      background: #1e293b;
+      color: #e2e8f0;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 500;
+    }
+    .shortcuts-sep {
+      color: #475569;
+    }
+  </style>
+</head>
+<body class="text-slate-200 font-sans antialiased h-screen flex flex-col select-none overflow-hidden text-xs">
+
+  <!-- ============================================== -->
+  <!-- SCREEN 1: ONBOARDING & SETUP DIALOG            -->
+  <!-- ============================================== -->
+  <div id="onboardingScreen" class="fixed inset-0 z-50 overflow-y-auto">
+    <div class="setup-shell">
+      <main class="setup-main">
+        <div class="intro">
+          <div>
+            <p class="eyebrow">DUET · Screening hub</p>
+            <h1>Screen a cut together.</h1>
+            <p>Choose a film and set up the room before you begin.</p>
+          </div>
+          <div class="flex items-center gap-3">
+            <button type="button" id="btnCancelChangeFilm" onclick="cancelChangeFilm()" class="hidden px-3.5 py-1.5 rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-slate-300 font-mono text-xs transition flex items-center gap-1.5 cursor-pointer" title="Cancel and return to current screening session">
+              <span>←</span> <span>Cancel (Return to film)</span>
+            </button>
+            <div class="intro-note">Your film, reactions, and review tools stay in one workspace.</div>
+          </div>
+        </div>
+
+        <div class="work">
+          <!-- PANEL 1: CHOOSE THE CUT -->
+          <section class="panel">
+            <div class="panel-head">
+              <span class="step">01 / 02</span>
+              <div>
+                <h2>Choose the cut</h2>
+                <p>Select the video everyone will watch.</p>
+              </div>
+            </div>
+
+            <!-- Method Switch -->
+            <div class="method" role="tablist" aria-label="Video selection method">
+              <button type="button" id="tabLocalFile" role="tab" aria-selected="true" class="selected" onclick="setVideoMethod('local')">Local file</button>
+              <button type="button" id="tabWifiTransfer" role="tab" aria-selected="false" onclick="setVideoMethod('wifi')">Wi‑Fi transfer</button>
+            </div>
+
+            <!-- Local Dropzone Box -->
+            <div id="methodLocalBox" class="flex-1 flex flex-col">
+              <div id="dropzoneBox" onclick="document.getElementById('videoFileInput').click()"
+                   onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();document.getElementById('videoFileInput').click();}"
+                   tabindex="0" role="button" aria-label="Choose a video from this Mac"
+                   class="dropzone group">
+                <span class="upload" aria-hidden="true">↥</span>
+                <strong id="fileNameLabel">Drop a video here</strong>
+                <small id="fileNameSub">Or choose a file from this Mac.</small>
+                <span class="browse">Browse files →</span>
+                <input type="file" id="videoFileInput" accept="video/*" class="hidden" onchange="handleLocalFileSelect(event)">
+              </div>
+            </div>
+
+            <!-- Wi-Fi Transfer Box (hidden initially) -->
+            <div id="methodWifiBox" class="hidden flex-1 flex flex-col">
+              <div onclick="document.getElementById('wifiFileInput').click()"
+                   onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();document.getElementById('wifiFileInput').click();}"
+                   tabindex="0" role="button" aria-label="Share cut across Wi-Fi network"
+                   class="dropzone group wifi-dropzone">
+                <span class="upload" aria-hidden="true">📡</span>
+                <strong id="wifiFileLabel">Share cut across Wi-Fi network</strong>
+                <small id="wifiFileSub">Pre-loads automatically on room laptops before playback.</small>
+                <span class="browse">Browse files to share →</span>
+                <input type="file" id="wifiFileInput" accept="video/*" class="hidden" onchange="handleWifiFileSelect(event)">
+              </div>
+
+              <div id="uploadProgressBarContainer" class="hidden p-3 mt-2 rounded-xl bg-black border border-[#1d212b] flex flex-col gap-1.5">
+                <div class="flex items-center justify-between text-[11px] font-mono">
+                  <span id="uploadStatusText" class="text-slate-300">Sending cut across Wi-Fi...</span>
+                  <span id="uploadPercentText" class="text-emerald-400 font-bold">0%</span>
+                </div>
+                <div class="w-full h-2 bg-slate-900 rounded-full overflow-hidden">
+                  <div id="uploadProgressFill" class="h-full bg-emerald-500 transition-all duration-150" style="width: 0%;"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Helper Line -->
+            <div class="helper">
+              <span id="transferDescLabel"><b>Local file:</b> use the video on this Mac.</span>
+              <span id="transferQualityLabel">Full quality · No transfer wait</span>
+            </div>
+          </section>
+
+          <!-- PANEL 2: SET UP THE ROOM -->
+          <section class="panel">
+            <div class="panel-head">
+              <span class="step">02 / 02</span>
+              <div>
+                <h2>Set up the room</h2>
+                <p>Choose how you’ll take part.</p>
+              </div>
+            </div>
+
+            <!-- Role Switch -->
+            <div class="role" role="tablist" aria-label="Room role">
+              <button type="button" id="roleHostCard" role="tab" aria-selected="true" class="selected" onclick="selectRole('host')">Host</button>
+              <button type="button" id="roleJoinCard" role="tab" aria-selected="false" onclick="selectRole('student')">Join</button>
+            </div>
+
+            <!-- Fields: Room Code & Your Name -->
+            <div class="fields">
+              <div class="field">
+                <label id="labelRoomCode" for="inputRoomCode">Room code</label>
+                <!-- Host View -->
+                <div id="roomCodeHostBox" class="input-box code-box">
+                  <span id="displayRoomCode">----</span>
+                  <button type="button" class="copy" onclick="copyRoomCode()" title="Copy room code">
+                    <span id="copyCodeText">Copy</span>
+                  </button>
+                </div>
+                <!-- Join View -->
+                <input type="text" id="inputRoomCode" placeholder="Enter 4-digit code (e.g. 9503)" maxlength="6"
+                       class="input-box code-box hidden" aria-label="Enter room code">
+              </div>
+
+              <div class="field">
+                <label for="inputUserName">Your name</label>
+                <div class="input-box">
+                  <input type="text" id="inputUserName" value="Alex" placeholder="Your name" aria-label="Your name">
+                  <span id="selectedAvatarPreview" class="avatar-preview-badge" aria-hidden="true">🎬</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Character Token Selection -->
+            <div class="token-label">
+              Character token <span class="token-sub">Your marker in the room</span>
+            </div>
+            <div class="tokens" aria-label="Twenty character tokens" role="radiogroup">
+              <button type="button" onclick="pickAvatar('🎬')" class="token-btn selected" role="radio" aria-checked="true" aria-label="Clapperboard">🎬</button>
+              <button type="button" onclick="pickAvatar('🎥')" class="token-btn" role="radio" aria-checked="false" aria-label="Movie camera">🎥</button>
+              <button type="button" onclick="pickAvatar('🎞️')" class="token-btn" role="radio" aria-checked="false" aria-label="Film frames">🎞️</button>
+              <button type="button" onclick="pickAvatar('🍿')" class="token-btn" role="radio" aria-checked="false" aria-label="Popcorn">🍿</button>
+              <button type="button" onclick="pickAvatar('✂️')" class="token-btn" role="radio" aria-checked="false" aria-label="Scissors">✂️</button>
+              <button type="button" onclick="pickAvatar('👁️')" class="token-btn" role="radio" aria-checked="false" aria-label="Eye">👁️</button>
+              <button type="button" onclick="pickAvatar('🎭')" class="token-btn" role="radio" aria-checked="false" aria-label="Theater masks">🎭</button>
+              <button type="button" onclick="pickAvatar('🎨')" class="token-btn" role="radio" aria-checked="false" aria-label="Artist palette">🎨</button>
+              <button type="button" onclick="pickAvatar('🎧')" class="token-btn" role="radio" aria-checked="false" aria-label="Headphones">🎧</button>
+              <button type="button" onclick="pickAvatar('🎙️')" class="token-btn" role="radio" aria-checked="false" aria-label="Microphone">🎙️</button>
+              <button type="button" onclick="pickAvatar('⚡')" class="token-btn" role="radio" aria-checked="false" aria-label="Lightning">⚡</button>
+              <button type="button" onclick="pickAvatar('🦊')" class="token-btn" role="radio" aria-checked="false" aria-label="Fox">🦊</button>
+              <button type="button" onclick="pickAvatar('🦁')" class="token-btn" role="radio" aria-checked="false" aria-label="Lion">🦁</button>
+              <button type="button" onclick="pickAvatar('🦉')" class="token-btn" role="radio" aria-checked="false" aria-label="Owl">🦉</button>
+              <button type="button" onclick="pickAvatar('🚀')" class="token-btn" role="radio" aria-checked="false" aria-label="Rocket">🚀</button>
+              <button type="button" onclick="pickAvatar('🎓')" class="token-btn" role="radio" aria-checked="false" aria-label="Graduation cap">🎓</button>
+              <button type="button" onclick="pickAvatar('☕')" class="token-btn" role="radio" aria-checked="false" aria-label="Coffee">☕</button>
+              <button type="button" onclick="pickAvatar('🔥')" class="token-btn" role="radio" aria-checked="false" aria-label="Fire">🔥</button>
+              <button type="button" onclick="pickAvatar('💡')" class="token-btn" role="radio" aria-checked="false" aria-label="Light bulb">💡</button>
+              <button type="button" onclick="pickAvatar('⭐')" class="token-btn" role="radio" aria-checked="false" aria-label="Star">⭐</button>
+            </div>
+
+            <!-- Launch Area -->
+            <div class="launch">
+              <button type="button" id="btnEnterRoom" class="primary" onclick="enterScreeningRoom()">
+                <span id="btnEnterRoomText">Enter screening room</span>
+                <span id="btnEnterRoomIcon" aria-hidden="true">→</span>
+              </button>
+              <div class="launch-foot">
+                <span id="roleNotice">Host controls playback for the room.</span>
+                <button type="button" id="btnProjectorLaunch" class="projector" onclick="openProjectorWindow()">Open projector display ↗</button>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- RECENT PROJECTS SECTION -->
+        <section class="recent">
+          <div class="recent-head">
+            <h2>Recent projects</h2>
+            <span id="recentProjectsCount">0 saved projects</span>
+          </div>
+          <div id="recentProjectsGrid" class="recent-grid">
+            <!-- Populated dynamically by loadRecentProjects() -->
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ============================================== -->
+  <!-- TOP CONSOLE BAR (Distilled Cinema Header)      -->
+  <!-- ============================================== -->
+  <header id="duetConsoleHeader" class="hidden h-14 border-b theater-border theater-panel px-5 flex items-center justify-between z-50 relative flex-shrink-0 bg-[#0e1218]">
+    
+    <!-- LEFT: BRAND & CUT INFO & CONNECTED STATUS -->
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-lg bg-[#e2e8f0] text-[#0c0e12] flex items-center justify-center font-bold font-mono text-xs select-none shadow-sm">
+        D
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="font-bold tracking-wider text-white text-xs uppercase">DUET</span>
+        <span class="text-slate-600">•</span>
+        <span class="text-xs font-medium text-slate-300 truncate max-w-xs font-mono" id="headerCutName">
+          Cut: No video loaded
+        </span>
+      </div>
+      <div class="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-900 border theater-border text-[11px] text-slate-300 ml-1">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span class="font-mono font-bold text-emerald-400" id="connectedCountBadge">1</span>
+        <span>Active</span>
+      </div>
+      <!-- Background Full Scan Live Badge -->
+      <div id="duetScanBadge" class="hidden items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-950/70 border border-amber-600/40 text-[11px] text-amber-300 ml-1 transition-all">
+        <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+        <span id="duetScanBadgeText" class="font-mono">Background scan active...</span>
+      </div>
+    </div>
+
+    <!-- CENTER: MODE TOGGLE (SCREENING VS REVIEW) -->
+    <div class="bg-[#090b0e] p-0.5 rounded-lg border border-[#1b222d] flex text-xs font-mono">
+      <button id="navBtnScreening" onclick="setMode('screening')" class="px-3.5 py-1 rounded text-slate-400 hover:text-slate-200 transition flex items-center gap-1.5">
+        <span>🎬</span>
+        <span>Dark Screening</span>
+      </button>
+      <button id="navBtnReview" onclick="setMode('review')" class="px-3.5 py-1 rounded bg-amber-400 text-slate-950 font-bold shadow transition flex items-center gap-1.5">
+        <span>🔍</span>
+        <span>Review Mode</span>
+      </button>
+    </div>
+
+    <!-- RIGHT: PROJECTOR SHORTCUT, EXPORT EDL & RETURN TO STUDIO -->
+    <div class="flex items-center gap-2.5">
+      <!-- Projector Shortcut -->
+      <button onclick="openProjectorWindow()" class="h-8 px-2.5 rounded-lg bg-[#141822] hover:bg-[#1e2634] border border-[#232c3a] text-slate-300 hover:text-white font-mono text-[11px] flex items-center gap-1.5 transition" title="Launch clean cinema feed for TV / Projector">
+        <span>📽️</span>
+        <span class="hidden sm:inline">Projector</span>
+      </button>
+
+      <!-- Export EDL (Clean secondary button) -->
+      <button onclick="exportToResolve()" class="h-8 px-3 rounded-lg bg-[#151f1a] hover:bg-[#1c2d25] border border-emerald-800/60 text-emerald-400 hover:text-emerald-300 font-medium text-xs flex items-center gap-1.5 transition" title="Export markers to DaVinci Resolve EDL">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+        <span class="hidden sm:inline">Export .EDL</span>
+      </button>
+
+      <!-- Inspect in Studio -->
+      <button onclick="inspectInStudio()" class="h-8 px-3 rounded-lg bg-[#e5a93c]/15 hover:bg-[#e5a93c]/25 border border-[#e5a93c]/40 text-[#e5a93c] font-bold font-mono text-xs flex items-center gap-1.5 transition cursor-pointer" title="Inspect current cut & markers in EditMap Studio">
+        <span>Studio &rarr;</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- ============================================== -->
+  <!-- SCREEN 2: DARK THEATER SCREENING MODE          -->
+  <!-- ============================================== -->
+  <!-- Strict Darkness: Zero avatars, zero timeline, zero heatmaps while viewing -->
+  <div id="screeningModeOverlay" class="hidden fixed inset-0 top-14 z-40 bg-[#060709] flex flex-col items-center justify-center p-6">
+    
+    <!-- Subtle tactile confirmation flash (corner only, non-distracting) -->
+    <div id="silentFlashBadge" class="hidden absolute top-6 right-6 px-3 py-1 rounded bg-black/90 border border-slate-800 text-[11px] font-mono text-slate-400 flex items-center gap-2 transition">
+      <span id="silentFlashDot" class="w-2 h-2 rounded-full bg-amber-400"></span>
+      <span id="silentFlashText">Logged (-12 frames)</span>
+    </div>
+
+    <div class="text-center max-w-xl w-full">
+      <h1 id="screeningHeading" class="text-slate-200 font-semibold text-3xl tracking-tight">Ready to screen</h1>
+      <p id="screeningLead" class="text-slate-400 text-sm mt-2 mb-8">Screen dimmed for the theater. Use keys 1–4 to mark reactions.</p>
+
+      <!-- Blind Keypad Panel (1, 2, 3, 4 + Space) -->
+      <div class="p-6 rounded-2xl bg-black border border-slate-900 text-left shadow-2xl">
+        <div class="flex items-center justify-between text-xs font-mono mb-3.5">
+          <strong class="uppercase tracking-widest text-slate-400 font-bold">Blind Keys</strong>
+          <span class="text-slate-500">Reaction auto-offset <b class="text-amber-400 font-bold">−12 frames</b></span>
+        </div>
+        <div class="grid grid-cols-4 gap-3 text-center">
+          <div id="darkKeyBox1" onclick="dropReactionMarker('1')" class="h-24 flex items-center justify-center gap-3.5 rounded-lg bg-[#101619] border border-[#334047] text-rose-400 cursor-pointer hover:border-rose-500 hover:bg-rose-950/20 transition select-none" role="button" aria-label="Drop reaction marker 1">
+            <span class="font-bold text-3xl font-mono text-[#eff2f0]">1</span>
+            <span class="w-2.5 h-2.5 rounded-full bg-[#ef5578]"></span>
+          </div>
+          <div id="darkKeyBox2" onclick="dropReactionMarker('2')" class="h-24 flex items-center justify-center gap-3.5 rounded-lg bg-[#101619] border border-[#334047] text-amber-400 cursor-pointer hover:border-amber-500 hover:bg-amber-950/20 transition select-none" role="button" aria-label="Drop reaction marker 2">
+            <span class="font-bold text-3xl font-mono text-[#eff2f0]">2</span>
+            <span class="w-2.5 h-2.5 rounded-full bg-[#efbb4a]"></span>
+          </div>
+          <div id="darkKeyBox3" onclick="dropReactionMarker('3')" class="h-24 flex items-center justify-center gap-3.5 rounded-lg bg-[#101619] border border-[#334047] text-emerald-400 cursor-pointer hover:border-emerald-500 hover:bg-emerald-950/20 transition select-none" role="button" aria-label="Drop reaction marker 3">
+            <span class="font-bold text-3xl font-mono text-[#eff2f0]">3</span>
+            <span class="w-2.5 h-2.5 rounded-full bg-[#47cda0]"></span>
+          </div>
+          <div id="darkKeyBox4" onclick="dropReactionMarker('4')" class="h-24 flex items-center justify-center gap-3.5 rounded-lg bg-[#101619] border border-[#334047] text-cyan-400 cursor-pointer hover:border-cyan-500 hover:bg-cyan-950/20 transition select-none" role="button" aria-label="Drop reaction marker 4">
+            <span class="font-bold text-3xl font-mono text-[#eff2f0]">4</span>
+            <span class="w-2.5 h-2.5 rounded-full bg-[#46cde0]"></span>
+          </div>
+        </div>
+
+        <!-- OPTION A: INTEGRATED TRANSPORT SCRUBBER -->
+        <div class="mt-5 pt-4 border-t border-slate-900/90 flex flex-col gap-2.5">
+          <div class="flex items-center justify-between text-xs font-mono">
+            <div class="flex items-center gap-2">
+              <span id="screeningPlayStateDot" class="w-2 h-2 rounded-full bg-slate-600 transition"></span>
+              <span id="screeningCurrentTc" class="text-amber-400 font-bold tracking-wider text-base">00:00:00:00</span>
+            </div>
+            <span id="screeningDurationTc" class="text-slate-400 text-xs font-mono">00:00:00:00</span>
+          </div>
+
+          <!-- Scrubber Track with Live Reaction Pips -->
+          <div class="relative w-full flex items-center h-5">
+            <div class="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 bg-[#37434a] rounded-full overflow-hidden pointer-events-none">
+              <div id="screeningScrubFill" class="h-full bg-amber-500/80 rounded-full transition-all duration-75" style="width: 0%;"></div>
+            </div>
+            <div id="screeningMarkerPips" class="absolute inset-0 pointer-events-none"></div>
+
+            <input id="screeningScrubRange" type="range" min="0" max="100" value="0" step="0.05"
+                   class="w-full h-5 opacity-0 z-10 cursor-pointer" />
+          </div>
+
+          <!-- Transport Buttons -->
+          <div class="flex items-center justify-center gap-2.5 pt-1">
+            <button type="button" onclick="stepSecondsScreening(-5)" class="h-10 px-3.5 rounded-lg bg-[#151d22] hover:bg-[#1a252b] border border-[#3a474c] text-slate-300 hover:text-white text-xs font-bold font-mono transition flex items-center gap-1 active:scale-95" title="Rewind 5 seconds (Shift+Left)">
+              <span>&laquo;</span> <span>−5s</span>
+            </button>
+            <button type="button" id="btnScreeningPlay" onclick="togglePlay()" class="h-10 px-6 rounded-lg bg-[#edbd58] hover:bg-[#f3ca6e] text-[#17170f] font-mono font-bold text-sm shadow transition flex items-center gap-2 active:scale-95">
+              <span id="screeningPlayIcon">▶</span>
+              <span id="screeningPlayText">Play <small class="text-xs font-normal opacity-70">SPACE</small></span>
+            </button>
+            <button type="button" onclick="stepSecondsScreening(5)" class="h-10 px-3.5 rounded-lg bg-[#151d22] hover:bg-[#1a252b] border border-[#3a474c] text-slate-300 hover:text-white text-xs font-bold font-mono transition flex items-center gap-1 active:scale-95" title="Forward 5 seconds (Shift+Right)">
+              <span>+5s</span> <span>&raquo;</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="shortcuts-legend">
+          <span><kbd>Space</kbd> play / pause</span>
+          <span class="shortcuts-sep">·</span>
+          <span><kbd>←</kbd><kbd>→</kbd> frame step</span>
+          <span class="shortcuts-sep">·</span>
+          <span><kbd>Shift</kbd> + arrows ±5s</span>
+          <span class="shortcuts-sep">·</span>
+          <span><kbd>Esc</kbd> review</span>
+        </div>
+      </div>
+
+      <button onclick="setMode('review')" class="mt-8 px-6 py-2.5 rounded-lg bg-transparent hover:bg-slate-900/60 border border-slate-700/60 hover:border-slate-500 text-slate-300 text-xs font-mono font-medium transition flex items-center gap-2 mx-auto">
+        <span>Stop Screening & Turn On Review Lights</span> <span class="text-amber-400">→</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ============================================== -->
+  <!-- SCREEN 3: MAIN REVIEW CONSOLE (The Lights On!) -->
+  <!-- ============================================== -->
+  <main id="reviewWorkspace" class="flex-1 min-h-0 flex overflow-hidden">
+
+    <!-- LEFT STAGE: Cinema Viewer + Audience Pulse Timeline -->
+    <div class="flex-1 min-h-0 flex flex-col p-4 overflow-hidden border-r theater-border">
+      
+      <!-- CINEMA VIEWER (Native Video Player + Pencil Toolbar) -->
+      <div class="relative flex-1 min-h-0 bg-black rounded-xl overflow-hidden border theater-border flex items-center justify-center shadow-2xl">
+        <video id="mainVideoPlayer" class="w-full h-full object-contain pointer-events-none" preload="auto" playsinline></video>
+
+        <!-- Grease-Pencil Drawing Canvas Layer -->
+        <canvas id="waxCanvas" class="absolute inset-0 w-full h-full cursor-crosshair z-10"></canvas>
+
+        <!-- Floating Pencil Toolbar -->
+        <div class="wax" id="pencilToolbar">
+          <b>Pencil</b>
+          <button type="button" class="swatch" data-color="#ef5266" style="--c:#ef5266;" onclick="setWaxColor('#ef5266')" title="Rose" aria-label="Rose pencil"></button>
+          <button type="button" class="swatch sel" data-color="#f3bb40" style="--c:#f3bb40;" onclick="setWaxColor('#f3bb40')" title="Amber" aria-label="Amber pencil"></button>
+          <button type="button" class="swatch" data-color="#39c99d" style="--c:#39c99d;" onclick="setWaxColor('#39c99d')" title="Green" aria-label="Green pencil"></button>
+          <button type="button" class="swatch" data-color="#39cbe2" style="--c:#39cbe2;" onclick="setWaxColor('#39cbe2')" title="Cyan" aria-label="Cyan pencil"></button>
+          <span class="divide"></span>
+          <button type="button" class="clear" onclick="clearWaxCanvas()" title="Clear">Clear</button>
+        </div>
+      </div>
+
+      <!-- ============================================== -->
+      <!-- THE AUDIENCE PULSE & AVATAR TIMELINE           -->
+      <!-- ============================================== -->
+      <!-- Only revealed here in Review Mode! -->
+      <div class="mt-3 theater-panel border theater-border rounded-xl p-3 flex flex-col gap-2 flex-shrink-0">
+        
+        <!-- Timeline Header: Timecode beside the timeline -->
+        <div class="flex items-center justify-end text-xs mb-1">
+          <div class="font-mono text-slate-400 text-xs">
+            <strong id="currentTimecodeLabel" class="text-slate-100 font-bold">00:00:00:00</strong> / <span id="durationTimecodeLabel">00:00:00:00</span>
+          </div>
+        </div>
+
+        <!-- The Scrubber Bar with Heatmap Glow & Avatar Tokens -->
+        <div class="relative w-full h-24 bg-black/80 rounded-xl border border-slate-800/90 flex flex-col justify-end pb-3 pt-1 overflow-visible select-none cursor-ew-resize shadow-inner group/timeline"
+             id="timelineContainer">
+          
+          <!-- Heatmap Glow Containers (Injected dynamically) -->
+          <div id="heatmapGlowLayer" class="absolute inset-0 pointer-events-none overflow-hidden rounded-xl"></div>
+
+          <!-- Waveform Canvas Layer (Audio peaks & dialogue envelope) -->
+          <canvas id="waveformCanvas" class="absolute inset-0 w-full h-full pointer-events-none rounded-xl z-[2]"></canvas>
+
+          <!-- Waveform Status Indicator (Honest loading / unavailable status) -->
+          <div id="waveformStatus" class="hidden absolute top-2 right-3 z-10 font-mono text-[9px] px-2.5 py-0.5 rounded-md bg-black/85 backdrop-blur border border-slate-800 text-slate-300 pointer-events-none flex items-center gap-1.5 shadow-lg">
+            <span id="waveformStatusDot" class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+            <span id="waveformStatusText">Reading audio waveform...</span>
+          </div>
+
+          <!-- Base Scrubber Track (100% width aligned with playhead needle) -->
+          <div class="relative w-full h-3.5 bg-slate-900 border-y border-slate-800 overflow-hidden pointer-events-none shadow-inner z-[3]">
+            <!-- Subtle frame ruler tick background pattern -->
+            <div class="absolute inset-0 opacity-20 pointer-events-none" style="background-image: repeating-linear-gradient(90deg, #94a3b8 0px, #94a3b8 1px, transparent 1px, transparent 20px);"></div>
+            <!-- Amber Phosphor Progress Line -->
+            <div id="scrubProgress" class="h-full bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.6)]" style="width: 0%;"></div>
+          </div>
+
+          <!-- Avatar Tokens Container (Injected dynamically) -->
+          <div id="avatarTokensLayer" class="absolute inset-0 pointer-events-none z-[4]"></div>
+
+          <!-- Playhead Needle -->
+          <div id="timelineNeedle" class="absolute top-0 bottom-0 w-[2px] bg-amber-400 z-30 pointer-events-none shadow-[0_0_8px_rgba(251,191,36,0.8)]" style="left: 0%;">
+            <!-- Sleek Top Scrubber Knob -->
+            <div class="w-3.5 h-3.5 bg-amber-400 rounded-full shadow-md -ml-[6px] -mt-0.5 border-2 border-slate-950 flex items-center justify-center">
+              <div class="w-1 h-1 bg-slate-950 rounded-full"></div>
+            </div>
+            <!-- Sleek Bottom Diamond Anchor -->
+            <div class="absolute bottom-0 w-2 h-2 bg-amber-400 -ml-[3px] transform rotate-45 border border-slate-950"></div>
+          </div>
+        </div>
+
+        <!-- Master Transport Strip -->
+        <div class="flex items-center justify-between text-xs pt-1 flex-wrap gap-2">
+          <div class="flex items-center gap-2">
+            <button type="button" onclick="prevCue()" class="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 font-mono text-xs flex items-center gap-1 border theater-border cursor-pointer transition">
+              &laquo; Prev Cue
+            </button>
+            <button type="button" onclick="stepFrame(-1)" class="px-2 py-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 font-mono text-xs border theater-border cursor-pointer transition">
+              -1 Frame
+            </button>
+            <button type="button" onclick="togglePlay()" id="btnPlayPause" class="px-4 py-1 rounded bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs font-mono shadow cursor-pointer transition">
+              Space (Play)
+            </button>
+            <button type="button" onclick="stepFrame(1)" class="px-2 py-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 font-mono text-xs border theater-border cursor-pointer transition">
+              +1 Frame
+            </button>
+            <button type="button" onclick="nextCue()" class="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 font-mono text-xs flex items-center gap-1 border theater-border cursor-pointer transition">
+              Next Cue &raquo;
+            </button>
+          </div>
+
+          <div class="text-[11px] font-mono text-slate-400 flex items-center gap-2.5">
+            <!-- Audio Scrub Toggle (Default: OFF / Silent video scrub) -->
+            <button type="button" id="btnAudioScrub" onclick="toggleAudioScrub()" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 font-mono text-[10px] flex items-center gap-1.5 border theater-border transition cursor-pointer" title="Toggle audio chatter while scrubbing (Shift+S)">
+              <span id="audioScrubIcon">🔇</span>
+              <span id="audioScrubText">Audio Scrub: OFF</span>
+            </button>
+            <span class="text-slate-700">&bull;</span>
+            <span>Cues: <strong class="text-amber-400 font-mono" id="cueCountBadge">0</strong></span>
+            <span class="text-slate-700">&bull;</span>
+            <span class="text-slate-500 hidden sm:inline">J-K-L &bull; &larr;/&rarr; frame nudge</span>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- DRAGGABLE SPLITTER RESIZER BAR -->
+    <div id="panelResizer" 
+         class="w-1.5 hover:w-2 bg-[#12141a] hover:bg-amber-400 active:bg-amber-400 cursor-col-resize transition-all duration-75 flex items-center justify-center flex-shrink-0 z-10 group border-x border-[#1d212b]" 
+         title="Drag to resize panels">
+      <div class="w-0.5 h-8 bg-slate-700 group-hover:bg-slate-950 rounded-full pointer-events-none"></div>
+    </div>
+
+    <!-- RIGHT: THE EDITORIAL CUE SHEET -->
+    <div id="rightCuePanel" class="theater-panel flex flex-col overflow-hidden flex-shrink-0" style="width: 336px; min-width: 260px; max-width: 750px;">
+      
+      <!-- Cue Sheet Header -->
+      <div class="p-3.5 border-b theater-border flex items-center justify-between bg-black/30 flex-shrink-0">
+        <div>
+          <h2 class="font-bold tracking-wider text-slate-200 text-xs">Editorial cue sheet</h2>
+          <p class="text-[11px] text-slate-400">Select a cue to jump to its frame.</p>
+        </div>
+        <span class="px-2 py-0.5 rounded bg-[#272316] font-mono text-[10px] text-amber-400 border border-[#4c432d]" id="cuesTotalLabel">
+          0 cues
+        </span>
+      </div>
+
+      <!-- Cue Cards Feed (Scrollable) -->
+      <div class="flex-1 overflow-y-auto p-3 space-y-2.5" id="cueCardsFeed">
+        <!-- Rendered by JS -->
+      </div>
+
+      <!-- Add Discussion Note Bar -->
+      <div class="p-3 border-t theater-border bg-[#111921] flex-shrink-0">
+        <label for="discussionInput" class="block text-[11px] font-semibold text-slate-300 mb-1.5">
+          Add a discussion note at <span id="noteCurrentTc" class="font-mono text-amber-400 font-bold">00:00:00:00</span>
+        </label>
+        <div class="flex gap-2">
+          <input type="text" id="discussionInput" placeholder="Write what you noticed or want to try…" 
+                 onkeydown="if(event.key==='Enter')addManualCueFromInput()"
+                 class="flex-1 bg-[#0a1118] border border-[#3b4a57] rounded px-2.5 py-1.5 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-amber-400 font-sans">
+          <button type="button" onclick="addManualCueFromInput()" class="px-3.5 py-1.5 rounded bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs font-mono shadow transition cursor-pointer">
+            Add note
+          </button>
+        </div>
+        <small class="block text-slate-500 text-[10px] mt-1.5">The note will be attached to the current playhead.</small>
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- Off-Screen Thumbnail Canvas -->
+  <canvas id="thumbSnapCanvas" class="hidden" width="320" height="180"></canvas>
+
+  <!-- ============================================== -->
+  <!-- JAVASCRIPT APPLICATION LOGIC                   -->
+  <!-- ============================================== -->
+  <script>
+    // Embedded Mode Detection (Single Header EDITMAP integration)
+    const isEmbedded = (window.self !== window.top) || Boolean(window.parent && window.parent !== window) || window.location.search.includes('embedded=1');
+    if (isEmbedded) {
+      document.body.classList.add('is-embedded');
+    }
+
+    function cancelChangeFilm() {
+      const onboarding = document.getElementById('onboardingScreen');
+      if (onboarding) onboarding.classList.add('hidden');
+      const header = document.getElementById('duetConsoleHeader');
+      if (!isEmbedded && header) {
+        header.classList.remove('hidden');
+      }
+      setMode('screening');
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({
+          type: 'DUET_CANCEL_CHANGE_FILM'
+        }, '*');
+      }
+    }
+    window.cancelChangeFilm = cancelChangeFilm;
+
+    // Auto-generate fresh random 4-digit code each time
+    const autoRoomCode = String(Math.floor(1000 + Math.random() * 9000));
+    document.getElementById('displayRoomCode').textContent = autoRoomCode;
+
+    // State
+    let selectedFile = null;
+    let selectedRole = 'host'; // 'host' or 'student'
+    let currentRoomCode = autoRoomCode;
+    let currentMode = 'screening'; // 'screening' or 'review'
+    let userName = 'Mara';
+    let userAvatar = '🎬';
+    let fps = 24;
+    let ws = null;
+    let markers = [];
+    window.markers = markers;
+    window.setMarkers = (m) => { 
+      markers = m; 
+      window.markers = markers; 
+      renderReviewTimelineAndCues(); 
+      renderScreeningMarkerPips();
+    };
+    window.getMarkers = () => markers;
+
+    function clearMarkersState(broadcast = true) {
+      markers = [];
+      window.markers = markers;
+      activeCueIndex = -1;
+      renderReviewTimelineAndCues();
+      renderScreeningMarkerPips();
+      clearWaxCanvas();
+
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({
+          type: 'DUET_MARKERS_UPDATE',
+          markers: []
+        }, '*');
+      }
+
+      if (broadcast && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'CLEAR_MARKERS' }));
+      }
+    }
+    window.clearMarkers = clearMarkersState;
+    window.clearMarkersState = clearMarkersState;
+    let activeWaxColor = '#f3bb40';
+    let isDrawing = false;
+    let currentStroke = [];
+
+    // DOM Elements
+    const video = document.getElementById('mainVideoPlayer');
+    const waxCanvas = document.getElementById('waxCanvas');
+    const waxCtx = waxCanvas.getContext('2d');
+    const thumbCanvas = document.getElementById('thumbSnapCanvas');
+    const thumbCtx = thumbCanvas.getContext('2d');
+
+    // Cross-window direct bridge reference
+    function getProjectorVideo() {
+      try {
+        if (window.pWin && !window.pWin.closed && window.pWin.document) {
+          return window.pWin.document.getElementById('projectorVideo');
+        }
+      } catch (e) {}
+      return null;
+    }
+
+    // Audio Policy: Sound strictly comes from the laptop / host system audio
+    video.muted = false;
+
+    function ensureProjectorMuted() {
+      const pVid = getProjectorVideo();
+      if (pVid) pVid.muted = true;
+    }
+
+    // Continuous Sub-Frame Phase-Lock Sync Engine (Silky-smooth with zero frame jumping)
+    let syncRafId = null;
+    let lastPulseTime = 0;
+    let lastHardSeekTime = 0;
+
+    function startContinuousSync() {
+      stopContinuousSync();
+      function syncLoop() {
+        if (video.paused) return;
+
+        const pVid = getProjectorVideo();
+        if (pVid && pVid.readyState >= 2 && !pVid.seeking) {
+          if (pVid.paused) {
+            pVid.play().catch(() => {});
+          }
+          const delta = pVid.currentTime - video.currentTime;
+          const absDelta = Math.abs(delta);
+          const now = performance.now();
+
+          let targetRate = video.playbackRate || 1.0;
+          if (absDelta > 0.75) {
+            // Only hard seek if wildly out of sync, throttled to max once every 350ms to prevent decoder lockup
+            if (now - lastHardSeekTime > 350) {
+              lastHardSeekTime = now;
+              pVid.currentTime = video.currentTime;
+            }
+            targetRate = video.playbackRate || 1.0;
+          } else if (absDelta > 0.20) {
+            // Medium catchup without seeking (no dropped frames)
+            targetRate = delta < 0 ? (video.playbackRate * 1.06) : (video.playbackRate * 0.94);
+          } else if (absDelta > 0.035) {
+            // Gentle micro phase-lock: eliminates sub-frame drift imperceptibly with zero stutter
+            targetRate = delta < 0 ? (video.playbackRate * 1.025) : (video.playbackRate * 0.975);
+          }
+
+          if (Math.abs(pVid.playbackRate - targetRate) > 0.005) {
+            pVid.playbackRate = targetRate;
+          }
+        }
+
+        // Heartbeat pulse every 500ms for cross-process or remote tabs
+        const now = performance.now();
+        if (now - lastPulseTime > 500) {
+          lastPulseTime = now;
+          syncChannel?.postMessage({
+            type: 'TIME_PULSE',
+            currentTime: video.currentTime,
+            isPlaying: true,
+            playbackRate: video.playbackRate || 1.0
+          });
+        }
+
+        syncRafId = requestAnimationFrame(syncLoop);
+      }
+      syncRafId = requestAnimationFrame(syncLoop);
+    }
+
+    function stopContinuousSync() {
+      if (syncRafId) {
+        cancelAnimationFrame(syncRafId);
+        syncRafId = null;
+      }
+      const pVid = getProjectorVideo();
+      if (pVid) {
+        pVid.playbackRate = video.playbackRate;
+      }
+    }
+
+    video.addEventListener('play', startContinuousSync);
+    video.addEventListener('pause', stopContinuousSync);
+
+    // BroadcastChannel sync with Projector Display (instant cross-window communication)
+    const syncChannel = window.BroadcastChannel ? new BroadcastChannel('duet_projector_channel') : null;
+
+    window.addExternalMarker = function(marker) {
+      if (!marker) return;
+      if (!markers.some(m => m.id === marker.id)) {
+        markers.push(marker);
+        window.markers = markers;
+        if (currentMode === 'review') {
+          renderReviewTimelineAndCues();
+        } else {
+          triggerSilentFlash(marker);
+        }
+        renderScreeningMarkerPips();
+      }
+    };
+
+    if (syncChannel) {
+      syncChannel.onmessage = (event) => {
+        const msg = event.data;
+        if (!msg) return;
+
+        if (msg.type === 'REQUEST_VIDEO_SYNC') {
+          syncChannel.postMessage({
+            type: 'SYNC_VIDEO',
+            videoSrc: video.src,
+            file: selectedFile || null,
+            currentTime: video.currentTime || 0,
+            isPlaying: !video.paused,
+            playbackRate: video.playbackRate || 1
+          });
+        } else if (msg.type === 'PLAY') {
+          if (msg.currentTime !== undefined && Math.abs(video.currentTime - msg.currentTime) > 0.08) {
+            video.currentTime = msg.currentTime;
+          }
+          video.play().catch(() => {});
+          updatePlayButtonUI(true);
+          startContinuousSync();
+        } else if (msg.type === 'PAUSE') {
+          if (msg.currentTime !== undefined) video.currentTime = msg.currentTime;
+          video.pause();
+          updatePlayButtonUI(false);
+          stopContinuousSync();
+        } else if (msg.type === 'SEEK') {
+          if (msg.currentTime !== undefined) {
+            video.currentTime = msg.currentTime;
+            updateTimecodeUI();
+          }
+        } else if (msg.type === 'PROJECTOR_MUTE_TOGGLED') {
+          if (!msg.isMuted) {
+            // Projector unmuted by user -> desk mutes
+            audioRoute = 'projector';
+            video.muted = true;
+          } else {
+            // Projector muted -> desk un-mutes
+            audioRoute = 'desk';
+            video.muted = false;
+          }
+          updateAudioRouteUI(audioRoute);
+        } else if (msg.type === 'ADD_MARKER') {
+          window.addExternalMarker(msg.marker);
+        }
+      };
+    }
+
+    // 4 Pure Unnamed Colors Palette
+    const COLOR_PALETTE = {
+      '1': { key: '1', hex: '#f43f5e', resolveColor: 'ResolveColorRed', name: 'Red' },
+      '2': { key: '2', hex: '#fbbf24', resolveColor: 'ResolveColorYellow', name: 'Yellow' },
+      '3': { key: '3', hex: '#34d399', resolveColor: 'ResolveColorGreen', name: 'Green' },
+      '4': { key: '4', hex: '#38bdf8', resolveColor: 'ResolveColorCyan', name: 'Cyan' }
+    };
+
+    function pickAvatar(emoji) {
+      userAvatar = emoji;
+      const preview = document.getElementById('selectedAvatarPreview');
+      if (preview) preview.textContent = emoji;
+      document.querySelectorAll('.token-btn').forEach(btn => {
+        if (btn.textContent.trim() === emoji) {
+          btn.classList.add('selected');
+          btn.setAttribute('aria-checked', 'true');
+        } else {
+          btn.classList.remove('selected');
+          btn.setAttribute('aria-checked', 'false');
+        }
+      });
+    }
+
+    function setVideoMethod(method) {
+      const tabLocal = document.getElementById('tabLocalFile');
+      const tabWifi = document.getElementById('tabWifiTransfer');
+      const boxLocal = document.getElementById('methodLocalBox');
+      const boxWifi = document.getElementById('methodWifiBox');
+      const quality = document.getElementById('transferQualityLabel');
+      const desc = document.getElementById('transferDescLabel');
+
+      if (method === 'local') {
+        if (tabLocal) {
+          tabLocal.classList.add('selected');
+          tabLocal.setAttribute('aria-selected', 'true');
+        }
+        if (tabWifi) {
+          tabWifi.classList.remove('selected');
+          tabWifi.setAttribute('aria-selected', 'false');
+        }
+        if (boxLocal) boxLocal.classList.remove('hidden');
+        if (boxWifi) boxWifi.classList.add('hidden');
+        if (desc) desc.innerHTML = '<b>Local file:</b> use the video on this Mac.';
+        if (quality) quality.textContent = 'Full quality · No transfer wait';
+      } else {
+        if (tabWifi) {
+          tabWifi.classList.add('selected');
+          tabWifi.setAttribute('aria-selected', 'true');
+        }
+        if (tabLocal) {
+          tabLocal.classList.remove('selected');
+          tabLocal.setAttribute('aria-selected', 'false');
+        }
+        if (boxWifi) boxWifi.classList.remove('hidden');
+        if (boxLocal) boxLocal.classList.add('hidden');
+        if (desc) desc.innerHTML = '<b>Wi‑Fi transfer:</b> stream to devices on same network.';
+        if (quality) quality.textContent = 'Pre-loads on Wi-Fi';
+      }
+    }
+
+    function loadLocalFile(file, autoClose = false) {
+      if (!file) return;
+      selectedFile = file;
+      window.selectedFile = file;
+      const cleanTitle = file.name ? file.name.replace(/\.[^/.]+$/, "") : "Cut";
+      const fileNameLabel = document.getElementById('fileNameLabel');
+      if (fileNameLabel) fileNameLabel.textContent = `✓ ${cleanTitle}`;
+      const fileNameSub = document.getElementById('fileNameSub');
+      if (fileNameSub) fileNameSub.textContent = `${(file.size / (1024*1024)).toFixed(1)} MB · Ready to screen`;
+      const headerCutName = document.getElementById('headerCutName');
+      if (headerCutName) headerCutName.textContent = `Cut: ${cleanTitle}`;
+      video.src = URL.createObjectURL(file);
+      video.load();
+      loadAudioWaveform(file);
+      clearMarkersState(true);
+      if (window.pWin && typeof window.pWin.loadLocalFile === 'function') {
+        window.pWin.loadLocalFile(file);
+      }
+      syncChannel?.postMessage({
+        type: 'SYNC_VIDEO',
+        videoSrc: video.src,
+        file: file,
+        currentTime: 0,
+        isPlaying: false
+      });
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: 'SHARE_VIDEO',
+          videoUrl: video.src,
+          videoName: file.name
+        }));
+      }
+      if (autoClose) {
+        const onboarding = document.getElementById('onboardingScreen');
+        if (onboarding) onboarding.classList.add('hidden');
+        const header = document.getElementById('duetConsoleHeader');
+        if (header && !isEmbedded) {
+          header.classList.remove('hidden');
+        }
+        setupWebSocket();
+      }
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({
+          type: 'DUET_FILE_LOADED',
+          name: file.name,
+          file: file,
+          url: video.src
+        }, '*');
+      }
+    }
+    window.loadLocalFile = loadLocalFile;
+
+    function handleLocalFileSelect(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      loadLocalFile(file, false);
+    }
+
+    function handleWifiFileSelect(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      document.getElementById('wifiFileLabel').textContent = `Uploading ${file.name}...`;
+      const container = document.getElementById('uploadProgressBarContainer');
+      const fill = document.getElementById('uploadProgressFill');
+      const percentText = document.getElementById('uploadPercentText');
+      const statusText = document.getElementById('uploadStatusText');
+      container.classList.remove('hidden');
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/upload', true);
+      xhr.setRequestHeader('x-file-name', encodeURIComponent(file.name));
+
+      xhr.upload.onprogress = (evt) => {
+        if (evt.lengthComputable) {
+          const pct = Math.round((evt.loaded / evt.total) * 100);
+          fill.style.width = `${pct}%`;
+          percentText.textContent = `${pct}%`;
+          statusText.textContent = `Transferring across Wi-Fi: ${(evt.loaded/(1024*1024)).toFixed(1)} MB / ${(evt.total/(1024*1024)).toFixed(1)} MB`;
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status === 200) {
+          const resp = JSON.parse(xhr.responseText);
+          statusText.textContent = `✓ Transfer complete! Loaded in screening room.`;
+          document.getElementById('wifiFileLabel').textContent = `✓ ${file.name} (Shared across Wi-Fi)`;
+          document.getElementById('headerCutName').textContent = `Cut: ${file.name}`;
+          
+          video.src = resp.url;
+          video.load();
+          loadAudioWaveform(file || resp.url);
+          clearMarkersState(true);
+
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+              type: 'SHARE_VIDEO',
+              videoUrl: resp.url,
+              videoName: file.name
+            }));
+          }
+        }
+      };
+      xhr.send(file);
+    }
+
+    function selectRole(role) {
+      selectedRole = role; // 'host' or 'student'
+      const hostBtn = document.getElementById('roleHostCard');
+      const joinBtn = document.getElementById('roleJoinCard');
+      const hostBox = document.getElementById('roomCodeHostBox');
+      const joinInput = document.getElementById('inputRoomCode');
+      const label = document.getElementById('labelRoomCode');
+      const btnText = document.getElementById('btnEnterRoomText');
+      const btnIcon = document.getElementById('btnEnterRoomIcon');
+      const projectorBtn = document.getElementById('btnProjectorLaunch');
+      const roleNotice = document.getElementById('roleNotice');
+
+      if (role === 'host') {
+        currentRoomCode = autoRoomCode;
+        if (hostBtn) {
+          hostBtn.classList.add('selected');
+          hostBtn.setAttribute('aria-selected', 'true');
+        }
+        if (joinBtn) {
+          joinBtn.classList.remove('selected');
+          joinBtn.setAttribute('aria-selected', 'false');
+        }
+        if (hostBox) hostBox.classList.remove('hidden');
+        if (joinInput) joinInput.classList.add('hidden');
+        if (label) label.textContent = 'Room code';
+        if (btnText) btnText.textContent = 'Enter screening room';
+        if (btnIcon) btnIcon.textContent = '→';
+        if (roleNotice) roleNotice.textContent = 'Host controls playback for the room.';
+        if (projectorBtn) projectorBtn.classList.remove('hidden');
+      } else {
+        if (joinBtn) {
+          joinBtn.classList.add('selected');
+          joinBtn.setAttribute('aria-selected', 'true');
+        }
+        if (hostBtn) {
+          hostBtn.classList.remove('selected');
+          hostBtn.setAttribute('aria-selected', 'false');
+        }
+        if (hostBox) hostBox.classList.add('hidden');
+        if (joinInput) {
+          joinInput.classList.remove('hidden');
+          joinInput.focus();
+        }
+        if (label) label.textContent = 'Enter room code';
+        if (btnText) btnText.textContent = 'Connect to session';
+        if (btnIcon) btnIcon.textContent = '→';
+        if (roleNotice) roleNotice.textContent = 'Joined viewer. Follows the host timeline.';
+        if (projectorBtn) projectorBtn.classList.add('hidden');
+      }
+    }
+
+    function copyRoomCode() {
+      const copyText = document.getElementById('copyCodeText');
+      const code = document.getElementById('displayRoomCode')?.textContent || currentRoomCode;
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(code).then(() => {
+          if (copyText) {
+            copyText.textContent = 'Copied!';
+            setTimeout(() => { copyText.textContent = 'Copy'; }, 1500);
+          }
+        }).catch(() => {
+          if (copyText) {
+            copyText.textContent = 'Copied!';
+            setTimeout(() => { copyText.textContent = 'Copy'; }, 1500);
+          }
+        });
+      }
+    }
+
+    function handlePrimaryLaunch() {
+      if (selectedRole === 'host') {
+        openProjectorWindow();
+        enterScreeningRoom();
+      } else {
+        enterScreeningRoom();
+      }
+    }
+
+    function selectRecentProject(id, name, filename) {
+      if (name) {
+        const headerCutName = document.getElementById('headerCutName');
+        if (headerCutName) headerCutName.textContent = `Cut: ${name}`;
+        const dropTitle = document.getElementById('fileNameLabel');
+        if (dropTitle) dropTitle.textContent = `✓ ${name}`;
+        const dropSub = document.getElementById('fileNameSub');
+        if (dropSub) dropSub.textContent = `Project loaded · Ready to screen`;
+      }
+      clearMarkersState(false);
+      if (id && window.parent && window.parent !== window) {
+        window.parent.postMessage({
+          type: 'DUET_SELECT_PROJECT',
+          id: id,
+          name: name
+        }, '*');
+      }
+    }
+
+    function renderEmptyProjects() {
+      const grid = document.getElementById('recentProjectsGrid');
+      const countLabel = document.getElementById('recentProjectsCount');
+      if (countLabel) countLabel.textContent = '0 saved projects';
+      if (grid) {
+        grid.innerHTML = `
+          <div class="recent-empty">
+            <p>No saved projects yet</p>
+            <small>Drop a video above or choose a cut to begin your first screening session.</small>
+          </div>
+        `;
+      }
+    }
+
+    function renderErrorProjects() {
+      const grid = document.getElementById('recentProjectsGrid');
+      const countLabel = document.getElementById('recentProjectsCount');
+      if (countLabel) countLabel.textContent = 'Unavailable';
+      if (grid) {
+        grid.innerHTML = `
+          <div class="recent-empty">
+            <p>Saved projects unavailable</p>
+            <small>Could not access browser storage. You can still load a video file above.</small>
+          </div>
+        `;
+      }
+    }
+
+    function loadRecentProjects() {
+      const grid = document.getElementById('recentProjectsGrid');
+      const countLabel = document.getElementById('recentProjectsCount');
+      if (!grid) return;
+
+      try {
+        const req = indexedDB.open("editmap", 1);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains("projects")) {
+            db.createObjectStore("projects", { keyPath: "id" });
+          }
+        };
+        req.onsuccess = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains("projects")) {
+            renderEmptyProjects();
+            return;
+          }
+          const tx = db.transaction("projects", "readonly");
+          const store = tx.objectStore("projects");
+          const getAllReq = store.getAll();
+          getAllReq.onsuccess = () => {
+            const projects = getAllReq.result || [];
+            if (projects.length === 0) {
+              renderEmptyProjects();
+              return;
+            }
+            projects.sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
+            const topProjects = projects.slice(0, 6);
+            if (countLabel) countLabel.textContent = `${projects.length} saved project${projects.length === 1 ? '' : 's'}`;
+            grid.innerHTML = topProjects.map(p => {
+              const name = (p.name || 'Untitled project').replace(/"/g, '&quot;');
+              const filename = (p.videoMetadata?.filename || '').replace(/"/g, '&quot;');
+              const shots = p.shots?.length || 0;
+              const fpsVal = p.frameRate || 24;
+              return `
+                <button type="button"
+                        onclick="selectRecentProject('${p.id}', '${name.replace(/'/g, "\\'")}', '${filename.replace(/'/g, "\\'")}')"
+                        class="recent-item"
+                        title="${name}"
+                        aria-label="Open project ${name}">
+                  <div class="recent-item-info">
+                    <strong title="${name}">${name}</strong>
+                    <small>${shots} shots · ${fpsVal} fps</small>
+                  </div>
+                  <span class="arrow" aria-hidden="true">↗</span>
+                </button>
+              `;
+            }).join('');
+          };
+          getAllReq.onerror = () => renderErrorProjects();
+        };
+        req.onerror = () => renderErrorProjects();
+      } catch (e) {
+        renderErrorProjects();
+      }
+    }
+
+    function enterScreeningRoom() {
+      const nameInput = document.getElementById('inputUserName').value.trim();
+      if (nameInput) userName = nameInput;
+
+      if (selectedRole === 'student') {
+        const inputCode = document.getElementById('inputRoomCode').value.trim();
+        if (inputCode) currentRoomCode = inputCode;
+        video.muted = true; // Auto-muted on student laptops
+      } else {
+        video.muted = false; // Room sound on host laptop/projector
+      }
+
+      document.getElementById('onboardingScreen').classList.add('hidden');
+      const header = document.getElementById('duetConsoleHeader');
+      if (header && !isEmbedded) {
+        header.classList.remove('hidden');
+      }
+      setupWebSocket();
+      setMode('screening'); // Starts in Dark Theater Mode
+      resizeCanvas();
+
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({
+          type: 'DUET_ENTER_SCREENING_ROOM',
+          role: selectedRole,
+          userName: userName,
+          roomCode: currentRoomCode,
+          file: selectedFile,
+          url: video.src,
+          markers: markers || []
+        }, '*');
+      }
+    }
+
+    function setupWebSocket() {
+      if (ws && ws.readyState === WebSocket.OPEN) return;
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.hostname}:3000`;
+      try {
+        ws = new WebSocket(wsUrl);
+      } catch (e) {
+        console.warn("Could not connect to DUET server on port 3000:", e);
+        return;
+      }
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({
+          type: 'JOIN_ROOM',
+          roomCode: currentRoomCode,
+          name: userName,
+          avatar: userAvatar,
+          role: selectedRole
+        }));
+      };
+
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === 'INIT_STATE') {
+          document.getElementById('connectedCountBadge').textContent = msg.connectedCount;
+          if (msg.state.videoUrl && !video.src) {
+            video.src = msg.state.videoUrl;
+            video.load();
+            document.getElementById('headerCutName').textContent = `Cut: ${msg.state.videoName || 'Shared Video'}`;
+            loadAudioWaveform(msg.state.videoUrl);
+          }
+          if (msg.state.markers && msg.state.markers.length) {
+            msg.state.markers.forEach(m => {
+              if (!markers.some(existing => existing.id === m.id)) {
+                markers.push(m);
+              }
+            });
+            window.markers = markers;
+            if (currentMode === 'review') renderReviewTimelineAndCues();
+          }
+        }
+        else if (msg.type === 'PEER_JOINED' || msg.type === 'PEER_LEFT') {
+          document.getElementById('connectedCountBadge').textContent = msg.connectedCount;
+        }
+        else if (msg.type === 'VIDEO_SHARED') {
+          video.src = msg.videoUrl;
+          video.load();
+          document.getElementById('headerCutName').textContent = `Cut: ${msg.videoName}`;
+          loadAudioWaveform(msg.videoUrl);
+          clearMarkersState(false);
+        }
+        else if (msg.type === 'CLEAR_MARKERS') {
+          clearMarkersState(false);
+        }
+        else if (msg.type === 'PLAY') {
+          if (Math.abs(video.currentTime - msg.currentTime) > 0.15) {
+            video.currentTime = msg.currentTime;
+          }
+          video.play();
+          updatePlayButtonUI(true);
+        }
+        else if (msg.type === 'PAUSE') {
+          video.currentTime = msg.currentTime;
+          video.pause();
+          updatePlayButtonUI(false);
+        }
+        else if (msg.type === 'SEEK') {
+          video.currentTime = msg.currentTime;
+          updateTimecodeUI();
+        }
+        else if (msg.type === 'MODE_CHANGE') {
+          applyMode(msg.mode);
+        }
+        else if (msg.type === 'ADD_MARKER') {
+          window.addExternalMarker(msg.marker);
+        }
+        else if (msg.type === 'UPDATE_MARKER') {
+          const target = markers.find(m => m.id === msg.id);
+          if (target) {
+            if (msg.note !== undefined) target.note = msg.note;
+            if (currentMode === 'review') renderReviewTimelineAndCues();
+          }
+        }
+        else if (msg.type === 'SELECT_MARKER') {
+          const idx = markers.findIndex(m => m.id === msg.id);
+          if (idx !== -1) jumpToCue(idx, false);
+        }
+        else if (msg.type === 'DRAW_STROKE') {
+          renderWaxStroke(msg.stroke.points, msg.stroke.color, waxCtx, waxCanvas);
+        }
+        else if (msg.type === 'CLEAR_DRAW') {
+          waxCtx.clearRect(0, 0, waxCanvas.width, waxCanvas.height);
+        }
+      };
+    }
+
+    // Timecode Formatting
+    function formatSMPTE(seconds) {
+      const totalFrames = Math.floor(seconds * fps);
+      const h = Math.floor(totalFrames / (fps * 3600));
+      const m = Math.floor((totalFrames % (fps * 3600)) / (fps * 60));
+      const s = Math.floor((totalFrames % (fps * 60)) / fps);
+      const f = totalFrames % fps;
+      return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}:${String(f).padStart(2,'0')}`;
+    }
+
+    // Mode Toggle (Screening vs Review)
+    function setMode(mode) {
+      applyMode(mode);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'MODE_CHANGE', mode }));
+      }
+    }
+
+    function applyMode(mode) {
+      currentMode = mode;
+      const screeningOverlay = document.getElementById('screeningModeOverlay');
+      const reviewWs = document.getElementById('reviewWorkspace');
+      const btnScreening = document.getElementById('navBtnScreening');
+      const btnReview = document.getElementById('navBtnReview');
+
+      const resizer = document.getElementById('panelResizer');
+      const rightPanel = document.getElementById('rightCuePanel');
+
+      if (mode === 'screening') {
+        if (screeningOverlay) {
+          screeningOverlay.classList.remove('hidden');
+          screeningOverlay.style.display = 'flex';
+        }
+        if (reviewWs) {
+          reviewWs.style.display = 'none';
+        }
+        if (btnScreening) btnScreening.className = "px-3 py-1 rounded bg-rose-600 text-white font-bold transition";
+        if (btnReview) btnReview.className = "px-3 py-1 rounded text-slate-400 hover:text-slate-200 transition";
+        if (resizer) resizer.style.display = 'none';
+        if (rightPanel) rightPanel.style.display = 'none';
+        updateTimecodeUI();
+        updatePlayButtonUI(!video.paused);
+        renderScreeningMarkerPips();
+      } else {
+        // The lights turn on!
+        if (screeningOverlay) {
+          screeningOverlay.classList.add('hidden');
+          screeningOverlay.style.display = 'none';
+        }
+        if (reviewWs) {
+          reviewWs.style.display = 'flex';
+        }
+        if (btnReview) btnReview.className = "px-3 py-1 rounded bg-amber-400 text-slate-950 font-bold transition";
+        if (btnScreening) btnScreening.className = "px-3 py-1 rounded text-slate-400 hover:text-slate-200 transition";
+        if (resizer) resizer.style.display = 'flex';
+        if (rightPanel) rightPanel.style.display = 'flex';
+        resizeCanvas();
+        renderReviewTimelineAndCues();
+        if (markers.length > 0 && activeCueIndex === -1) {
+          jumpToCue(0);
+        }
+      }
+
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: 'DUET_MODE_CHANGE', mode }, '*');
+      }
+    }
+
+    // Reaction Marker Drop (Exact in Review, -12 frames in Screening)
+    function dropReactionMarker(keyStr) {
+      const colorConfig = COLOR_PALETTE[keyStr] || COLOR_PALETTE['1'];
+
+      // Visual pulse on dark keypad
+      const keyBox = document.getElementById(`darkKeyBox${keyStr}`);
+      if (keyBox) {
+        keyBox.classList.add('key-pressed');
+        setTimeout(() => keyBox.classList.remove('key-pressed'), 200);
+      }
+
+      // Visual pulse on header key as well
+      const headerKey = document.getElementById(`headerFastKey${keyStr}`);
+      if (headerKey) {
+        headerKey.classList.add('scale-125');
+        setTimeout(() => headerKey.classList.remove('scale-125'), 200);
+      }
+
+      // In Review Mode: frame-accurate at current playhead!
+      // In Screening Mode: pull back 12 frames (~0.5 sec) to hit the cut.
+      const offsetSeconds = currentMode === 'review'
+        ? (video.currentTime || 0)
+        : Math.max(0, (video.currentTime || 0) - 0.5);
+      const smpte = formatSMPTE(offsetSeconds);
+
+      // Grab thumbnail from video
+      let thumbnailData = '';
+      try {
+        thumbCtx.drawImage(video, 0, 0, thumbCanvas.width, thumbCanvas.height);
+        thumbnailData = thumbCanvas.toDataURL('image/jpeg', 0.7);
+      } catch (e) {}
+
+      const newMarker = {
+        id: Date.now() + Math.floor(Math.random() * 100000),
+        seconds: offsetSeconds,
+        smpte: smpte,
+        key: colorConfig.key,
+        colorHex: colorConfig.hex,
+        resolveColor: colorConfig.resolveColor,
+        note: `Flagged at ${smpte}`,
+        thumbnail: thumbnailData,
+        authorName: userName,
+        authorAvatar: userAvatar
+      };
+
+      // 1. Immediately store marker locally so it is NEVER lost, even if network lags
+      if (!markers.some(m => m.id === newMarker.id)) {
+        markers.push(newMarker);
+        window.markers = markers;
+      }
+
+      // 2. Immediate tactile UI feedback (instant local flash or cue rendering)
+      if (currentMode === 'review') {
+        renderReviewTimelineAndCues();
+      } else {
+        triggerSilentFlash(newMarker);
+      }
+      renderScreeningMarkerPips();
+
+      // 3. Broadcast to server & other devices via WebSocket
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'ADD_MARKER', marker: newMarker }));
+      }
+
+      // 4. Broadcast via same-origin BroadcastChannel to projector display
+      syncChannel?.postMessage({ type: 'ADD_MARKER', marker: newMarker });
+
+      notifyParentMarkersUpdate();
+    }
+
+    function notifyParentMarkersUpdate() {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({
+          type: 'DUET_MARKERS_UPDATE',
+          markers: markers || []
+        }, '*');
+      }
+    }
+
+    function triggerSilentFlash(marker) {
+      const flash = document.getElementById('silentFlashBadge');
+      const dot = document.getElementById('silentFlashDot');
+      dot.style.backgroundColor = marker.colorHex;
+      flash.classList.remove('hidden');
+      setTimeout(() => flash.classList.add('hidden'), 2000);
+    }
+
+    // Unified Consensus Clustering: Single Source of Truth
+    function getConsensusClusters() {
+      markers.sort((a, b) => a.seconds - b.seconds);
+      const maxDelta = currentMode === 'review' ? 0.35 : 0.65;
+      const clusters = [];
+
+      markers.forEach(m => {
+        const mAuthor = m.authorName || userName || 'Student';
+        const existing = clusters.find(c => 
+          Math.abs(c.seconds - m.seconds) <= maxDelta &&
+          !c.markers.some(item => (item.authorName || 'Student') === mAuthor)
+        );
+
+        if (existing) {
+          existing.markers.push(m);
+        } else {
+          clusters.push({
+            id: m.id,
+            seconds: m.seconds,
+            smpte: m.smpte,
+            primaryColorHex: m.colorHex,
+            markers: [m]
+          });
+        }
+      });
+      return clusters;
+    }
+
+    // ==============================================
+    // REVIEW MODE: RENDER TIMELINE, HEATMAP & CUES  -->
+    // ==============================================
+    function renderReviewTimelineAndCues() {
+      const dur = video.duration || 1;
+      const clusters = getConsensusClusters();
+
+      // 2. Render Heatmap Glows & Avatar Tokens on Timeline
+      const glowLayer = document.getElementById('heatmapGlowLayer');
+      const avatarLayer = document.getElementById('avatarTokensLayer');
+      if (glowLayer) glowLayer.innerHTML = '';
+      if (avatarLayer) avatarLayer.innerHTML = '';
+
+      clusters.forEach((cluster, idx) => {
+        // Exact percentage matching video.currentTime / dur * 100
+        const pct = (cluster.seconds / dur) * 100;
+        const count = cluster.markers.length;
+        const isCluster = count > 1;
+
+        // Radial Heatmap Glow if consensus (2+ students)
+        if (isCluster && glowLayer) {
+          const glow = document.createElement('div');
+          glow.className = `absolute top-0 bottom-0 w-36 rounded-full pointer-events-none transform -translate-x-1/2 ${
+            count >= 3 ? 'pulse-purple' : 'pulse-amber'
+          }`;
+          glow.style.left = `${pct}%`;
+          glowLayer.appendChild(glow);
+        }
+
+        // Avatar Token Container - elevated above scrubber track
+        const isSelected = idx === activeCueIndex;
+        const tokenContainer = document.createElement('div');
+        tokenContainer.className = `avatar-token absolute bottom-[21px] cursor-pointer z-20 pointer-events-auto ${
+          isSelected ? 'scale-115 z-30' : ''
+        }`;
+        tokenContainer.style.left = `${pct}%`;
+        tokenContainer.onclick = (e) => {
+          e.stopPropagation();
+          jumpToCue(idx, true);
+        };
+
+        const m0 = cluster.markers[0];
+        const m1 = cluster.markers[1];
+        const avatar0 = m0?.authorAvatar || '🎬';
+        const avatar1 = m1?.authorAvatar || '🎬';
+        const color0 = m0?.colorHex || cluster.primaryColorHex;
+        const color1 = m1 ? (m1.colorHex || cluster.primaryColorHex) : cluster.primaryColorHex;
+
+        // Avatar Stack Markup
+        let avatarMarkup = '';
+        if (count >= 3) {
+          avatarMarkup = `
+            <div class="relative flex items-center -space-x-5">
+              <div class="w-10 h-10 rounded-full border-2 border-purple-400 bg-purple-950 flex items-center justify-center font-bold font-mono text-xs text-purple-200 ring-2 ring-black shadow-xl z-30">
+                ${count}&times;
+              </div>
+              <div class="w-11 h-11 rounded-full overflow-hidden border-[2.5px] bg-[#102027] ring-2 ring-black flex items-center justify-center text-xl shadow-lg z-20 ${isSelected ? 'ring-2 ring-amber-400' : ''}"
+                   style="border-color: ${color0}; box-shadow: 0 4px 14px ${color0}66;">
+                <span class="avatar-emoji">${avatar0}</span>
+              </div>
+              <div class="w-11 h-11 rounded-full overflow-hidden border-[2.5px] bg-[#102027] ring-2 ring-black flex items-center justify-center text-xl shadow-lg z-10"
+                   style="border-color: ${color1};">
+                <span class="avatar-emoji">${avatar1}</span>
+              </div>
+            </div>
+          `;
+        } else if (count === 2) {
+          avatarMarkup = `
+            <div class="relative flex items-center -space-x-4">
+              <div class="w-11 h-11 rounded-full overflow-hidden border-[2.5px] bg-[#102027] ring-2 ring-black flex items-center justify-center text-xl shadow-lg z-10 ${isSelected ? 'ring-2 ring-amber-400' : ''}"
+                   style="border-color: ${color0}; box-shadow: 0 4px 14px ${color0}66;"
+                   title="${m0.authorName || ''}">
+                <span class="avatar-emoji">${avatar0}</span>
+              </div>
+              <div class="w-11 h-11 rounded-full overflow-hidden border-[2.5px] bg-[#102027] ring-2 ring-black flex items-center justify-center text-xl shadow-lg z-20"
+                   style="border-color: ${color1}; box-shadow: 0 4px 14px ${color1}66;"
+                   title="${m1.authorName || ''}">
+                <span class="avatar-emoji">${avatar1}</span>
+              </div>
+              <span class="absolute -top-1.5 -right-2 px-1.5 py-0.2 rounded-full bg-purple-600 border border-purple-300 text-white font-mono text-[9px] font-bold shadow-md z-30">
+                2&times;
+              </span>
+            </div>
+          `;
+        } else {
+          avatarMarkup = `
+            <div class="w-11 h-11 rounded-full overflow-hidden border-[2.5px] bg-[#102027] ring-2 ring-black flex items-center justify-center text-xl shadow-lg transition-transform ${isSelected ? 'ring-2 ring-amber-400 shadow-[0_0_18px_rgba(251,191,36,0.6)]' : ''}"
+                 style="border-color: ${cluster.primaryColorHex}; box-shadow: 0 4px 14px ${cluster.primaryColorHex}66;"
+                 title="${m0.authorName || ''}">
+              <span class="avatar-emoji">${avatar0}</span>
+            </div>
+          `;
+        }
+
+        tokenContainer.innerHTML = `
+          ${avatarMarkup}
+          <!-- Precise Indicator Stem to Scrubber Bar -->
+          <div class="flex flex-col items-center pointer-events-none mt-0.5">
+            <div class="w-[2px] h-3.5 mx-auto" style="background-color: ${cluster.primaryColorHex}; box-shadow: 0 0 6px ${cluster.primaryColorHex};"></div>
+            <div class="w-2 h-2 rounded-full -mt-0.5 border border-black shadow" style="background-color: ${cluster.primaryColorHex};"></div>
+          </div>
+          <!-- Hover Tooltip -->
+          <div class="token-tooltip items-center gap-2 absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 rounded-lg bg-black/95 text-[11px] font-mono text-slate-100 border border-slate-700 whitespace-nowrap shadow-2xl z-50 pointer-events-none">
+            <span class="w-2 h-2 rounded-full" style="background-color: ${cluster.primaryColorHex};"></span>
+            <span class="font-bold text-amber-400">${cluster.smpte}</span>
+            <span class="text-slate-500">&bull;</span>
+            <span class="text-slate-300">${cluster.markers.map(m => `${m.authorAvatar || '🎬'} ${m.authorName || 'Host'}`).join(', ')}</span>
+          </div>
+        `;
+        if (avatarLayer) avatarLayer.appendChild(tokenContainer);
+      });
+
+      // 3. Render Editorial Cue Sheet (Right Sidebar)
+      const feed = document.getElementById('cueCardsFeed');
+      if (feed) {
+        feed.innerHTML = '';
+
+        clusters.forEach((cluster, idx) => {
+          const isSelected = idx === activeCueIndex;
+          const count = cluster.markers.length;
+          const firstM = cluster.markers[0];
+          const resolveColorName = (firstM.resolveColor || '').replace('ResolveColor', '') || COLOR_PALETTE[firstM.key]?.name || 'Red';
+          const authorsLabel = cluster.markers.map(m => m.authorName || 'Host').join(' + ');
+
+          const card = document.createElement('div');
+          card.className = `cue-item p-3 rounded-lg border transition cursor-pointer flex flex-col justify-between gap-1.5 ${
+            isSelected 
+              ? 'selected border-[#70523c] bg-[#201b1b] shadow-lg ring-1 ring-[#70523c]' 
+              : 'border-[#27323e] bg-[#0e141b]/70 hover:bg-[#141b24] hover:border-slate-700'
+          }`;
+          card.onclick = () => jumpToCue(idx, true);
+
+          card.innerHTML = `
+            <div class="cue-head flex items-center gap-2">
+              <span class="cue-dot w-2.5 h-2.5 rounded-full flex-shrink-0 ${isSelected ? 'ring-2 ring-[#70523c]' : ''}" style="background-color: ${cluster.primaryColorHex};"></span>
+              <strong class="font-mono font-bold text-slate-100 text-xs">${cluster.smpte}</strong>
+              ${count > 1 ? `<span class="text-[9px] font-mono px-1.5 py-0.2 rounded-full bg-purple-900/80 border border-purple-500/60 text-purple-200 font-bold ml-1">${count}&times;</span>` : ''}
+              <small class="text-slate-400 ml-auto font-mono text-[10px] ${isSelected ? 'text-[#f5c759] font-semibold' : ''}">
+                ${isSelected ? 'Current · ' : ''}Cue ${String(idx + 1).padStart(2, '0')}
+              </small>
+            </div>
+
+            <textarea onchange="updateCueNote(${firstM.id}, this.value)" 
+                      oninput="updateCueNote(${firstM.id}, this.value)"
+                      onclick="event.stopPropagation()"
+                      placeholder="No discussion note yet"
+                      rows="2"
+                      class="cue-note-area w-full bg-transparent text-xs text-slate-300 resize-none focus:outline-none focus:bg-black/40 rounded px-1.5 py-1 border border-transparent focus:border-slate-700 leading-relaxed font-sans placeholder:italic placeholder:text-slate-600 pl-4">${firstM.note || ''}</textarea>
+
+            <div class="cue-meta flex items-center justify-between text-[10px] font-mono text-slate-400 border-t border-slate-900/80 pt-1.5 mt-0.5 pl-4">
+              <span class="author flex items-center gap-1.5 truncate max-w-[170px]" title="${authorsLabel}">
+                <span class="tiny-avatar text-xs">${firstM.authorAvatar || '🎬'}</span>
+                <span class="truncate">${authorsLabel}</span>
+              </span>
+              <b class="${isSelected ? 'text-[#ed9eae]' : 'text-[#d7b664]'} font-semibold">Resolve · ${resolveColorName}</b>
+            </div>
+          `;
+          feed.appendChild(card);
+        });
+
+        if (clusters.length === 0) {
+          feed.innerHTML = `
+            <div class="p-6 text-center text-xs text-slate-500 font-mono flex flex-col items-center justify-center gap-2">
+              <span class="text-slate-600 text-lg">🎬</span>
+              <span>No review markers logged for this film yet.</span>
+              <span class="text-[10px] text-slate-600">Press 1–4 during screening to log reaction cues.</span>
+            </div>
+          `;
+        }
+      }
+
+      const cueCountBadge = document.getElementById('cueCountBadge');
+      if (cueCountBadge) cueCountBadge.textContent = clusters.length;
+      const cuesTotalLabel = document.getElementById('cuesTotalLabel');
+      if (cuesTotalLabel) cuesTotalLabel.textContent = `${clusters.length} cues`;
+    }
+    window.renderReviewTimelineAndCues = renderReviewTimelineAndCues;
+
+    function jumpToCue(idx, broadcast = true) {
+      window.jumpToCue = jumpToCue;
+      const clusters = getConsensusClusters();
+
+      if (idx >= 0 && idx < clusters.length) {
+        activeCueIndex = idx;
+        const target = clusters[idx];
+        video.currentTime = target.seconds;
+        updateTimecodeUI();
+
+        // Direct synchronous seek for projector screen
+        const pVid = getProjectorVideo();
+        if (pVid) {
+          pVid.currentTime = target.seconds;
+        }
+        syncChannel?.postMessage({ type: 'SEEK', currentTime: target.seconds });
+
+        const hudCue = document.getElementById('hudCueLabel');
+        if (hudCue) hudCue.textContent = `Cue #${idx + 1}: ${target.smpte}`;
+        const hudDot = document.getElementById('hudColorDot');
+        if (hudDot) hudDot.style.backgroundColor = target.primaryColorHex;
+        const hudAuthor = document.getElementById('hudAuthorLabel');
+        if (hudAuthor) hudAuthor.textContent = `Flagged by: ${target.markers.map(m => m.authorName).join(', ')}`;
+
+        if (broadcast && ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'SELECT_MARKER',
+            id: target.id,
+            currentTime: target.seconds
+          }));
+        }
+      }
+      renderReviewTimelineAndCues();
+    }
+
+    function prevCue() {
+      if (activeCueIndex > 0) jumpToCue(activeCueIndex - 1, true);
+    }
+    function nextCue() {
+      jumpToCue(activeCueIndex + 1, true);
+    }
+
+    function stepFrame(delta) {
+      video.pause();
+      const frameDuration = 1 / fps;
+      video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + (delta * frameDuration)));
+      updateTimecodeUI();
+
+      // Direct synchronous step for projector screen
+      const pVid = getProjectorVideo();
+      if (pVid) {
+        pVid.pause();
+        pVid.currentTime = video.currentTime;
+      }
+
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'SEEK', currentTime: video.currentTime }));
+      }
+      syncChannel?.postMessage({ type: 'SEEK', currentTime: video.currentTime });
+    }
+
+    function stepSecondsScreening(delta) {
+      video.pause();
+      updatePlayButtonUI(false);
+      const dur = video.duration || 0;
+      video.currentTime = Math.max(0, Math.min(dur, (video.currentTime || 0) + delta));
+      updateTimecodeUI();
+
+      // Direct synchronous step for projector screen
+      const pVid = getProjectorVideo();
+      if (pVid) {
+        pVid.pause();
+        pVid.currentTime = video.currentTime;
+      }
+
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'SEEK', currentTime: video.currentTime }));
+      }
+      syncChannel?.postMessage({ type: 'SEEK', currentTime: video.currentTime });
+    }
+
+    function renderScreeningMarkerPips() {
+      const container = document.getElementById('screeningMarkerPips');
+      if (!container) return;
+      const dur = video.duration || 0;
+      if (dur <= 0 || !markers || markers.length === 0) {
+        container.innerHTML = '';
+        return;
+      }
+
+      container.innerHTML = markers.map(m => {
+        const pct = Math.max(0, Math.min(100, (m.seconds / dur) * 100));
+        const color = m.colorHex || '#f59e0b';
+        return `<div class="absolute top-1/2 -translate-y-1/2 w-1.5 h-3 rounded-sm pointer-events-none transition" 
+                     style="left: calc(${pct}% - 3px); background-color: ${color}; box-shadow: 0 0 6px ${color}aa;" 
+                     title="${m.smpte || ''}"></div>`;
+      }).join('');
+    }
+
+    let isScreeningScrubbing = false;
+
+    function setupScreeningScrubber() {
+      const range = document.getElementById('screeningScrubRange');
+      if (!range) return;
+
+      let wasPlayingBeforeScrub = false;
+
+      const onScrubStart = () => {
+        if (!isScreeningScrubbing) {
+          isScreeningScrubbing = true;
+          wasPlayingBeforeScrub = !video.paused;
+          if (wasPlayingBeforeScrub) {
+            video.pause();
+            const pVid = getProjectorVideo();
+            if (pVid) pVid.pause();
+            updatePlayButtonUI(false);
+            stopContinuousSync();
+          }
+        }
+      };
+
+      const handleScrubMove = () => {
+        onScrubStart();
+        const dur = video.duration || 0;
+        if (dur <= 0) return;
+        const pct = parseFloat(range.value);
+        const targetTime = (pct / 100) * dur;
+        video.currentTime = targetTime;
+
+        const pVid = getProjectorVideo();
+        if (pVid) {
+          pVid.currentTime = targetTime;
+        }
+
+        const fill = document.getElementById('screeningScrubFill');
+        if (fill) fill.style.width = `${pct}%`;
+        const tc = document.getElementById('screeningCurrentTc');
+        if (tc) tc.textContent = formatSMPTE(targetTime);
+
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'SEEK', currentTime: targetTime }));
+        }
+        syncChannel?.postMessage({ type: 'SEEK', currentTime: targetTime });
+      };
+
+      const onScrubEnd = () => {
+        if (!isScreeningScrubbing) return;
+        isScreeningScrubbing = false;
+        updateTimecodeUI();
+        const targetTime = video.currentTime;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'SEEK', currentTime: targetTime }));
+        }
+        syncChannel?.postMessage({ type: 'SEEK', currentTime: targetTime });
+        if (wasPlayingBeforeScrub) {
+          togglePlay();
+          wasPlayingBeforeScrub = false;
+        }
+      };
+
+      range.addEventListener('pointerdown', onScrubStart);
+      range.addEventListener('input', handleScrubMove);
+      range.addEventListener('change', onScrubEnd);
+      range.addEventListener('pointerup', onScrubEnd);
+    }
+
+    function updateCueNote(id, newNote) {
+      const target = markers.find(m => m.id === id);
+      if (target) {
+        target.note = newNote;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'UPDATE_MARKER', id, note: newNote }));
+        }
+        notifyParentMarkersUpdate();
+      }
+    }
+
+    function addManualCueFromInput() {
+      const input = document.getElementById('discussionInput');
+      const text = input.value.trim();
+      if (!text) return;
+
+      const smpte = formatSMPTE(video.currentTime);
+      const newMarker = {
+        id: Date.now(),
+        seconds: video.currentTime,
+        smpte: smpte,
+        key: '2',
+        colorHex: '#fbbf24',
+        resolveColor: 'ResolveColorYellow',
+        note: text,
+        thumbnail: '',
+        authorName: userName,
+        authorAvatar: userAvatar
+      };
+
+      if (!markers.some(m => m.id === newMarker.id)) {
+        markers.push(newMarker);
+        window.markers = markers;
+      }
+      const clusters = getConsensusClusters();
+      const newIdx = clusters.findIndex(c => c.markers.some(m => m.id === newMarker.id));
+      if (newIdx !== -1) {
+        activeCueIndex = newIdx;
+      }
+      renderReviewTimelineAndCues();
+      renderScreeningMarkerPips();
+
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'ADD_MARKER', marker: newMarker }));
+      }
+      syncChannel?.postMessage({ type: 'ADD_MARKER', marker: newMarker });
+      notifyParentMarkersUpdate();
+      input.value = '';
+    }
+
+    function togglePlay() {
+      const pVid = getProjectorVideo();
+      if (video.paused) {
+        // Synchronously trigger projector playback in the same microtick
+        if (pVid) {
+          pVid.currentTime = video.currentTime;
+          pVid.playbackRate = video.playbackRate;
+          pVid.play().catch(() => {});
+        }
+        video.play().catch(() => {});
+        updatePlayButtonUI(true);
+        startContinuousSync();
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'PLAY', currentTime: video.currentTime }));
+        }
+        syncChannel?.postMessage({ type: 'PLAY', currentTime: video.currentTime });
+      } else {
+        if (pVid) {
+          pVid.currentTime = video.currentTime;
+          pVid.pause();
+          pVid.playbackRate = 1.0;
+        }
+        video.pause();
+        updatePlayButtonUI(false);
+        stopContinuousSync();
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'PAUSE', currentTime: video.currentTime }));
+        }
+        syncChannel?.postMessage({ type: 'PAUSE', currentTime: video.currentTime });
+      }
+    }
+
+    function updatePlayButtonUI(playing) {
+      const btn = document.getElementById('btnPlayPause');
+      if (btn) {
+        btn.textContent = playing ? 'Pause (Space)' : 'Space (Play)';
+        btn.className = playing 
+          ? "px-4 py-1 rounded bg-rose-500 hover:bg-rose-400 text-white font-bold text-xs font-mono shadow"
+          : "px-4 py-1 rounded bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs font-mono shadow";
+      }
+
+      // Screening Option A transport button updates
+      const screeningBtn = document.getElementById('btnScreeningPlay');
+      const screeningIcon = document.getElementById('screeningPlayIcon');
+      const screeningText = document.getElementById('screeningPlayText');
+      const screeningDot = document.getElementById('screeningPlayStateDot');
+
+      if (screeningBtn && screeningIcon && screeningText) {
+        if (playing) {
+          screeningBtn.className = "px-5 py-1.5 rounded-lg bg-rose-500 hover:bg-rose-400 text-white font-mono font-bold text-xs shadow-lg transition flex items-center gap-1.5 active:scale-95";
+          screeningIcon.textContent = "⏸";
+          screeningText.textContent = "Pause (Space)";
+          if (screeningDot) {
+            screeningDot.className = "w-2 h-2 rounded-full bg-emerald-400 animate-pulse";
+          }
+        } else {
+          screeningBtn.className = "px-5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-mono font-bold text-xs shadow-lg transition flex items-center gap-1.5 active:scale-95";
+          screeningIcon.textContent = "▶";
+          screeningText.textContent = "Play (Space)";
+          if (screeningDot) {
+            screeningDot.className = "w-2 h-2 rounded-full bg-slate-600";
+          }
+        }
+      }
+
+      const screeningHeading = document.getElementById('screeningHeading');
+      if (screeningHeading) {
+        if (playing) {
+          screeningHeading.textContent = "Screening in progress";
+        } else if (!video || video.currentTime <= 0.25) {
+          screeningHeading.textContent = "Ready to screen";
+        } else {
+          screeningHeading.textContent = "Screening paused";
+        }
+      }
+    }
+
+    // ==============================================
+    // AUDIO WAVEFORM VISUALIZATION ENGINE          -->
+    // ==============================================
+    let cachedWaveformPeaks = null;
+    let isWaveformVisible = true;
+    let isAudioDecoding = false;
+    let audioContextInstance = null;
+    let waveformRafId = null;
+
+    function getAudioContext() {
+      if (!audioContextInstance) {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) {
+          audioContextInstance = new AudioCtx();
+        }
+      }
+      return audioContextInstance;
+    }
+
+    function toggleWaveformDisplay() {
+      // Kept for backward compatibility; waveform remains visible in Review mode
+      requestWaveformRedraw();
+    }
+
+    function requestWaveformRedraw() {
+      if (waveformRafId) return;
+      waveformRafId = requestAnimationFrame(() => {
+        waveformRafId = null;
+        drawAudioWaveform();
+      });
+    }
+
+    async function loadAudioWaveform(source) {
+      if (!source) return;
+      const statusBadge = document.getElementById('waveformStatus');
+      const statusText = document.getElementById('waveformStatusText');
+      const statusDot = document.getElementById('waveformStatusDot');
+      if (statusBadge) {
+        statusBadge.classList.remove('hidden');
+        statusBadge.classList.add('flex');
+        if (statusDot) statusDot.className = "w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse";
+        if (statusText) statusText.textContent = "Reading audio waveform...";
+      }
+      isAudioDecoding = true;
+
+      try {
+        let arrayBuffer = null;
+        if (source instanceof Blob || source instanceof File) {
+          arrayBuffer = await source.arrayBuffer();
+        } else if (typeof source === 'string') {
+          const res = await fetch(source);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          arrayBuffer = await res.arrayBuffer();
+        }
+
+        if (!arrayBuffer) throw new Error("No buffer data available");
+
+        const audioCtx = getAudioContext();
+        if (!audioCtx) throw new Error("AudioContext not supported");
+
+        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+        extractWaveformPeaks(audioBuffer);
+
+        if (statusBadge) {
+          if (statusDot) statusDot.className = "w-1.5 h-1.5 rounded-full bg-emerald-400";
+          if (statusText) statusText.textContent = "✓ Waveform Ready";
+          setTimeout(() => {
+            if (statusBadge) {
+              statusBadge.classList.add('hidden');
+              statusBadge.classList.remove('flex');
+            }
+          }, 2000);
+        }
+      } catch (err) {
+        console.warn("Waveform audio analysis note:", err.message || err);
+        cachedWaveformPeaks = null;
+        if (statusBadge) {
+          statusBadge.classList.remove('hidden');
+          statusBadge.classList.add('flex');
+          if (statusDot) statusDot.className = "w-1.5 h-1.5 rounded-full bg-rose-400";
+          if (statusText) statusText.textContent = "Waveform unavailable";
+        }
+      } finally {
+        isAudioDecoding = false;
+        requestWaveformRedraw();
+      }
+    }
+
+    function extractWaveformPeaks(audioBuffer) {
+      const numBins = 1400;
+      const c0 = audioBuffer.getChannelData(0);
+      const c1 = audioBuffer.numberOfChannels > 1 ? audioBuffer.getChannelData(1) : null;
+      const totalSamples = c0.length;
+      const step = Math.floor(totalSamples / numBins);
+
+      const rawPeaks = [];
+      let maxGlobal = 0;
+
+      for (let i = 0; i < numBins; i++) {
+        const start = i * step;
+        let peak = 0;
+        const stride = Math.max(1, Math.floor(step / 35));
+        for (let j = 0; j < step; j += stride) {
+          const idx = start + j;
+          if (idx < totalSamples) {
+            const val0 = Math.abs(c0[idx]);
+            const val1 = c1 ? Math.abs(c1[idx]) : 0;
+            const val = Math.max(val0, val1);
+            if (val > peak) peak = val;
+          }
+        }
+        rawPeaks.push(peak);
+        if (peak > maxGlobal) maxGlobal = peak;
+      }
+
+      const scale = maxGlobal > 0 ? (0.95 / maxGlobal) : 1;
+      cachedWaveformPeaks = rawPeaks.map(p => Math.min(1.0, p * scale));
+    }
+
+    function drawAudioWaveform() {
+      const waveCanvas = document.getElementById('waveformCanvas');
+      if (!waveCanvas) return;
+      const ctx = waveCanvas.getContext('2d');
+      if (!ctx) return;
+
+      const dpr = window.devicePixelRatio || 1;
+      const rect = waveCanvas.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+
+      const targetW = Math.floor(rect.width * dpr);
+      const targetH = Math.floor(rect.height * dpr);
+
+      if (waveCanvas.width !== targetW || waveCanvas.height !== targetH) {
+        waveCanvas.width = targetW;
+        waveCanvas.height = targetH;
+      }
+
+      ctx.clearRect(0, 0, targetW, targetH);
+
+      if (!isWaveformVisible || !cachedWaveformPeaks || cachedWaveformPeaks.length === 0) {
+        return;
+      }
+
+      const padTop = 6 * dpr;
+      const padBottom = 28 * dpr;
+      const bedH = Math.max(10, targetH - padTop - padBottom);
+      const centerY = padTop + (bedH * 0.52);
+      const maxAmp = bedH * 0.44;
+
+      // Subtle Baseline Reference Guides
+      ctx.lineWidth = 1 * dpr;
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.07)';
+      ctx.beginPath();
+      ctx.moveTo(0, centerY);
+      ctx.lineTo(targetW, centerY);
+      ctx.stroke();
+
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+      ctx.beginPath();
+      ctx.moveTo(0, centerY - maxAmp * 0.5);
+      ctx.lineTo(targetW, centerY - maxAmp * 0.5);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, centerY + maxAmp * 0.5);
+      ctx.lineTo(targetW, centerY + maxAmp * 0.5);
+      ctx.stroke();
+
+      // Playhead Split Point in Canvas Coordinates
+      const dur = video.duration || 1;
+      const cur = video.currentTime || 0;
+      const playheadRatio = Math.max(0, Math.min(1, cur / dur));
+      const splitX = playheadRatio * targetW;
+
+      // Waveform Bars Geometry
+      const barWidth = 2 * dpr;
+      const barGap = 1 * dpr;
+      const barSlot = barWidth + barGap;
+      const totalBars = Math.floor(targetW / barSlot);
+
+      for (let b = 0; b < totalBars; b++) {
+        const x = b * barSlot;
+        const peakIdx = Math.floor((b / totalBars) * cachedWaveformPeaks.length);
+        const rawAmp = cachedWaveformPeaks[peakIdx] || 0.03;
+        const amp = Math.pow(rawAmp, 0.85);
+        const barHalfH = Math.max(1.5 * dpr, amp * maxAmp);
+
+        const isPlayed = (x + (barWidth * 0.5)) <= splitX;
+
+        if (isPlayed) {
+          // Radiant Amber Phosphor for played audio
+          ctx.fillStyle = 'rgba(245, 158, 11, 0.84)';
+          ctx.fillRect(x, centerY - barHalfH, barWidth, barHalfH);
+          ctx.fillStyle = 'rgba(217, 119, 6, 0.58)';
+          ctx.fillRect(x, centerY, barWidth, barHalfH * 0.86);
+        } else {
+          // Cool Studio Slate for incoming dialogue/audio
+          ctx.fillStyle = 'rgba(148, 163, 184, 0.44)';
+          ctx.fillRect(x, centerY - barHalfH, barWidth, barHalfH);
+          ctx.fillStyle = 'rgba(100, 116, 139, 0.28)';
+          ctx.fillRect(x, centerY, barWidth, barHalfH * 0.86);
+        }
+      }
+    }
+    window.drawAudioWaveform = drawAudioWaveform;
+    window.loadAudioWaveform = loadAudioWaveform;
+    window.toggleWaveformDisplay = toggleWaveformDisplay;
+
+    // ==============================================
+    // TIMELINE DRAG-TO-SCRUB & AUDIO SCRUBBING      -->
+    // ==============================================
+    let isAudioScrubEnabled = false; // Default: OFF (silent, clean video scrub)
+    let isTimelineScrubbing = false;
+    let preScrubMuted = false;
+    let lastWsSeekTime = 0;
+
+    function toggleAudioScrub() {
+      isAudioScrubEnabled = !isAudioScrubEnabled;
+      const btn = document.getElementById('btnAudioScrub');
+      const icon = document.getElementById('audioScrubIcon');
+      const text = document.getElementById('audioScrubText');
+
+      if (isAudioScrubEnabled) {
+        btn.className = "px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/50 font-mono text-[10px] flex items-center gap-1.5 transition";
+        icon.textContent = "🔊";
+        text.textContent = "Audio Scrub: ON";
+      } else {
+        btn.className = "px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 font-mono text-[10px] flex items-center gap-1.5 border theater-border transition";
+        icon.textContent = "🔇";
+        text.textContent = "Audio Scrub: OFF";
+      }
+    }
+
+    function performTimelineScrub(clientX, snapToMarker = false) {
+      const container = document.getElementById('timelineContainer');
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const clickX = clientX - rect.left;
+      const ratio = Math.max(0, Math.min(1, clickX / rect.width));
+      let targetTime = ratio * (video.duration || 1);
+
+      if (snapToMarker) {
+        // Magnetic Snapping to closest marker within 20px threshold
+        const snapThresholdSec = (20 / rect.width) * (video.duration || 1);
+        const clusters = getConsensusClusters();
+        let closestCluster = null;
+        let minDiff = Infinity;
+        let closestIdx = -1;
+
+        clusters.forEach((c, i) => {
+          const diff = Math.abs(c.seconds - targetTime);
+          if (diff < minDiff && diff <= snapThresholdSec) {
+            minDiff = diff;
+            closestCluster = c;
+            closestIdx = i;
+          }
+        });
+
+        if (closestCluster && closestIdx !== -1) {
+          targetTime = closestCluster.seconds;
+          activeCueIndex = closestIdx;
+          const hudCue = document.getElementById('hudCueLabel');
+          if (hudCue) hudCue.textContent = `Cue #${closestIdx + 1}: ${closestCluster.smpte}`;
+          const hudDot = document.getElementById('hudColorDot');
+          if (hudDot) hudDot.style.backgroundColor = closestCluster.primaryColorHex;
+          const hudAuthor = document.getElementById('hudAuthorLabel');
+          if (hudAuthor) hudAuthor.textContent = `Flagged by: ${closestCluster.markers.map(m => m.authorName).join(', ')}`;
+          renderReviewTimelineAndCues();
+        }
+      }
+
+      video.currentTime = targetTime;
+      updateTimecodeUI();
+
+      // Direct synchronous update to secondary projector screen
+      const pVid = getProjectorVideo();
+      if (pVid) {
+        pVid.currentTime = targetTime;
+      }
+
+      // Throttled sync seek to projector & peers (every 30ms or on release)
+      const now = Date.now();
+      if (snapToMarker || now - lastWsSeekTime > 30) {
+        lastWsSeekTime = now;
+        syncChannel?.postMessage({ type: 'SEEK', currentTime: targetTime });
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'SEEK', currentTime: targetTime }));
+        }
+      }
+    }
+
+    // Attach Drag-to-Scrub Listeners
+    const timelineContainer = document.getElementById('timelineContainer');
+    const needleElem = document.getElementById('timelineNeedle');
+
+    timelineContainer.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      isTimelineScrubbing = true;
+      preScrubMuted = video.muted;
+
+      // When audio scrub is OFF, mute audio during the scrub drag!
+      if (!isAudioScrubEnabled) {
+        video.muted = true;
+      }
+
+      if (!video.paused) {
+        video.pause();
+        updatePlayButtonUI(false);
+      }
+
+      document.body.style.cursor = 'ew-resize';
+      document.body.style.userSelect = 'none';
+      if (needleElem) {
+        needleElem.classList.add('shadow-[0_0_18px_rgba(251,191,36,1)]');
+      }
+
+      performTimelineScrub(e.clientX, false);
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isTimelineScrubbing) return;
+      performTimelineScrub(e.clientX, false);
+    });
+
+    window.addEventListener('mouseup', (e) => {
+      if (!isTimelineScrubbing) return;
+      isTimelineScrubbing = false;
+
+      // Final position with magnetic snapping enabled
+      performTimelineScrub(e.clientX, true);
+
+      // Restore audio mute state (laptop sound is active)
+      video.muted = preScrubMuted;
+      ensureProjectorMuted();
+
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      if (needleElem) {
+        needleElem.classList.remove('shadow-[0_0_18px_rgba(251,191,36,1)]');
+      }
+
+      // Send guaranteed final seek
+      syncChannel?.postMessage({ type: 'SEEK', currentTime: video.currentTime });
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'SEEK', currentTime: video.currentTime }));
+      }
+    });
+
+    function updateTimecodeUI() {
+      const smpte = formatSMPTE(video.currentTime);
+      const smpteElem = document.getElementById('smpteDisplay');
+      if (smpteElem) smpteElem.textContent = smpte;
+      const currentTcElem = document.getElementById('currentTimecodeLabel');
+      if (currentTcElem) currentTcElem.textContent = smpte;
+      const noteCurrentTc = document.getElementById('noteCurrentTc');
+      if (noteCurrentTc) noteCurrentTc.textContent = smpte;
+
+      const dur = video.duration || 1;
+      const pct = Math.max(0, Math.min(100, (video.currentTime / dur) * 100));
+      const scrubProg = document.getElementById('scrubProgress');
+      if (scrubProg) scrubProg.style.width = `${pct}%`;
+      const needle = document.getElementById('timelineNeedle');
+      if (needle) needle.style.left = `${pct}%`;
+      requestWaveformRedraw();
+
+      // Dark Screening Option A Scrubber
+      const screeningTc = document.getElementById('screeningCurrentTc');
+      if (screeningTc) screeningTc.textContent = smpte;
+      const screeningFill = document.getElementById('screeningScrubFill');
+      if (screeningFill) screeningFill.style.width = `${pct}%`;
+      const screeningRange = document.getElementById('screeningScrubRange');
+      if (screeningRange && !isScreeningScrubbing) {
+        screeningRange.value = pct;
+      }
+
+      if (video.paused) {
+        const screeningHeading = document.getElementById('screeningHeading');
+        if (screeningHeading) {
+          if (video.currentTime <= 0.25) {
+            screeningHeading.textContent = "Ready to screen";
+          } else {
+            screeningHeading.textContent = "Screening paused";
+          }
+        }
+      }
+
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: 'DUET_TIME_UPDATE', time: video.currentTime }, '*');
+      }
+    }
+
+    video.addEventListener('timeupdate', updateTimecodeUI);
+    video.addEventListener('loadedmetadata', () => {
+      const durationSMPTE = formatSMPTE(video.duration);
+      const durLabel = document.getElementById('durationTimecodeLabel');
+      if (durLabel) durLabel.textContent = durationSMPTE;
+      const screeningDur = document.getElementById('screeningDurationTc');
+      if (screeningDur) screeningDur.textContent = durationSMPTE;
+      requestWaveformRedraw();
+      renderScreeningMarkerPips();
+    });
+
+    // Wax Grease-Pencil Canvas
+    function resizeCanvas() {
+      const rect = waxCanvas.getBoundingClientRect();
+      waxCanvas.width = rect.width;
+      waxCanvas.height = rect.height;
+      requestWaveformRedraw();
+    }
+    window.addEventListener('resize', resizeCanvas);
+
+    waxCanvas.addEventListener('mousedown', (e) => {
+      isDrawing = true;
+      const rect = waxCanvas.getBoundingClientRect();
+      currentStroke = [{ x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height }];
+    });
+
+    waxCanvas.addEventListener('mousemove', (e) => {
+      if (!isDrawing) return;
+      const rect = waxCanvas.getBoundingClientRect();
+      currentStroke.push({ x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height });
+      renderWaxStroke(currentStroke, activeWaxColor, waxCtx, waxCanvas);
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (isDrawing && currentStroke.length > 1) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'DRAW_STROKE',
+            stroke: { points: currentStroke, color: activeWaxColor }
+          }));
+        }
+      }
+      isDrawing = false;
+      currentStroke = [];
+    });
+
+    function renderWaxStroke(pts, color, ctx, canvas) {
+      if (pts.length < 2) return;
+      ctx.beginPath();
+      ctx.lineWidth = 3.5;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = color;
+      ctx.moveTo(pts[0].x * canvas.width, pts[0].y * canvas.height);
+      for (let i = 1; i < pts.length; i++) {
+        ctx.lineTo(pts[i].x * canvas.width, pts[i].y * canvas.height);
+      }
+      ctx.stroke();
+    }
+
+    function setWaxColor(c) {
+      activeWaxColor = c;
+      const tb = document.getElementById('pencilToolbar');
+      if (tb) {
+        tb.querySelectorAll('.swatch').forEach(btn => {
+          if (btn.getAttribute('data-color') === c) {
+            btn.classList.add('sel');
+          } else {
+            btn.classList.remove('sel');
+          }
+        });
+      }
+    }
+
+    function clearWaxCanvas() {
+      waxCtx.clearRect(0, 0, waxCanvas.width, waxCanvas.height);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'CLEAR_DRAW' }));
+      }
+    }
+
+    // Export DaVinci Resolve CMX3600 EDL
+    function exportToResolve() {
+      if (markers.length === 0) {
+        alert("No markers logged yet. Press 1, 2, 3, or 4 during screening to log cues!");
+        return;
+      }
+
+      let edl = `TITLE: DUET_SCREENING_CUES\nFCM: NON-DROP FRAME\n\n`;
+      markers.forEach((m, idx) => {
+        const num = String(idx + 1).padStart(3, '0');
+        const nextFrames = Math.floor(m.seconds * fps) + 1;
+        const nextTc = formatSMPTE(nextFrames / fps);
+
+        edl += `${num}  001      V     C        ${m.smpte} ${nextTc} ${m.smpte} ${nextTc}\n`;
+        edl += ` |C:${m.resolveColor} |M:${m.authorName}: ${m.note.replace(/\n/g, ' ')} |D:1\n\n`;
+      });
+
+      const blob = new Blob([edl], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Mara_Cut_Cues_${currentRoomCode}.edl`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // Launch Projector Display Window
+    function openProjectorWindow() {
+      const currentVideoSrc = video.src;
+      let url = `/projector.html?room=${currentRoomCode}`;
+      if (currentVideoSrc) {
+        url += `&video=${encodeURIComponent(currentVideoSrc)}`;
+      }
+
+      window.selectedFile = selectedFile;
+      let pWin = null;
+
+      const onProjectorAttached = (win) => {
+        window.pWin = win;
+        bridgeProjectorFile(win);
+        video.muted = false; // Laptop audio active
+        setTimeout(() => {
+          const pVid = getProjectorVideo();
+          if (pVid && !pVid.seeking) {
+            pVid.muted = true; // Projector window permanently silent
+            if (pVid.readyState >= 2 && Math.abs(pVid.currentTime - video.currentTime) > 0.4) {
+              pVid.currentTime = video.currentTime;
+            }
+            pVid.playbackRate = video.playbackRate;
+            if (!video.paused && pVid.paused) {
+              pVid.play().catch(() => {});
+            }
+          }
+        }, 350);
+      };
+
+      // Check if browser has multi-screen placement API
+      if ('getScreenDetails' in window) {
+        window.getScreenDetails().then(screenDetails => {
+          const secondary = screenDetails.screens.find(s => s !== screenDetails.currentScreen);
+          if (secondary) {
+            pWin = window.open(url, 'ProjectorDisplay', `left=${secondary.availLeft},top=${secondary.availTop},width=${secondary.availWidth},height=${secondary.availHeight}`);
+          } else {
+            pWin = window.open(url, 'ProjectorDisplay', 'width=1280,height=720');
+          }
+          onProjectorAttached(pWin);
+        }).catch(() => {
+          pWin = window.open(url, 'ProjectorDisplay', 'width=1280,height=720');
+          onProjectorAttached(pWin);
+        });
+      } else {
+        pWin = window.open(url, 'ProjectorDisplay', 'width=1280,height=720');
+        onProjectorAttached(pWin);
+      }
+    }
+
+    function bridgeProjectorFile(win) {
+      if (!win) return;
+      const deliver = () => {
+        try {
+          if (win.closed) return;
+          if (selectedFile && typeof win.loadLocalFile === 'function') {
+            win.loadLocalFile(selectedFile);
+          } else if (video.src && typeof win.setVideoSource === 'function') {
+            win.setVideoSource(video.src, video.currentTime, !video.paused);
+          }
+        } catch (e) {}
+      };
+      if (win.document && win.document.readyState === 'complete') {
+        deliver();
+      } else {
+        win.addEventListener('load', deliver, { once: true });
+        setTimeout(deliver, 350);
+      }
+    }
+
+    // Draggable Panel Resizer Logic
+    const panelResizer = document.getElementById('panelResizer');
+    const rightCuePanel = document.getElementById('rightCuePanel');
+    const workspaceContainer = document.getElementById('reviewWorkspace');
+    let isPanelResizing = false;
+
+    panelResizer.addEventListener('mousedown', (e) => {
+      isPanelResizing = true;
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isPanelResizing) return;
+      const containerRect = workspaceContainer.getBoundingClientRect();
+      const newRightWidth = containerRect.right - e.clientX;
+      
+      // Allow resizing between 240px and 750px
+      if (newRightWidth >= 240 && newRightWidth <= 750) {
+        rightCuePanel.style.width = `${newRightWidth}px`;
+        resizeCanvas();
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (isPanelResizing) {
+        isPanelResizing = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        resizeCanvas();
+      }
+    });
+
+    // Keyboard Shortcuts: 1, 2, 3, 4, Space, Esc, Arrows
+    window.addEventListener('keydown', (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        togglePlay();
+      } else if (e.shiftKey && (e.key === 'S' || e.key === 's')) {
+        e.preventDefault();
+        toggleAudioScrub();
+      } else if (e.key === '1' || e.key === '2' || e.key === '3' || e.key === '4') {
+        dropReactionMarker(e.key);
+      } else if (e.code === 'Escape') {
+        setMode(currentMode === 'screening' ? 'review' : 'screening');
+      } else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          stepSecondsScreening(-5);
+        } else {
+          stepFrame(-1);
+        }
+      } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          stepSecondsScreening(5);
+        } else {
+          stepFrame(1);
+        }
+      } else if (e.code === 'ArrowUp') {
+        prevCue();
+      } else if (e.code === 'ArrowDown') {
+        nextCue();
+      }
+    });
+
+    // EditMap Host Bridge & Remote Control APIs
+    function inspectInStudio() {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({
+          type: 'DUET_INSPECT_IN_STUDIO',
+          time: video ? video.currentTime : 0,
+          markers: markers || [],
+          file: selectedFile,
+          url: video ? video.src : ''
+        }, '*');
+      } else {
+        alert("This action returns to EditMap Studio with markers and playhead synced.");
+      }
+    }
+    window.inspectInStudio = inspectInStudio;
+
+    window.setVideoSource = function(url, name, autoClose = false) {
+      if (!url) return;
+      const rawName = (name && name !== 'Untitled film' && name !== 'Untitled Project') ? name : '';
+      const fallbackName = selectedFile?.name ? selectedFile.name.replace(/\.[^/.]+$/, '') : '';
+      const displayName = rawName || fallbackName;
+      if (displayName) {
+        const headerName = document.getElementById('headerCutName');
+        if (headerName) headerName.textContent = `Cut: ${displayName}`;
+        const fileLabel = document.getElementById('fileNameLabel');
+        if (fileLabel) fileLabel.textContent = `✓ ${displayName}`;
+        const fileSub = document.getElementById('fileNameSub');
+        if (fileSub) fileSub.textContent = `Video loaded · Ready to screen`;
+      }
+      if (video.src === url) {
+        if (window.pWin && !window.pWin.closed && typeof window.pWin.setVideoSource === 'function') {
+          window.pWin.setVideoSource(url, video.currentTime, !video.paused);
+        }
+        return;
+      }
+      clearMarkersState(false);
+      video.src = url;
+      video.load();
+      loadAudioWaveform(url);
+      if (window.pWin && !window.pWin.closed && typeof window.pWin.setVideoSource === 'function') {
+        window.pWin.setVideoSource(url, video.currentTime, !video.paused);
+      }
+      ensureProjectorMuted();
+      if (autoClose) {
+        const onboarding = document.getElementById('onboardingScreen');
+        if (onboarding) onboarding.classList.add('hidden');
+        setupWebSocket();
+      }
+    };
+
+    window.seekToTime = function(t) {
+      if (video && Math.abs(video.currentTime - t) > 0.04) {
+        video.currentTime = t;
+        const pVid = getProjectorVideo();
+        if (pVid) pVid.currentTime = t;
+        syncChannel?.postMessage({ type: 'SEEK', currentTime: t });
+      }
+    };
+
+    window.setDuetMode = function(mode) {
+      if (mode === 'screening' || mode === 'review') {
+        applyMode(mode);
+      }
+    };
+
+    // Auto-setup via URL query parameters when embedded or launched directly
+    window.addEventListener('DOMContentLoaded', () => {
+      // Load recent projects
+      loadRecentProjects();
+
+      // Attach drag-and-drop to dropzone
+      const dropzone = document.getElementById('dropzoneBox');
+      if (dropzone) {
+        ['dragenter', 'dragover'].forEach(eventName => {
+          dropzone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropzone.classList.add('border-[#e5a93c]');
+          }, false);
+        });
+        ['dragleave', 'drop'].forEach(eventName => {
+          dropzone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropzone.classList.remove('border-[#e5a93c]');
+          }, false);
+        });
+        dropzone.addEventListener('drop', (e) => {
+          const dt = e.dataTransfer;
+          const file = dt?.files?.[0];
+          if (file && (file.type.startsWith('video/') || file.name.match(/\.(mp4|mov|mkv|webm|m4v)$/i))) {
+            loadLocalFile(file, false);
+          }
+        }, false);
+      }
+
+      const params = new URLSearchParams(window.location.search);
+      if (params.has('room')) {
+        currentRoomCode = params.get('room');
+        const disp = document.getElementById('displayRoomCode');
+        if (disp) disp.textContent = currentRoomCode;
+      }
+      if (params.has('user')) {
+        userName = params.get('user');
+        const input = document.getElementById('inputUserName');
+        if (input) input.value = userName;
+      }
+      const videoParam = params.get('video');
+      if (videoParam) {
+        const nameParam = params.get('name') || "Loaded Cut";
+        window.setVideoSource(videoParam, nameParam);
+        const modeParam = params.get('mode') || 'screening';
+        setMode(modeParam);
+      } else if (params.get('mode') === 'review' || params.get('mode') === 'screening') {
+        setMode(params.get('mode'));
+      }
+
+      if (params.has('time')) {
+        const t = parseFloat(params.get('time'));
+        if (!isNaN(t)) {
+          setTimeout(() => {
+            if (video) video.currentTime = t;
+          }, 350);
+        }
+      }
+    });
+
+    // Bidirectional messages from parent EditMap
+    window.addEventListener('message', (event) => {
+      const data = event.data;
+      if (!data || typeof data !== 'object') return;
+      if (data.type === 'SET_VIDEO') {
+        window.setVideoSource(data.url, data.name);
+      } else if (data.type === 'SEEK_TIME') {
+        window.seekToTime(data.time);
+      } else if (data.type === 'SET_MODE') {
+        window.setDuetMode(data.mode);
+      } else if (data.type === 'LOAD_FILE' && data.file) {
+        if (typeof window.loadLocalFile === 'function') {
+          window.loadLocalFile(data.file);
+        }
+      } else if (data.type === 'SET_MARKERS' && Array.isArray(data.markers)) {
+        if (data.markers.length === 0) {
+          if (data.forceClear) {
+            clearMarkersState(false);
+          }
+        } else if (typeof window.setMarkers === 'function') {
+          const converted = data.markers.map(m => ({
+            id: m.id || Date.now() + Math.random(),
+            seconds: m.time ?? m.seconds ?? 0,
+            smpte: m.smpte || formatSMPTE(m.time ?? m.seconds ?? 0),
+            key: m.colorKey || m.key || '1',
+            colorHex: m.colorHex || (COLOR_PALETTE[m.colorKey]?.hex) || '#f43f5e',
+            resolveColor: (COLOR_PALETTE[m.colorKey]?.resolveColor) || 'ResolveColorRed',
+            note: m.notes || m.note || '',
+            authorName: m.authorName || 'Host',
+            authorAvatar: m.authorAvatar || '🎬',
+            resolved: m.resolved
+          }));
+          window.setMarkers(converted);
+        }
+      } else if (data.type === 'BG_SCAN_UPDATE') {
+        const badge = document.getElementById('duetScanBadge');
+        const badgeText = document.getElementById('duetScanBadgeText');
+        if (data.status && data.status.active) {
+          if (badge) {
+            badge.classList.remove('hidden');
+            badge.classList.add('flex');
+          }
+          if (badgeText) {
+            const s = data.status;
+            badgeText.textContent = s.statusText || `${s.stageLabel}: ${s.stageProgress ?? s.progress}%`;
+          }
+        } else if (badge && !badge.classList.contains('hidden')) {
+          if (badgeText) badgeText.textContent = '✓ Full scan complete';
+          setTimeout(() => {
+            badge.classList.add('hidden');
+            badge.classList.remove('flex');
+          }, 3500);
+        }
+      } else if (data.type === 'SHOW_ONBOARDING') {
+        const onboarding = document.getElementById('onboardingScreen');
+        if (onboarding) onboarding.classList.remove('hidden');
+        const header = document.getElementById('duetConsoleHeader');
+        if (header) header.classList.add('hidden');
+        const cancelBtn = document.getElementById('btnCancelChangeFilm');
+        if (cancelBtn && (data.canCancel || (video && video.src))) {
+          cancelBtn.classList.remove('hidden');
+        }
+        loadRecentProjects();
+      } else if (data.type === 'OPEN_PROJECTOR') {
+        openProjectorWindow();
+      } else if (data.type === 'EXPORT_EDL') {
+        exportToResolve();
+      } else if (data.type === 'PAUSE') {
+        if (video && !video.paused) {
+          video.pause();
+          updatePlayButtonUI(false);
+        }
+      }
+    });
+
+    // Initialize Screening Option A scrubber
+    setupScreeningScrubber();
+  </script>
+</body>
+</html>

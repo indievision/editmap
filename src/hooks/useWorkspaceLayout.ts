@@ -22,6 +22,28 @@ export interface WorkspaceLayoutConfig {
 }
 
 const DEFAULT_CONFIGS: Record<WorkspaceMode, WorkspaceLayoutConfig> = {
+  screening: {
+    defaultLeftWidth: 600,
+    defaultRightWidth: 384,
+    defaultTopHeightRatio: 0.6,
+    minLeftWidth: 320,
+    maxLeftWidth: 1000,
+    minRightWidth: 260,
+    maxRightWidth: 750,
+    minTopHeightRatio: 0.25,
+    maxTopHeightRatio: 0.85,
+  },
+  review: {
+    defaultLeftWidth: 600,
+    defaultRightWidth: 384,
+    defaultTopHeightRatio: 0.6,
+    minLeftWidth: 320,
+    maxLeftWidth: 1000,
+    minRightWidth: 260,
+    maxRightWidth: 750,
+    minTopHeightRatio: 0.25,
+    maxTopHeightRatio: 0.85,
+  },
   studio: {
     defaultLeftWidth: 520,
     defaultRightWidth: 360,

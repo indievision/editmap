@@ -677,8 +677,6 @@ export default function SequenceReading({
         {/* 1. Compact Header */}
         <div className="sr-head">
           <div className="sr-head-top">
-            <h2 className="sr-title sequence-drawer-title">Sequence reading</h2>
-
             <div className="sr-header-controls">
               {/* Structure Vocabulary Selector */}
               <div className="sr-vocab-wrap">
@@ -1369,7 +1367,6 @@ export default function SequenceReading({
     <section className="sequence-reading panel">
       <div className="section-head">
         <div>
-          <span className="eyebrow">SEQUENCE READING</span>
           <span className="muted">Evidence first; interpretation stays yours.</span>
         </div>
         <div className="btn-row">

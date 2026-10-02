@@ -47,16 +47,14 @@ test("Studio Cuts drawer design, interactions, boundary frames, evidence rows, p
   expect(drawerBox!.width).toBeGreaterThanOrEqual(460);
   expect(drawerBox!.width).toBeLessThanOrEqual(520);
   const railBox = await toolRail.boundingBox();
-  expect(drawerBox!.x).toBeCloseTo(railBox!.x + railBox!.width, 1);
+  expect(drawerBox!.x).toBeCloseTo(railBox!.x, 1);
 
   // Monitor resizes cleanly when in-flow drawer opens
   const monitorBoxWhileOpen = await monitor.boundingBox();
   expect(monitorBoxWhileOpen!.width).toBeLessThanOrEqual(monitorInitialBox!.width);
 
-  // 4. Verify Drawer Header and Empty State
-  const drawerTitle = page.locator(".cut-drawer-title");
-  await expect(drawerTitle).toBeVisible();
-  await expect(drawerTitle).toHaveText("CUT READING");
+  // 4. Verify Drawer Header and Empty State (with redundant title omitted)
+  await expect(page.locator(".cut-drawer-title")).toHaveCount(0);
 
   const drawerSubtitle = page.locator(".cut-drawer-subtitle");
   await expect(drawerSubtitle).toBeVisible();
@@ -162,7 +160,7 @@ test("Studio Cuts drawer design, interactions, boundary frames, evidence rows, p
   await expect(evidenceRows.nth(1).locator(".cut-evidence-label")).toContainText("Colour match");
   await expect(evidenceRows.nth(2).locator(".cut-evidence-label")).toContainText("Framing change");
   await expect(evidenceRows.nth(3).locator(".cut-evidence-label")).toContainText("Duration change");
-  await expect(evidenceRows.nth(4).locator(".cut-evidence-label")).toContainText("Visual delta");
+  await expect(evidenceRows.nth(4).locator(".cut-evidence-label")).toContainText("Visual change");
   await expect(evidenceRows.nth(5).locator(".cut-evidence-label")).toContainText("Transition");
   await expect(evidenceRows.nth(5).locator(".cut-evidence-value")).toHaveText("Hard cut");
 

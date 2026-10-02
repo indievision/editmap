@@ -26,46 +26,71 @@ function checkBackendAlive(port = 8000): Promise<boolean> {
   });
 }
 
-function autoPythonBackendPlugin(): Plugin {
+function checkDuetAlive(port = 3000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = http.get(
+      {
+        host: "127.0.0.1",
+        port,
+        path: "/",
+        timeout: 800,
+      },
+      () => resolve(true),
+    );
+    req.on("error", () => resolve(false));
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
+function autoBackendPlugin(): Plugin {
   let backendProcess: ChildProcess | null = null;
+  let duetProcess: ChildProcess | null = null;
 
   return {
-    name: "auto-python-backend",
+    name: "auto-backend",
     configureServer(server) {
       const serverDir = path.resolve(__dirname, "server");
       const venvPython = path.join(serverDir, ".venv", "bin", "python");
 
       void (async () => {
-        const isAlive = await checkBackendAlive(8000);
-        if (isAlive) {
+        // 1. Python CV backend
+        const isCvAlive = await checkBackendAlive(8000);
+        if (isCvAlive) {
           console.log("\x1b[32m[EditMap]\x1b[0m Python CV backend is already running on http://127.0.0.1:8000");
-          return;
+        } else if (fs.existsSync(venvPython)) {
+          console.log("\x1b[36m[EditMap]\x1b[0m Starting local Python CV backend (Uvicorn / FastAPI)...");
+          backendProcess = spawn(
+            venvPython,
+            ["-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"],
+            {
+              cwd: serverDir,
+              stdio: "inherit",
+            },
+          );
+
+          backendProcess.on("error", (err) => {
+            console.error("\x1b[31m[EditMap]\x1b[0m Failed to start Python backend:", err.message);
+          });
         }
 
-        if (!fs.existsSync(venvPython)) {
-          console.warn("\x1b[33m[EditMap]\x1b[0m Python virtual environment not found at server/.venv. Backend auto-start skipped.");
-          return;
-        }
-
-        console.log("\x1b[36m[EditMap]\x1b[0m Starting local Python CV backend (Uvicorn / FastAPI)...");
-        backendProcess = spawn(
-          venvPython,
-          ["-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"],
-          {
-            cwd: serverDir,
+        // 2. DUET Screening & Wi-Fi server (Port 3000)
+        const isDuetAlive = await checkDuetAlive(3000);
+        if (isDuetAlive) {
+          console.log("\x1b[32m[EditMap]\x1b[0m DUET Screening server is already running on http://127.0.0.1:3000");
+        } else {
+          console.log("\x1b[36m[EditMap]\x1b[0m Starting DUET Screening & Wi-Fi server on port 3000...");
+          duetProcess = spawn(process.execPath, [path.resolve(__dirname, "duet_server.cjs")], {
+            cwd: __dirname,
             stdio: "inherit",
-          },
-        );
+          });
 
-        backendProcess.on("error", (err) => {
-          console.error("\x1b[31m[EditMap]\x1b[0m Failed to start Python backend:", err.message);
-        });
-
-        backendProcess.on("exit", (code) => {
-          if (code !== 0 && code !== null) {
-            console.warn(`\x1b[33m[EditMap]\x1b[0m Python backend exited with code ${code}`);
-          }
-        });
+          duetProcess.on("error", (err) => {
+            console.error("\x1b[31m[EditMap]\x1b[0m Failed to start DUET server:", err.message);
+          });
+        }
       })();
 
       const cleanup = () => {
@@ -77,6 +102,16 @@ function autoPythonBackendPlugin(): Plugin {
             // Process may already be stopped
           }
           backendProcess = null;
+        }
+
+        if (duetProcess && !duetProcess.killed) {
+          console.log("\x1b[36m[EditMap]\x1b[0m Stopping DUET server...");
+          try {
+            duetProcess.kill("SIGTERM");
+          } catch {
+            // Process may already be stopped
+          }
+          duetProcess = null;
         }
       };
 
@@ -90,7 +125,7 @@ function autoPythonBackendPlugin(): Plugin {
 
 // Local-only bridge: forwards /api and /local-model to the local CV microservice
 export default defineConfig({
-  plugins: [autoPythonBackendPlugin()],
+  plugins: [autoBackendPlugin()],
   server: {
     open: true,
     proxy: {

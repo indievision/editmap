@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DUET - Projector Cinema Display</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    body {
+      background-color: #000000;
+      cursor: none; /* Hide cursor by default on projector */
+    }
+    body.show-cursor {
+      cursor: default;
+    }
+    #videoContainer:fullscreen {
+      width: 100vw;
+      height: 100vh;
+    }
+    @keyframes pulse-subtle {
+      0%, 100% { opacity: 0.95; }
+      50% { opacity: 0.75; }
+    }
+    .animate-pulse-subtle {
+      animation: pulse-subtle 2s infinite ease-in-out;
+    }
+  </style>
+</head>
+<body class="bg-black text-slate-100 antialiased overflow-hidden select-none m-0 p-0 w-screen h-screen flex items-center justify-center">
+
+  <div id="videoContainer" class="relative w-full h-full flex items-center justify-center bg-black">
+    
+    <!-- Native Fullscreen Video Player (Silent Cinema Feed - Sound is emitted exclusively by Laptop) -->
+    <video id="projectorVideo" class="w-full h-full object-contain cursor-pointer" preload="auto" playsinline muted></video>
+
+    <!-- Grease-Pencil Drawing Canvas Layer (Synced Live) -->
+    <canvas id="waxCanvas" class="absolute inset-0 w-full h-full pointer-events-none z-10"></canvas>
+
+    <!-- Standby / Waiting Screen (Active when no video is loaded) -->
+    <div id="standbyScreen" class="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/95 text-center p-6 transition-opacity duration-300">
+      <div class="w-16 h-16 rounded-2xl bg-neutral-900/90 border border-neutral-800 flex items-center justify-center text-3xl shadow-2xl mb-4">
+        📽️
+      </div>
+      <h1 class="text-base sm:text-lg font-bold text-neutral-200 tracking-wider uppercase font-mono">
+        Projector Cinema Display
+      </h1>
+      <p id="standbyStatus" class="text-xs text-neutral-400 mt-1 font-mono">
+        Ready • Room <span id="standbyRoom" class="text-amber-400 font-bold">----</span>
+      </p>
+      
+      <div class="mt-6 px-4 py-3 rounded-xl bg-neutral-900/60 border border-neutral-800/80 max-w-sm">
+        <p class="text-xs text-neutral-300 font-medium">Waiting for video from EditMap console</p>
+        <p class="text-[11px] text-neutral-500 mt-1">Select a film in EditMap or drag & drop a video file onto this screen</p>
+      </div>
+
+      <div class="mt-4 flex items-center gap-3">
+        <button id="standbyFileBtn" type="button" class="px-3.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-amber-300 font-mono text-xs border border-neutral-700 transition cursor-pointer flex items-center gap-1.5">
+          <span>Choose Video File</span>
+        </button>
+      </div>
+      <input type="file" id="standbyFileInput" accept="video/*" class="hidden" />
+    </div>
+
+    <!-- Cinema HUD (Toggle with 'T') -->
+    <div id="cinemaHud" class="hidden absolute bottom-5 right-6 z-20 flex items-center gap-3 px-3.5 py-1.5 rounded-lg bg-black/80 backdrop-blur border border-slate-800 text-xs font-mono text-slate-300">
+      <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+      <span>PROJECTOR FEED</span>
+      <span class="text-slate-600">&bull;</span>
+      <span class="text-amber-400 font-bold" id="smpteDisplay">00:00:00:00</span>
+    </div>
+
+    <!-- Subtle tactile confirmation flash (corner only, non-distracting) -->
+    <div id="silentFlashBadge" class="hidden absolute top-6 right-6 z-40 px-3 py-1.5 rounded-lg bg-black/90 border border-slate-800 text-[11px] font-mono text-slate-300 flex items-center gap-2 shadow-2xl transition">
+      <span id="silentFlashDot" class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
+      <span id="silentFlashText">Logged Cue (-12 frames)</span>
+    </div>
+
+    <!-- Hidden snapshot canvas for video marker thumbnails -->
+    <canvas id="thumbSnapCanvas" class="hidden" width="320" height="180"></canvas>
+
+    <!-- Fullscreen Prompt Helper (Fades out quickly) -->
+    <div id="fullscreenPrompt" onclick="requestFullScreen()" 
+         class="absolute top-4 right-4 z-30 px-3 py-1.5 rounded-lg bg-black/80 border border-slate-800 text-xs font-mono text-slate-400 cursor-pointer hover:bg-slate-900 transition flex items-center gap-2">
+      <svg class="w-3.5 h-3.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"></path></svg>
+      <span>Double-click or 'F' for Fullscreen &bull; 'Space' Play &bull; 'T' Timecode</span>
+    </div>
+
+  </div>
+
+  <script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomCode = urlParams.get('room') || '4821';
+    const videoUrlParam = urlParams.get('video');
+
+    const video = document.getElementById('projectorVideo');
+    const canvas = document.getElementById('waxCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('videoContainer');
+    const hud = document.getElementById('cinemaHud');
+    const prompt = document.getElementById('fullscreenPrompt');
+    const standbyScreen = document.getElementById('standbyScreen');
+    const standbyRoom = document.getElementById('standbyRoom');
+    const standbyFileBtn = document.getElementById('standbyFileBtn');
+    const standbyFileInput = document.getElementById('standbyFileInput');
+    standbyRoom.textContent = roomCode;
+    video.muted = true; // Projector window is strictly a silent cinema video feed; sound is emitted by laptop
+
+    function showStandby() {
+      standbyScreen.classList.remove('hidden');
+      standbyScreen.style.opacity = '1';
+    }
+
+    function hideStandby() {
+      standbyScreen.style.opacity = '0';
+      standbyScreen.style.pointerEvents = 'none';
+      standbyScreen.classList.add('hidden');
+      prompt.classList.add('hidden');
+    }
+
+    // Direct reference to host video player if on same Mac
+    function getHostVideo() {
+      try {
+        if (window.opener && !window.opener.closed && window.opener.document) {
+          return window.opener.document.getElementById('mainVideoPlayer') || 
+                 window.opener.document.querySelector('video[src]');
+        }
+      } catch (e) {}
+      return null;
+    }
+
+    // Safe playback function (always muted, plays instantly without autoplay policy blocking)
+    function playVideoSafely() {
+      if (!video.src) {
+        checkOpenerVideo();
+        syncChannel?.postMessage({ type: 'REQUEST_VIDEO_SYNC', roomCode });
+        return;
+      }
+      hideStandby();
+      video.muted = true;
+      const playPromise = video.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((err) => {
+          console.warn('Projector play error:', err);
+        });
+      }
+    }
+
+    // Direct local file loader
+    let currentLoadedFile = null;
+    window.loadLocalFile = function(file) {
+      if (!file) return;
+      if (currentLoadedFile === file && video.src) {
+        hideStandby();
+        return;
+      }
+      currentLoadedFile = file;
+      try {
+        const objectUrl = URL.createObjectURL(file);
+        window.setVideoSource(objectUrl, 0, false);
+      } catch (err) {
+        console.error('Error loading video file in projector:', err);
+      }
+    };
+
+    // Direct video URL setter
+    window.setVideoSource = function(src, targetTime, shouldPlay) {
+      if (!src) return;
+      if (video.src !== src) {
+        video.src = src;
+        const onMetadata = () => {
+          if (typeof targetTime === 'number' && targetTime > 0) {
+            video.currentTime = targetTime;
+          }
+          hideStandby();
+          if (shouldPlay) {
+            playVideoSafely();
+          }
+        };
+        video.addEventListener('loadedmetadata', onMetadata, { once: true });
+        video.load();
+        hideStandby();
+      } else {
+        hideStandby();
+        if (typeof targetTime === 'number' && Math.abs(video.currentTime - targetTime) > 0.4 && !video.seeking) {
+          video.currentTime = targetTime;
+        }
+        if (shouldPlay && video.paused) {
+          playVideoSafely();
+        }
+      }
+    };
+
+    // Enforce 100% silent projector (no sound output from projector screen)
+    video.muted = true;
+    video.volume = 0;
+    video.addEventListener('volumechange', () => {
+      video.muted = true;
+      video.volume = 0;
+    });
+
+    // Auto-pull video from opener or parent window if available
+    function checkOpenerVideo() {
+      try {
+        let sourceWin = window.opener;
+        if (!sourceWin && window.parent && window.parent !== window) {
+          sourceWin = window.parent;
+        }
+
+        if (sourceWin) {
+          // If source window has an active Duet iframe, prioritize the iframe!
+          if (sourceWin.document) {
+            try {
+              const iframes = sourceWin.document.querySelectorAll('iframe');
+              for (const iframe of iframes) {
+                if (iframe && iframe.contentWindow) {
+                  if (iframe.contentWindow.selectedFile) {
+                    window.loadLocalFile(iframe.contentWindow.selectedFile);
+                    return true;
+                  }
+                  const iVid = iframe.contentWindow.document?.getElementById('mainVideoPlayer') ||
+                               iframe.contentWindow.document?.querySelector('video[src]');
+                  if (iVid && iVid.src) {
+                    window.setVideoSource(iVid.src, iVid.currentTime);
+                    return true;
+                  }
+                }
+              }
+            } catch (err) {}
+          }
+
+          // 1. Direct file bridge
+          if (sourceWin.selectedFile) {
+            window.loadLocalFile(sourceWin.selectedFile);
+            return true;
+          }
+          
+          // 2. Direct URL bridge
+          if (sourceWin.__editmap_video_url) {
+            window.setVideoSource(sourceWin.__editmap_video_url);
+            return true;
+          }
+
+          // 3. Query host video player element
+          if (sourceWin.document) {
+            const hostVid = sourceWin.document.getElementById('mainVideoPlayer') || 
+                            sourceWin.document.querySelector('video[src]');
+            if (hostVid && hostVid.src) {
+              window.setVideoSource(hostVid.src, hostVid.currentTime);
+              return true;
+            }
+          }
+        }
+      } catch (e) {
+        // Cross-origin restrictions
+      }
+      return false;
+    }
+
+    // Try opener first; only fallback to URL parameter if opener has no video
+    if (!checkOpenerVideo() && videoUrlParam) {
+      window.setVideoSource(decodeURIComponent(videoUrlParam));
+    }
+
+    checkOpenerVideo();
+    window.addEventListener('load', checkOpenerVideo);
+    window.addEventListener('focus', checkOpenerVideo);
+
+    // Periodic sync poll while video is missing (checks opener and broadcast channel)
+    let syncPollCount = 0;
+    const syncPollInterval = setInterval(() => {
+      syncPollCount++;
+      if (video.src || syncPollCount > 40) {
+        if (video.src) clearInterval(syncPollInterval);
+      } else {
+        checkOpenerVideo();
+        if (syncChannel) {
+          syncChannel.postMessage({ type: 'REQUEST_VIDEO_SYNC', roomCode });
+        }
+      }
+    }, 400);
+
+    // Standby File Picker
+    standbyFileBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      standbyFileInput.click();
+    });
+    standbyFileInput.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (file) {
+        window.loadLocalFile(file);
+      }
+      e.target.value = '';
+    });
+
+    // Drag and drop video file onto the projector
+    window.addEventListener('dragover', (e) => e.preventDefault());
+    window.addEventListener('drop', (e) => {
+      e.preventDefault();
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+        window.loadLocalFile(e.dataTransfer.files[0]);
+      }
+    });
+
+    // -------------------------------------------------------------
+    // High-res Same-Origin Sync (BroadcastChannel)
+    // -------------------------------------------------------------
+    const syncChannel = window.BroadcastChannel ? new BroadcastChannel('duet_projector_channel') : null;
+    if (syncChannel) {
+      syncChannel.onmessage = (event) => {
+        const msg = event.data;
+        if (!msg) return;
+
+        if (msg.type === 'SYNC_VIDEO') {
+          if (msg.file && typeof window.loadLocalFile === 'function') {
+            window.loadLocalFile(msg.file);
+          } else if (msg.videoSrc) {
+            window.setVideoSource(msg.videoSrc, msg.currentTime, msg.isPlaying);
+          }
+          if (msg.isPlaying) {
+            playVideoSafely();
+          } else {
+            video.pause();
+          }
+        } else if (msg.type === 'PLAY') {
+          if (msg.currentTime !== undefined && Math.abs(video.currentTime - msg.currentTime) > 0.5 && !video.seeking) {
+            video.currentTime = msg.currentTime;
+          }
+          playVideoSafely();
+        } else if (msg.type === 'PAUSE') {
+          if (msg.currentTime !== undefined && !video.seeking) video.currentTime = msg.currentTime;
+          video.pause();
+          video.playbackRate = 1.0;
+        } else if (msg.type === 'SEEK') {
+          if (msg.currentTime !== undefined && !video.seeking) {
+            video.currentTime = msg.currentTime;
+            updateTimecode();
+          }
+        } else if (msg.type === 'TIME_PULSE') {
+          if (msg.isPlaying && video.paused && video.src && video.readyState >= 2) {
+            playVideoSafely();
+          }
+          // If window.opener is already directly controlling this player on the same Mac, skip pulse adjustments
+          if (window.opener && !window.opener.closed) {
+            return;
+          }
+          if (video.seeking) return;
+          const delta = video.currentTime - msg.currentTime;
+          const absDelta = Math.abs(delta);
+          if (absDelta > 0.75) {
+            video.currentTime = msg.currentTime;
+            video.playbackRate = msg.playbackRate || 1;
+          } else if (absDelta > 0.20) {
+            video.playbackRate = delta < 0 ? (msg.playbackRate || 1) * 1.06 : (msg.playbackRate || 1) * 0.94;
+          } else if (absDelta > 0.035) {
+            video.playbackRate = delta < 0 ? (msg.playbackRate || 1) * 1.025 : (msg.playbackRate || 1) * 0.975;
+          } else {
+            video.playbackRate = msg.playbackRate || 1;
+          }
+        } else if (msg.type === 'DRAW_STROKE') {
+          renderStroke(msg.stroke.points, msg.stroke.color);
+        } else if (msg.type === 'CLEAR_DRAW') {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+        } else if (msg.type === 'ADD_MARKER') {
+          triggerSilentFlash(msg.marker);
+        }
+      };
+
+      // Request initial state from host
+      syncChannel.postMessage({ type: 'REQUEST_VIDEO_SYNC', roomCode });
+    }
+
+    // -------------------------------------------------------------
+    // WebSocket Sync Server (Cross-Device & Remote Wi-Fi Clients)
+    // -------------------------------------------------------------
+    let ws = null;
+    let wsReconnectTimeout = null;
+
+    function connectWebSocket() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsPort = urlParams.get('port') || '3000';
+      const wsUrl = `${protocol}//${window.location.hostname}:${wsPort}`;
+
+      try {
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          ws.send(JSON.stringify({
+            type: 'JOIN_ROOM',
+            roomCode: roomCode,
+            name: 'Projector (Cinema)',
+            avatar: '📽️',
+            role: 'projector'
+          }));
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+
+            if (msg.type === 'INIT_STATE') {
+              if (msg.state?.videoUrl && !video.src) {
+                video.src = msg.state.videoUrl;
+                video.load();
+                hideStandby();
+              }
+            } else if (msg.type === 'VIDEO_SHARED') {
+              video.src = msg.videoUrl;
+              video.load();
+              hideStandby();
+            } else if (msg.type === 'PLAY') {
+              if (Math.abs(video.currentTime - msg.currentTime) > 0.15) {
+                video.currentTime = msg.currentTime;
+              }
+              playVideoSafely();
+            } else if (msg.type === 'PAUSE') {
+              video.currentTime = msg.currentTime;
+              video.pause();
+            } else if (msg.type === 'SEEK' || msg.type === 'SELECT_MARKER') {
+              video.currentTime = msg.currentTime;
+              updateTimecode();
+            } else if (msg.type === 'DRAW_STROKE') {
+              renderStroke(msg.stroke.points, msg.stroke.color);
+            } else if (msg.type === 'CLEAR_DRAW') {
+              ctx.clearRect(0, 0, canvas.width, canvas.height);
+            } else if (msg.type === 'ADD_MARKER') {
+              triggerSilentFlash(msg.marker);
+            }
+          } catch (e) {
+            console.error('Error parsing WS message in projector:', e);
+          }
+        };
+
+        ws.onclose = () => {
+          clearTimeout(wsReconnectTimeout);
+          wsReconnectTimeout = setTimeout(connectWebSocket, 2000);
+        };
+
+        ws.onerror = () => {
+          // Graceful fallback to BroadcastChannel if port 3000 server is offline
+        };
+      } catch (err) {
+        clearTimeout(wsReconnectTimeout);
+        wsReconnectTimeout = setTimeout(connectWebSocket, 3000);
+      }
+    }
+
+    connectWebSocket();
+
+    // Video events
+    video.addEventListener('loadedmetadata', () => {
+      hideStandby();
+      updateTimecode();
+    });
+
+    video.addEventListener('loadeddata', () => {
+      hideStandby();
+    });
+
+    video.addEventListener('canplay', () => {
+      hideStandby();
+    });
+
+    video.addEventListener('playing', () => {
+      hideStandby();
+    });
+
+    video.addEventListener('click', () => {
+      togglePlay();
+    });
+
+    // Canvas resize
+    function resizeCanvas() {
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    setTimeout(resizeCanvas, 100);
+
+    function renderStroke(pts, color) {
+      if (pts.length < 2) return;
+      ctx.beginPath();
+      ctx.lineWidth = 4;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = color;
+      ctx.moveTo(pts[0].x * canvas.width, pts[0].y * canvas.height);
+      for (let i = 1; i < pts.length; i++) {
+        ctx.lineTo(pts[i].x * canvas.width, pts[i].y * canvas.height);
+      }
+      ctx.stroke();
+    }
+
+    // Timecode update
+    function formatSMPTE(seconds) {
+      const fps = 24;
+      const totalFrames = Math.floor(seconds * fps);
+      const h = Math.floor(totalFrames / (fps * 3600));
+      const m = Math.floor((totalFrames % (fps * 3600)) / (fps * 60));
+      const s = Math.floor((totalFrames % (fps * 60)) / fps);
+      const f = totalFrames % fps;
+      return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}:${String(f).padStart(2,'0')}`;
+    }
+
+    function updateTimecode() {
+      document.getElementById('smpteDisplay').textContent = formatSMPTE(video.currentTime);
+    }
+    video.addEventListener('timeupdate', updateTimecode);
+
+    // Toggle Play/Pause from Projector & broadcast back to host
+    function togglePlay() {
+      const hVid = getHostVideo();
+      if (video.paused) {
+        if (hVid) {
+          hVid.currentTime = video.currentTime;
+          hVid.playbackRate = video.playbackRate;
+          hVid.play().catch(() => {});
+        }
+        playVideoSafely();
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'PLAY', currentTime: video.currentTime }));
+        }
+        syncChannel?.postMessage({ type: 'PLAY', currentTime: video.currentTime });
+      } else {
+        if (hVid) {
+          hVid.currentTime = video.currentTime;
+          hVid.pause();
+        }
+        video.pause();
+        video.playbackRate = 1.0;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'PAUSE', currentTime: video.currentTime }));
+        }
+        syncChannel?.postMessage({ type: 'PAUSE', currentTime: video.currentTime });
+      }
+    }
+
+    // Reaction Marker System for Projector Cinema Display
+    const COLOR_PALETTE = {
+      '1': { key: '1', hex: '#f43f5e', resolveColor: 'ResolveColorRed', name: 'Red' },
+      '2': { key: '2', hex: '#fbbf24', resolveColor: 'ResolveColorYellow', name: 'Yellow' },
+      '3': { key: '3', hex: '#34d399', resolveColor: 'ResolveColorGreen', name: 'Green' },
+      '4': { key: '4', hex: '#38bdf8', resolveColor: 'ResolveColorCyan', name: 'Cyan' }
+    };
+
+    function triggerSilentFlash(marker) {
+      const flash = document.getElementById('silentFlashBadge');
+      const dot = document.getElementById('silentFlashDot');
+      if (dot && marker && marker.colorHex) {
+        dot.style.backgroundColor = marker.colorHex;
+      }
+      if (flash) {
+        flash.classList.remove('hidden');
+        clearTimeout(window.__flashTimeout);
+        window.__flashTimeout = setTimeout(() => flash.classList.add('hidden'), 2000);
+      }
+    }
+
+    function dropReactionMarker(keyStr) {
+      const colorConfig = COLOR_PALETTE[keyStr] || COLOR_PALETTE['1'];
+      // Screening reaction auto-offset: pull back 12 frames (~0.5s) to hit the cut
+      const offsetSeconds = Math.max(0, (video.currentTime || 0) - 0.5);
+      const smpte = formatSMPTE(offsetSeconds);
+
+      let thumbnailData = '';
+      try {
+        const thumbCanvas = document.getElementById('thumbSnapCanvas');
+        if (thumbCanvas) {
+          const tCtx = thumbCanvas.getContext('2d');
+          tCtx.drawImage(video, 0, 0, thumbCanvas.width, thumbCanvas.height);
+          thumbnailData = thumbCanvas.toDataURL('image/jpeg', 0.7);
+        }
+      } catch (e) {}
+
+      // Get user metadata from opener if available, otherwise Projector defaults
+      let authorName = 'Projector (Cinema)';
+      let authorAvatar = '📽️';
+      try {
+        if (window.opener && window.opener.userName) {
+          authorName = window.opener.userName;
+          authorAvatar = window.opener.userAvatar || '🎬';
+        }
+      } catch (e) {}
+
+      const newMarker = {
+        id: Date.now(),
+        seconds: offsetSeconds,
+        smpte: smpte,
+        key: colorConfig.key,
+        colorHex: colorConfig.hex,
+        resolveColor: colorConfig.resolveColor,
+        note: `Flagged at ${smpte}`,
+        thumbnail: thumbnailData,
+        authorName: authorName,
+        authorAvatar: authorAvatar,
+        role: 'projector'
+      };
+
+      // 1. Instant tactile confirmation on projector display
+      triggerSilentFlash(newMarker);
+
+      // 2. Broadcast via WebSocket to room and server
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'ADD_MARKER', marker: newMarker }));
+      }
+
+      // 3. Broadcast via BroadcastChannel to host console
+      syncChannel?.postMessage({ type: 'ADD_MARKER', marker: newMarker });
+
+      // 4. Direct window.opener bridge (cross-window on same Mac)
+      try {
+        if (window.opener && typeof window.opener.addExternalMarker === 'function') {
+          window.opener.addExternalMarker(newMarker);
+        }
+      } catch (e) {}
+    }
+
+    // Fullscreen Toggle
+    function requestFullScreen() {
+      if (!document.fullscreenElement) {
+        container.requestFullscreen().catch(err => console.log(err));
+        prompt.classList.add('hidden');
+      } else {
+        document.exitFullscreen();
+      }
+    }
+
+    // Auto-hide the setup prompt after 2.5 seconds so screen is 100% clean
+    setTimeout(() => {
+      prompt.style.transition = 'opacity 1s ease';
+      prompt.style.opacity = '0';
+      setTimeout(() => prompt.classList.add('hidden'), 1000);
+    }, 2500);
+
+    window.addEventListener('dblclick', requestFullScreen);
+    window.addEventListener('keydown', (e) => {
+      if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        togglePlay();
+      } else if (e.key === '1' || e.key === '2' || e.key === '3' || e.key === '4') {
+        e.preventDefault();
+        dropReactionMarker(e.key);
+      } else if (e.key === 'f' || e.key === 'F') {
+        requestFullScreen();
+      } else if (e.key === 't' || e.key === 'T') {
+        hud.classList.toggle('hidden');
+      } else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        video.currentTime = Math.max(0, video.currentTime - (e.shiftKey ? 1 : 1 / 24));
+        const hVid = getHostVideo();
+        if (hVid) hVid.currentTime = video.currentTime;
+        syncChannel?.postMessage({ type: 'SEEK', currentTime: video.currentTime });
+      } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        video.currentTime = Math.min(video.duration || 1000, video.currentTime + (e.shiftKey ? 1 : 1 / 24));
+        const hVid = getHostVideo();
+        if (hVid) hVid.currentTime = video.currentTime;
+        syncChannel?.postMessage({ type: 'SEEK', currentTime: video.currentTime });
+      }
+    });
+
+    // Auto-hide cursor when mouse is idle
+    let mouseTimer = null;
+    window.addEventListener('mousemove', () => {
+      document.body.classList.add('show-cursor');
+      clearTimeout(mouseTimer);
+      mouseTimer = setTimeout(() => {
+        document.body.classList.remove('show-cursor');
+      }, 1500);
+    });
+  </script>
+</body>
+</html>

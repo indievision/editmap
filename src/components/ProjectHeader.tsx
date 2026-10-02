@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import type { Project } from "../models/project";
-import { formatTimecode } from "../utils/timecode";
 
-export type WorkspaceMode = "studio" | "explore";
+export type WorkspaceMode = "screening" | "review" | "studio" | "explore";
 
 export default function ProjectHeader({
   project,
@@ -21,70 +20,231 @@ export default function ProjectHeader({
   onImportProject,
   onExportProject,
   onExportPDF,
+  onExportEdlMarkers,
   onAnalyze,
   isAnalyzing,
   hasVideo,
   onProjectNameChange,
   onHome,
+  onOpenSettings,
+  onOpenProjector,
+  isScreeningSetup = false,
+  showChangeFilm = false,
+  onChangeFilm,
 }: {
   project: Project | null;
   dirty: boolean;
   saveState: string;
-  historyState: { undo: number; redo: number };
+  historyState?: { undo: number; redo: number };
   workspaceMode: WorkspaceMode;
   onModeChange: (mode: WorkspaceMode) => void;
   onNew: () => void;
   onOpen: () => void;
   onSave: () => void;
-  onUndo: () => void;
-  onRedo: () => void;
+  onUndo?: () => void;
+  onRedo?: () => void;
   onImportVideo: () => void;
   onImportEdl: () => void;
   onImportProject: () => void;
   onExportProject: () => void;
   onExportPDF: () => void;
+  onExportEdlMarkers?: () => void;
   onAnalyze: () => void;
   isAnalyzing: boolean;
   hasVideo: boolean;
   onProjectNameChange?: (name: string) => void;
   onHome?: () => void;
+  onOpenSettings?: () => void;
+  onOpenProjector?: () => void;
+  isScreeningSetup?: boolean;
+  showChangeFilm?: boolean;
+  onChangeFilm?: () => void;
 }) {
-  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
-  const [importMenuOpen, setImportMenuOpen] = useState(false);
-  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [fileMenuOpen, setFileMenuOpen] = useState(false);
+  const fileMenuRef = useRef<HTMLDivElement>(null);
 
-  const projectMenuRef = useRef<HTMLDivElement>(null);
-  const importMenuRef = useRef<HTMLDivElement>(null);
-  const exportMenuRef = useRef<HTMLDivElement>(null);
-
-  // Close menus when clicking outside
+  // Close file menu when clicking outside or pressing Escape
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (
-        projectMenuRef.current &&
-        !projectMenuRef.current.contains(e.target as Node)
+        fileMenuRef.current &&
+        !fileMenuRef.current.contains(e.target as Node)
       ) {
-        setProjectMenuOpen(false);
+        setFileMenuOpen(false);
       }
-      if (
-        importMenuRef.current &&
-        !importMenuRef.current.contains(e.target as Node)
-      ) {
-        setImportMenuOpen(false);
-      }
-      if (
-        exportMenuRef.current &&
-        !exportMenuRef.current.contains(e.target as Node)
-      ) {
-        setExportMenuOpen(false);
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && fileMenuOpen) {
+        setFileMenuOpen(false);
       }
     };
     window.addEventListener("mousedown", handleClickOutside);
-    return () => window.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", handleClickOutside);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [fileMenuOpen]);
+
+  const fileDropdown = (
+    <div className="header-dropdown-container" ref={fileMenuRef}>
+      <button
+        type="button"
+        className={`header-menu-btn file-trigger-btn ${fileMenuOpen ? "active" : ""}`}
+        onClick={() => setFileMenuOpen(!fileMenuOpen)}
+        aria-expanded={fileMenuOpen}
+        aria-haspopup="true"
+        title="File operations (New, Open, Save, Import, Export)"
+      >
+        <span>File</span>
+        <span className="dropdown-arrow">▾</span>
+      </button>
+
+      {fileMenuOpen && (
+        <div className="dropdown-menu file-menu" role="menu">
+          <button
+            type="button"
+            role="menuitem"
+            className="header-action-btn"
+            aria-label="New project"
+            onClick={() => {
+              setFileMenuOpen(false);
+              onNew();
+            }}
+          >
+            <span>New Project</span>
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            className="header-action-btn"
+            aria-label="Open project"
+            onClick={() => {
+              setFileMenuOpen(false);
+              onOpen();
+            }}
+          >
+            <span>Open Project…</span>
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!project}
+            className="header-action-btn"
+            aria-label="Save project"
+            onClick={() => {
+              setFileMenuOpen(false);
+              onSave();
+            }}
+          >
+            <span>Save Project</span>
+            <kbd>Cmd+S</kbd>
+          </button>
+
+          <div className="menu-divider" />
+          <div className="menu-section-header">Import</div>
+
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!project}
+            onClick={() => {
+              setFileMenuOpen(false);
+              onImportVideo();
+            }}
+          >
+            <span>Import Video…</span>
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!project}
+            onClick={() => {
+              setFileMenuOpen(false);
+              onImportEdl();
+            }}
+          >
+            <span>Import EDL…</span>
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!project}
+            onClick={() => {
+              setFileMenuOpen(false);
+              onImportProject();
+            }}
+          >
+            <span>Import Backup (.json)…</span>
+          </button>
+
+          <div className="menu-divider" />
+          <div className="menu-section-header">Export</div>
+
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!project}
+            onClick={() => {
+              setFileMenuOpen(false);
+              onExportProject();
+            }}
+          >
+            <span>Export Project (.json)</span>
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!project}
+            onClick={() => {
+              setFileMenuOpen(false);
+              onExportPDF();
+            }}
+          >
+            <span>Export PDF Report…</span>
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!project}
+            onClick={() => {
+              setFileMenuOpen(false);
+              onExportEdlMarkers?.();
+            }}
+            title="Export markers to DaVinci Resolve EDL"
+          >
+            <span>Export .EDL</span>
+          </button>
+
+          {onOpenSettings && (
+            <>
+              <div className="menu-divider" />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setFileMenuOpen(false);
+                  onOpenSettings();
+                }}
+              >
+                <span>Scanner Settings…</span>
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
 
   return (
-    <header className="app-header">
+    <header className={`app-header${isScreeningSetup ? " screening-setup-header" : ""}`}>
+      {/* Left: Brand + Context / Project Name + Save Status */}
       <div className="header-left">
         <a
           className="brand"
@@ -93,34 +253,37 @@ export default function ProjectHeader({
             e.preventDefault();
             if (onHome) onHome();
           }}
-          title="EDITMAP: Return to Welcome Screen"
+          title={isScreeningSetup ? "EDITMAP: Screening Setup" : "EDITMAP: Return to Welcome Screen"}
           aria-label="EDITMAP Home"
         >
-          <span className="brand-text">EDITMAP</span>
+          <span className="brand-mark" aria-hidden="true">
+            <i /><i /><i /><i />
+          </span>
+          <span className="brand-name">EDITMAP</span>
         </a>
 
-        <span className="header-divider" aria-hidden="true" />
+        <span className="brand-sep" aria-hidden="true" />
 
-        {/* Project Pill: Direct Project Name Input + Menu Dropdown */}
-        <div className="header-project-group" ref={projectMenuRef}>
+        {showChangeFilm && onChangeFilm && (
           <button
             type="button"
-            className={`header-menu-btn project-trigger-btn ${projectMenuOpen ? "active" : ""}`}
-            onClick={() => {
-              setProjectMenuOpen(!projectMenuOpen);
-              setImportMenuOpen(false);
-              setExportMenuOpen(false);
-            }}
-            aria-expanded={projectMenuOpen}
-            aria-haspopup="true"
-            title="Project management menu"
+            className="change-film-btn"
+            onClick={onChangeFilm}
+            aria-label="Back to choose another film"
+            title="Back to choose another film"
           >
-            <span className="header-project-label">{project ? project.name || "Untitled film" : "Project"}</span>
-            <span className="dropdown-arrow">▾</span>
+            <svg viewBox="0 0 16 16" aria-hidden="true" className="change-film-icon">
+              <path d="m7 3-5 5 5 5M2 8h12" />
+            </svg>
+            <span className="change-film-text">Change film</span>
           </button>
+        )}
 
-          {project && (
-            <div className="header-project-input-wrap">
+        {isScreeningSetup ? (
+          <span className="brand-section">Screening setup</span>
+        ) : (
+          project && (
+            <div className="header-project-group header-project-pill">
               <input
                 aria-label="Project name"
                 className="header-project-input"
@@ -128,295 +291,113 @@ export default function ProjectHeader({
                 onChange={(e) => onProjectNameChange?.(e.target.value)}
                 placeholder="Untitled film"
               />
-              <span className="header-project-edit-icon" aria-hidden="true" title="Click to rename project">✎</span>
-              <span
-                className={`save-indicator ${dirty ? "unsaved" : "saved"}`}
-                title={dirty ? "Unsaved changes exist" : "All changes saved locally"}
-              >
-                {saveState || (dirty ? "Unsaved •" : "Local • Saved")}
-              </span>
-            </div>
-          )}
-
-          {project && (
-            <div className="header-file-actions" role="group" aria-label="Project actions">
-            <button
-              type="button"
-              className="header-action-btn"
-              onClick={onNew}
-              aria-label="New project"
-              title="Create new project"
-            >
-              New
-            </button>
-
-            <button
-              type="button"
-              className="header-action-btn"
-              onClick={onOpen}
-              aria-label="Open project"
-              title="Open project"
-            >
-              Open…
-            </button>
-
-            <button
-              type="button"
-              className={`header-action-btn ${dirty ? "dirty" : ""}`}
-              disabled={!project}
-              onClick={onSave}
-              aria-label={dirty ? "Save project, unsaved changes exist" : "Save project"}
-              title="Save project (Cmd+S)"
-            >
-              Save{dirty ? " •" : ""}
-            </button>
-          </div>
-          )}
-
-          {projectMenuOpen && (
-            <div className="dropdown-menu project-menu" role="menu">
               <button
                 type="button"
-                role="menuitem"
-                onClick={() => {
-                  setProjectMenuOpen(false);
-                  onNew();
-                }}
+                className={`header-save-status ${dirty ? "dirty" : "saved"}`}
+                onClick={onSave}
+                title={dirty ? "Unsaved changes • Click or Cmd+S to save immediately" : "All changes saved locally (Cmd+S)"}
+                aria-label={dirty ? "Save project, unsaved changes exist" : "Project saved"}
               >
-                <span>New Project</span>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setProjectMenuOpen(false);
-                  onOpen();
-                }}
-              >
-                <span>Open Project...</span>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                disabled={!project}
-                onClick={() => {
-                  setProjectMenuOpen(false);
-                  onSave();
-                }}
-              >
-                <span>Save Project</span>
-                <kbd>Cmd+S</kbd>
+                <span className="save-status-dot" aria-hidden="true" />
+                <span className="save-status-text">
+                  {saveState === "Saving" ? "Saving…" : dirty ? "Unsaved" : "Saved"}
+                </span>
               </button>
             </div>
-          )}
-        </div>
+          )
+        )}
       </div>
 
-      {/* Center: Workspace Mode Switch */}
-      {project && (
-        <div
-          className="workspace-mode-switch"
-          role="tablist"
-          aria-label="Workspace Modes"
-        >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={workspaceMode === "studio"}
-            className={`mode-tab ${workspaceMode === "studio" ? "active" : ""}`}
-            onClick={() => onModeChange("studio")}
-            title="Studio: Everyday workbench with film monitor, analytical deck & shot inspector"
-          >
-            Studio
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={workspaceMode === "explore"}
-            className={`mode-tab ${workspaceMode === "explore" ? "active" : ""}`}
-            onClick={() => onModeChange("explore")}
-            title="Explore: Build and play data-driven viewing sequences"
-          >
-            Explore
-          </button>
-        </div>
-      )}
-
-      {/* Right: Stats, Undo/Redo, Import, Analyze, Export */}
-      <div className="header-right">
-        {project && (
-          <div className="header-meta mono">
-            <span>{project.frameRate} FPS</span>
-            <span className="meta-sep">/</span>
-            <span>{project.shots.length} shots</span>
-            <span className="meta-sep">/</span>
-            <span>
-              {formatTimecode(project.duration, project.frameRate, project.dropFrame)}
-            </span>
-          </div>
-        )}
-
-        {/* Undo / Redo */}
-        <div className="history-group">
-          <button
-            type="button"
-            className="header-history-btn"
-            disabled={!project || !historyState.undo}
-            onClick={onUndo}
-            title="Undo (Cmd/Ctrl+Z)"
-            aria-label="Undo"
-          >
-            ↩
-          </button>
-          <button
-            type="button"
-            className="header-history-btn"
-            disabled={!project || !historyState.redo}
-            onClick={onRedo}
-            title="Redo (Cmd/Ctrl+Shift+Z)"
-            aria-label="Redo"
-          >
-            ↪
-          </button>
-        </div>
-
-        {/* Save Button */}
-        {project && (
-          <button
-            type="button"
-            className={`header-action-btn primary-save ${dirty ? "dirty" : ""}`}
-            onClick={onSave}
-            title={dirty ? "Save Project (Cmd+S) • Unsaved changes" : "Project Saved"}
-            aria-label={dirty ? "Save project, unsaved changes exist" : "Save project"}
-          >
-            Save{dirty ? " •" : ""}
-          </button>
-        )}
-
-        {/* Import Menu */}
-        <div className="header-dropdown-container" ref={importMenuRef}>
-          <button
-            type="button"
-            className={`header-menu-btn ${importMenuOpen ? "active" : ""}`}
-            onClick={() => {
-              setImportMenuOpen(!importMenuOpen);
-              setProjectMenuOpen(false);
-              setExportMenuOpen(false);
-            }}
-            aria-expanded={importMenuOpen}
-            aria-haspopup="true"
-          >
-            <span>Import</span>
-            <span className="dropdown-arrow">▾</span>
-          </button>
-
-          {importMenuOpen && (
-            <div className="dropdown-menu dropdown-menu-right" role="menu">
-              <button
-                type="button"
-                role="menuitem"
-                disabled={!project}
-                onClick={() => {
-                  setImportMenuOpen(false);
-                  onImportVideo();
-                }}
-              >
-                <span>Import Video...</span>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                disabled={!project}
-                onClick={() => {
-                  setImportMenuOpen(false);
-                  onImportEdl();
-                }}
-              >
-                <span>Import EDL...</span>
-              </button>
-              <div className="menu-divider" />
-              <button
-                type="button"
-                role="menuitem"
-                disabled={!project}
-                onClick={() => {
-                  setImportMenuOpen(false);
-                  onImportProject();
-                }}
-              >
-                <span>Import Project Backup (.json)...</span>
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Analyze Action */}
+      {/* Center: Workspace Mode Switch - purely text, no emojis */}
+      <div
+        className="workspace-mode-switch"
+        role="tablist"
+        aria-label="Workspace Modes"
+      >
         <button
           type="button"
-          className="header-analyze-btn"
-          disabled={!project || !hasVideo || isAnalyzing}
-          onClick={onAnalyze}
-          title={
-            !hasVideo
-              ? "Link a video first to analyze"
-              : "Analyze film: Scene Cuts, Framing & Character Discovery"
-          }
+          role="tab"
+          aria-selected={workspaceMode === "screening"}
+          className={`mode-tab ${workspaceMode === "screening" ? "active" : ""}`}
+          onClick={() => onModeChange("screening")}
+          title="Screening: Dark cinema screening with live reaction keys and Wi-Fi sync"
         >
-          {isAnalyzing ? (
-            <>
-              <span className="spinner-dot" />
-              <span>Analyzing…</span>
-            </>
-          ) : (
-            <span>Analyze</span>
-          )}
+          Screening
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={workspaceMode === "review"}
+          className={`mode-tab ${workspaceMode === "review" ? "active" : ""}`}
+          onClick={() => onModeChange("review")}
+          title="Review: Immediate post-screening discussion, reaction heatmap, pencil & cue sheet"
+        >
+          Review
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={workspaceMode === "studio"}
+          className={`mode-tab ${workspaceMode === "studio" ? "active" : ""}`}
+          onClick={() => onModeChange("studio")}
+          title="Studio: Inspect rhythm, timeline, framing arc & shot breakdown"
+        >
+          Studio
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={workspaceMode === "explore"}
+          className={`mode-tab ${workspaceMode === "explore" ? "active" : ""}`}
+          onClick={() => onModeChange("explore")}
+          title="Explore: Build and play data-driven viewing sequences"
+        >
+          Explore
+        </button>
+      </div>
 
-        {/* Export Menu */}
-        <div className="header-dropdown-container" ref={exportMenuRef}>
+      {/* Right: Projector ↗ · Analyze · File ▾ (fixed across all workspaces) */}
+      <div className="header-right">
+        {onOpenProjector && (
           <button
             type="button"
-            className={`header-menu-btn export-btn ${exportMenuOpen ? "active" : ""}`}
-            disabled={!project}
-            onClick={() => {
-              setExportMenuOpen(!exportMenuOpen);
-              setProjectMenuOpen(false);
-              setImportMenuOpen(false);
-            }}
-            aria-expanded={exportMenuOpen}
-            aria-haspopup="true"
+            className="header-projector-btn"
+            disabled={!hasVideo}
+            onClick={onOpenProjector}
+            title={
+              !hasVideo
+                ? "Link a video first to open projector feed"
+                : "Launch clean cinema feed for TV / Projector in secondary window"
+            }
           >
-            <span>Export</span>
-            <span className="dropdown-arrow">▾</span>
+            Projector ↗
           </button>
+        )}
 
-          {exportMenuOpen && (
-            <div className="dropdown-menu dropdown-menu-right" role="menu">
-              <button
-                type="button"
-                role="menuitem"
-                disabled={!project}
-                onClick={() => {
-                  setExportMenuOpen(false);
-                  onExportProject();
-                }}
-              >
-                <span>Export Project (.json)</span>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                disabled={!project}
-                onClick={() => {
-                  setExportMenuOpen(false);
-                  onExportPDF();
-                }}
-              >
-                <span>Export PDF Report...</span>
-              </button>
-            </div>
-          )}
-        </div>
+        {project && (
+          <button
+            type="button"
+            className="header-analyze-btn"
+            disabled={!hasVideo || isAnalyzing}
+            onClick={onAnalyze}
+            title={
+              !hasVideo
+                ? "Link a video first to analyze"
+                : "Analyze film: Scene Cuts, Framing & Character Discovery"
+            }
+          >
+            {isAnalyzing ? (
+              <>
+                <span className="spinner-dot" />
+                <span>Analyzing…</span>
+              </>
+            ) : (
+              <span>Analyze</span>
+            )}
+          </button>
+        )}
+
+        {fileDropdown}
       </div>
     </header>
   );

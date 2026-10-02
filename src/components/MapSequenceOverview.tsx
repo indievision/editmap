@@ -162,7 +162,7 @@ export default function MapSequenceOverview({
                 }`}
                 style={{
                   height: `${heightPercent}%`,
-                  backgroundColor: isSelected ? "#c4ad77" : barColor,
+                  backgroundColor: barColor,
                 }}
                 title={`Shot ${s.index}: ${s.duration.toFixed(2)}s (${s.shotSize || "Unknown"})`}
                 onClick={() => {

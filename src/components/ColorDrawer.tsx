@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useCallback } from "react";
 import type { Project, Shot, HarmonyType } from "../models/project";
 import { formatTimecode } from "../utils/timecode";
 export interface ColorDrawerProps {
@@ -140,12 +140,95 @@ export default function ColorDrawer({
   const playheadRatio = duration > 0 ? Math.max(0, Math.min(duration, time)) / duration : 0;
   const playheadSvgX = 20 + playheadRatio * 760;
 
+  // Pointer-capture drag seeking for lighting curves
+  const isDraggingLightingRef = useRef(false);
+
+  const seekFromLightingClientX = useCallback(
+    (clientX: number, containerEl: HTMLElement) => {
+      if (duration <= 0) return;
+      const rect = containerEl.getBoundingClientRect();
+      const margin = (20 / 800) * rect.width;
+      const curveWidth = (760 / 800) * rect.width;
+      const x = clientX - rect.left - margin;
+      const ratio = Math.max(0, Math.min(1, x / Math.max(1, curveWidth)));
+      onSeek(ratio * duration);
+    },
+    [duration, onSeek],
+  );
+
+  const handleLightingPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    isDraggingLightingRef.current = true;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+    seekFromLightingClientX(e.clientX, e.currentTarget);
+  };
+
+  const handleLightingPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingLightingRef.current) return;
+    seekFromLightingClientX(e.clientX, e.currentTarget);
+  };
+
+  const handleLightingPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingLightingRef.current) return;
+    isDraggingLightingRef.current = false;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+  };
+
+  // Pointer-capture drag seeking for barcode track
+  const isDraggingBarcodeRef = useRef(false);
+  const hasDraggedBarcodeRef = useRef(false);
+
+  const seekFromBarcodeClientX = useCallback(
+    (clientX: number, containerEl: HTMLElement) => {
+      if (duration <= 0) return;
+      const rect = containerEl.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
+      onSeek(ratio * duration);
+    },
+    [duration, onSeek],
+  );
+
+  const handleBarcodePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    isDraggingBarcodeRef.current = true;
+    hasDraggedBarcodeRef.current = false;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+    seekFromBarcodeClientX(e.clientX, e.currentTarget);
+  };
+
+  const handleBarcodePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingBarcodeRef.current) return;
+    hasDraggedBarcodeRef.current = true;
+    seekFromBarcodeClientX(e.clientX, e.currentTarget);
+  };
+
+  const handleBarcodePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingBarcodeRef.current) return;
+    isDraggingBarcodeRef.current = false;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+  };
+
   return (
     <div className="color-drawer panel" aria-label="Color reading drawer">
       {/* 1. Header */}
       <div className="color-drawer-head">
         <div className="color-drawer-title-group">
-          <h2 className="color-drawer-title">COLOR READING</h2>
           <p className="color-drawer-subtitle">Palette, light, and tonal structure</p>
         </div>
         <button
@@ -258,6 +341,11 @@ export default function ColorDrawer({
                 className="color-barcode-strip"
                 role="region"
                 aria-label="Movie Color Script Barcode"
+                style={{ cursor: "ew-resize", touchAction: "none", userSelect: "none" }}
+                onPointerDown={handleBarcodePointerDown}
+                onPointerMove={handleBarcodePointerMove}
+                onPointerUp={handleBarcodePointerUp}
+                onPointerCancel={handleBarcodePointerUp}
               >
                 {shots.map((s) => {
                   const widthPct = (s.duration / duration) * 100;
@@ -278,6 +366,7 @@ export default function ColorDrawer({
                       onMouseEnter={() => setHoveredShot(s)}
                       onMouseLeave={() => setHoveredShot(null)}
                       onClick={() => {
+                        if (hasDraggedBarcodeRef.current) return;
                         onSelect(s.id);
                         onSeek(s.startSeconds);
                       }}
@@ -286,7 +375,7 @@ export default function ColorDrawer({
                   );
                 })}
               </div>
-              <p className="barcode-caption">Click a block to select and seek.</p>
+              <p className="barcode-caption">Click or drag along the strip to seek in time.</p>
             </div>
 
             {/* Lighting & Temperature Rhythm (Integrated preview in Script view) */}
@@ -320,7 +409,14 @@ export default function ColorDrawer({
                   <span className="y-label bottom">Dark</span>
                 </div>
 
-                <div className="lighting-svg-container">
+                <div
+                  className="lighting-svg-container"
+                  style={{ cursor: "ew-resize", touchAction: "none", userSelect: "none" }}
+                  onPointerDown={handleLightingPointerDown}
+                  onPointerMove={handleLightingPointerMove}
+                  onPointerUp={handleLightingPointerUp}
+                  onPointerCancel={handleLightingPointerUp}
+                >
                   <svg viewBox="0 0 800 150" preserveAspectRatio="none" className="lighting-svg">
                     {/* Grid lines */}
                     <line x1="20" y1="20" x2="780" y2="20" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
@@ -558,7 +654,14 @@ export default function ColorDrawer({
                   <span className="y-label bottom">Dark</span>
                 </div>
 
-                <div className="lighting-svg-container">
+                <div
+                  className="lighting-svg-container"
+                  style={{ cursor: "ew-resize", touchAction: "none", userSelect: "none" }}
+                  onPointerDown={handleLightingPointerDown}
+                  onPointerMove={handleLightingPointerMove}
+                  onPointerUp={handleLightingPointerUp}
+                  onPointerCancel={handleLightingPointerUp}
+                >
                   <svg viewBox="0 0 800 180" preserveAspectRatio="none" className="lighting-svg">
                     <line x1="20" y1="20" x2="780" y2="20" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
                     <line x1="20" y1="90" x2="780" y2="90" stroke="rgba(255,255,255,0.1)" />

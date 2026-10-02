@@ -42,7 +42,8 @@ test("three workspace modes: studio, map focus, and review desk", async ({ page 
   // Open contextual detail drawer via tool rail tab
   await page.locator('.studio-rail-btn[aria-label="Rhythm"]').click();
   await expect(page.locator(".studio-detail-drawer")).toBeVisible();
-  await expect(page.locator(".rhythm-drawer-title")).toHaveText("Editing rhythm");
+  await expect(page.locator(".rhythm-drawer-title")).toHaveCount(0);
+  await expect(page.locator(".rhythm-tabs.drawer-subtabs")).toBeVisible();
   await expect(page.getByRole("tab", { name: "Shot duration" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Local pacing" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Audiovisual" })).toBeVisible();

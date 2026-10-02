@@ -20,20 +20,22 @@ test("Studio timeline toolbar simplification across standard and expanded Studio
   const toolbar = page.locator(".studio-toolbar-row");
   await expect(toolbar).toBeVisible();
 
-  // Left group: Split, Mark, Snap, Squint
+  // Main toolbar controls: Split, Merge, In, Out, Clear In/Out, Snap, Mark, Squint, Fit, Zoom out (-), Zoom Slider, Zoom in (+), Fullscreen
   await expect(toolbar.locator("#studio-action-split")).toBeVisible();
-  await expect(toolbar.locator("#studio-action-mark")).toBeVisible();
+  await expect(toolbar.locator("#studio-action-merge")).toBeVisible();
+  await expect(toolbar.locator("#studio-action-in")).toBeVisible();
+  await expect(toolbar.locator("#studio-action-out")).toBeVisible();
+  await expect(toolbar.locator("#studio-action-clear-in-out")).toBeVisible();
   await expect(toolbar.locator("#studio-action-snap")).toBeVisible();
+  await expect(toolbar.locator("#studio-action-mark")).toBeVisible();
   await expect(toolbar.locator("#studio-action-squint")).toBeVisible();
-
-  // Right group: Zoom out, Slider, Zoom in, Fit, Full screen
+  await expect(toolbar.locator("#studio-nav-fit")).toBeVisible();
   await expect(toolbar.locator("#studio-nav-zoom-out")).toBeVisible();
   await expect(toolbar.locator(".studio-zoom-slider")).toBeVisible();
   await expect(toolbar.locator("#studio-nav-zoom-in")).toBeVisible();
-  await expect(toolbar.locator("#studio-nav-fit")).toBeVisible();
   await expect(toolbar.locator("#studio-nav-fullscreen")).toBeVisible();
 
-  // Confirm removed duplicated controls do NOT exist on the toolbar
+  // Confirm removed duplicated controls and expanded tools menu do NOT exist on the toolbar
   await expect(toolbar.locator("#studio-tool-rhythm")).toHaveCount(0);
   await expect(toolbar.locator("#studio-tool-sequence")).toHaveCount(0);
   await expect(toolbar.locator("#studio-tool-sound")).toHaveCount(0);
@@ -43,7 +45,7 @@ test("Studio timeline toolbar simplification across standard and expanded Studio
   await expect(toolbar.locator("#studio-tool-palette")).toHaveCount(0);
   await expect(toolbar.locator(".studio-toolbar-divider")).toHaveCount(0);
   await expect(toolbar.locator(".studio-toolbar-overflow-wrap")).toHaveCount(0);
-  await expect(toolbar.locator("#studio-tools-menu-btn")).toHaveCount(0); // Not in standard Studio
+  await expect(toolbar.locator("#studio-tools-menu-btn")).toHaveCount(0);
 
   // Verify interactive states of retained controls
   const snapBtn = toolbar.locator("#studio-action-snap");
@@ -83,8 +85,12 @@ test("Studio timeline toolbar simplification across standard and expanded Studio
   await page.setViewportSize({ width: 720, height: 900 });
   await page.waitForTimeout(200);
   await expect(toolbar.locator("#studio-action-split")).toBeVisible();
-  await expect(toolbar.locator("#studio-action-mark")).toBeVisible();
+  await expect(toolbar.locator("#studio-action-merge")).toBeVisible();
+  await expect(toolbar.locator("#studio-action-in")).toBeVisible();
+  await expect(toolbar.locator("#studio-action-out")).toBeVisible();
+  await expect(toolbar.locator("#studio-action-clear-in-out")).toBeVisible();
   await expect(toolbar.locator("#studio-action-snap")).toBeVisible();
+  await expect(toolbar.locator("#studio-action-mark")).toBeVisible();
   await expect(toolbar.locator("#studio-action-squint")).toBeVisible();
   await expect(toolbar.locator("#studio-nav-zoom-out")).toBeVisible();
   await expect(toolbar.locator("#studio-nav-fullscreen")).toBeVisible();
@@ -94,39 +100,14 @@ test("Studio timeline toolbar simplification across standard and expanded Studio
   await page.getByRole("button", { name: "Expand map", exact: true }).click();
   await expect(page.locator(".workspace")).toHaveClass(/studio-map-expanded/);
 
-  // In expanded Studio, compact Tools menu button must be visible
-  const toolsMenuBtn = toolbar.locator("#studio-tools-menu-btn");
-  await expect(toolsMenuBtn).toBeVisible();
-  await expect(toolsMenuBtn).toHaveText(/Tools/);
-
-  // Open Tools menu
-  await toolsMenuBtn.click();
-  const toolsPopover = page.locator(".studio-toolbar-tools-popover");
-  await expect(toolsPopover).toBeVisible();
-
-  const toolItems = toolsPopover.locator(".studio-tools-menu-item");
-  await expect(toolItems).toHaveCount(7);
-  await expect(toolItems.nth(0)).toContainText("Rhythm");
-  await expect(toolItems.nth(1)).toContainText("Framing");
-  await expect(toolItems.nth(2)).toContainText("Structure");
-  await expect(toolItems.nth(3)).toContainText("Sound");
-  await expect(toolItems.nth(4)).toContainText("Cuts");
-  await expect(toolItems.nth(5)).toContainText("Cast");
-  await expect(toolItems.nth(6)).toContainText("Colour");
-
-  // Click Sound from Tools menu
-  await toolItems.nth(3).click();
-  await expect(toolsPopover).toBeHidden();
-  await expect(page.locator(".studio-detail-drawer")).toBeVisible();
-
-  // Close drawer
-  await page.keyboard.press("Escape");
-  await expect(page.locator(".studio-detail-drawer")).toBeHidden();
+  // In expanded Studio, toolbar remains streamlined without tools menu button
+  await expect(toolbar.locator("#studio-tools-menu-btn")).toHaveCount(0);
+  await expect(toolbar.locator("#studio-action-split")).toBeVisible();
+  await expect(toolbar.locator("#studio-nav-fullscreen")).toBeVisible();
 
   // 4. Expanded Studio at narrow width (720x900)
   await page.setViewportSize({ width: 720, height: 900 });
   await page.waitForTimeout(200);
-  await expect(toolsMenuBtn).toBeVisible();
   await expect(toolbar.locator("#studio-action-split")).toBeVisible();
   await expect(toolbar.locator("#studio-nav-fullscreen")).toBeVisible();
 

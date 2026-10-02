@@ -10,6 +10,7 @@ import {
 } from "../analysis/pacing";
 import { formatTimecode } from "../utils/timecode";
 import { framingAt, framingRank } from "../analysis/framing";
+import { getSaccadeRangeStats } from "../analysis/cuts";
 import PacingChart from "./charts/PacingChart";
 
 const LocalPacing = memo(function LocalPacing({
@@ -54,6 +55,11 @@ const LocalPacing = memo(function LocalPacing({
     project.duration,
     window,
     time,
+  );
+
+  const saccadeStats = useMemo(
+    () => getSaccadeRangeStats(project.shots, project.cutAnnotations, inspected.start, inspected.end),
+    [project.shots, project.cutAnnotations, inspected.start, inspected.end]
   );
 
   const hasFramingCoverage = useMemo(
@@ -158,6 +164,19 @@ const LocalPacing = memo(function LocalPacing({
             <span className="pacing-strip-cuts">
               <b>{inspected.count}</b> {inspected.count === 1 ? "cut" : "cuts"}
             </span>
+            {saccadeStats.scannedCuts > 0 && (
+              <>
+                <span className="pacing-strip-bullet">·</span>
+                <span
+                  className={`pacing-strip-saccade ${saccadeStats.overallRating}`}
+                  title={`${saccadeStats.scannedCuts}/${saccadeStats.totalCuts} cuts scanned · ${saccadeStats.anchoredCount} anchored, ${saccadeStats.shiftedCount} shifted, ${saccadeStats.scatteredCount} scattered${saccadeStats.axisClashCount > 0 ? `, ${saccadeStats.axisClashCount} axis clashes` : ""}${saccadeStats.collisionCount > 0 ? `, ${saccadeStats.collisionCount} collisions` : ""}`}
+                >
+                  Eye-trace: <b>{saccadeStats.avgJumpPercent}% hop</b> ({saccadeStats.overallRating})
+                  {saccadeStats.axisClashCount > 0 && <span className="saccade-axis-tag" title={`${saccadeStats.axisClashCount} axis clashes`}> ⚠️{saccadeStats.axisClashCount}</span>}
+                  {saccadeStats.collisionCount > 0 && <span className="saccade-collision-tag"> ⚡{saccadeStats.collisionCount}</span>}
+                </span>
+              </>
+            )}
           </div>
 
           <PacingChart

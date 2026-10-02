@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EDITMAP Unified Cinema Console - Design Mockup</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    :root {
+      --bg-theater: #090b0e;
+      --card-bg: #11141b;
+      --border-dark: #1b212c;
+    }
+    body {
+      background-color: var(--bg-theater);
+      color: #e2e8f0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .custom-scroll::-webkit-scrollbar { width: 5px; height: 5px; }
+    .custom-scroll::-webkit-scrollbar-thumb { background: #222b3a; border-radius: 3px; }
+    .token-btn:hover { transform: scale(1.15); }
+    .token-btn.selected {
+      background-color: rgba(229, 169, 60, 0.2);
+      border-color: #e5a93c;
+      transform: scale(1.15);
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col text-xs select-none">
+
+  <!-- ============================================== -->
+  <!-- TOP CONTROLLER: DESIGN SWITCHER (FOR REVIEW)   -->
+  <!-- ============================================== -->
+  <div class="bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border-b border-amber-500/20 px-6 py-2.5 flex items-center justify-between z-50">
+    <div class="flex items-center gap-3">
+      <span class="px-2 py-0.5 rounded bg-amber-400 text-black font-bold font-mono text-[10px] uppercase tracking-wider">Interactive Mockup</span>
+      <span class="text-sm font-semibold text-white">Unified Cinema Console & Progressive Screening Workflow</span>
+    </div>
+    <div class="flex items-center gap-1.5">
+      <button onclick="setPreviewState('hub')" id="btnStateHub" class="px-3 py-1 rounded-lg bg-amber-400 text-black font-semibold text-xs transition shadow">
+        1. Setup Hub
+      </button>
+      <button onclick="setPreviewState('screening')" id="btnStateScreening" class="px-3 py-1 rounded-lg bg-slate-800 text-slate-300 hover:text-white font-medium text-xs transition">
+        2. Live Screening (Keys 1 2 3 4)
+      </button>
+      <button onclick="setPreviewState('review')" id="btnStateReview" class="px-3 py-1 rounded-lg bg-slate-800 text-slate-300 hover:text-white font-medium text-xs transition">
+        3. Review Cues (Heatmap & EDL)
+      </button>
+      <button onclick="setPreviewState('audit')" id="btnStateAudit" class="px-3 py-1 rounded-lg bg-slate-800 text-slate-300 hover:text-white font-medium text-xs transition">
+        4. Architecture Audit
+      </button>
+    </div>
+  </div>
+
+  <!-- ============================================================== -->
+  <!-- THE ONE AND ONLY TOP BAR (NO DOUBLE HEADERS, ZERO CLUTTER)     -->
+  <!-- ============================================================== -->
+  <header class="h-14 border-b border-[#1a202c] bg-[#0c0e14] px-5 flex items-center justify-between z-40 relative flex-shrink-0">
+    
+    <!-- LEFT: BRAND & CUT BADGE -->
+    <div class="flex items-center gap-3">
+      <!-- EditMap / Duet Monogram -->
+      <div class="w-8 h-8 rounded-lg bg-slate-100 text-black font-bold font-mono text-xs flex items-center justify-center shadow">
+        E
+      </div>
+      
+      <!-- Brand & Dynamic Cut Name -->
+      <div class="flex items-center gap-2">
+        <span class="font-bold tracking-wider text-white text-xs uppercase">EDITMAP</span>
+        <span class="text-slate-600 font-mono">•</span>
+        <div id="headerCutBadge" class="flex items-center gap-1.5 font-mono text-xs">
+          <span class="text-slate-400" id="headerCutLabel">No video loaded</span>
+        </div>
+      </div>
+
+      <!-- Live Room Attendees Pill -->
+      <div id="headerRoomPill" class="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-900 border border-slate-800 text-[11px] text-slate-300 ml-1">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span class="font-mono font-bold text-emerald-400" id="roomCountBadge">1</span>
+        <span>Active</span>
+      </div>
+    </div>
+
+    <!-- CENTER: UNIFIED WORKSPACE SWITCHER -->
+    <!-- Notice: Clean 4-step progressive workflow -->
+    <div class="bg-[#07080b] p-0.5 rounded-xl border border-[#1d2432] flex text-xs font-medium">
+      <button id="modeBtnScreening" onclick="setMode('screening')" class="px-3.5 py-1.5 rounded-lg bg-amber-400 text-black font-semibold transition flex items-center gap-1.5 shadow-sm">
+        <span>🎬</span>
+        <span>Screening</span>
+      </button>
+      <button id="modeBtnReview" onclick="setMode('review')" class="px-3.5 py-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition flex items-center gap-1.5">
+        <span>🔍</span>
+        <span>Review</span>
+        <span id="reviewCueBadge" class="hidden ml-1 px-1.5 py-0.2 rounded-full bg-purple-600 text-white font-mono text-[9px] font-bold">4</span>
+      </button>
+      <button id="modeBtnStudio" onclick="setMode('studio')" class="px-3.5 py-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition flex items-center gap-1.5">
+        <span>✂️</span>
+        <span>Studio</span>
+      </button>
+      <button id="modeBtnExplore" onclick="setMode('explore')" class="px-3.5 py-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition flex items-center gap-1.5">
+        <span>🧭</span>
+        <span>Explore</span>
+      </button>
+    </div>
+
+    <!-- RIGHT: THE ESSENTIAL EXPORT & PROJECTOR UTILITIES -->
+    <!-- Removed: 24 FPS / 0 shots / 00:00:08:15 / Saved badge / Undo-Redo / File dropdown -->
+    <div class="flex items-center gap-2.5">
+      <!-- Pop out Projector Screen -->
+      <button class="h-8 px-3 rounded-lg bg-[#141822] hover:bg-[#1e2634] border border-[#232c3a] text-slate-300 hover:text-white font-mono text-xs flex items-center gap-1.5 transition" title="Launch clean cinema feed for Projector/TV">
+        <span>📽️</span>
+        <span class="hidden sm:inline">Projector</span>
+      </button>
+
+      <!-- The Real Deliverable: Export EDL to DaVinci Resolve / Premiere -->
+      <button class="h-8 px-3.5 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-700/60 text-emerald-300 font-semibold text-xs flex items-center gap-1.5 transition shadow" title="Export markers to DaVinci Resolve EDL">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+        <span>Export .EDL</span>
+      </button>
+
+      <!-- Settings / Session Reset -->
+      <button class="w-8 h-8 rounded-lg bg-[#141822] hover:bg-[#1e2634] border border-[#232c3a] text-slate-400 hover:text-white flex items-center justify-center transition" title="Screening Room Settings">
+        ⚙️
+      </button>
+    </div>
+  </header>
+
+  <!-- ============================================================== -->
+  <!-- MAIN WORKSPACE CONTENT CONTAINER                              -->
+  <!-- ============================================================== -->
+  <main class="flex-1 flex flex-col overflow-hidden relative">
+
+    <!-- VIEW A: CINEMA SCREENING HUB (BEFORE UPLOAD OR SETUP) -->
+    <section id="viewHub" class="flex-1 overflow-y-auto p-6 md:p-8 flex flex-col items-center justify-center">
+      <div class="w-full max-w-4xl flex flex-col gap-6 my-auto">
+        
+        <div>
+          <h1 class="text-2xl font-bold tracking-tight text-white">Cinema Screening Hub</h1>
+          <p class="text-xs text-slate-400 mt-1">Screen your cut in sync. Capture blind reaction cues. Leave with an EDL in hand.</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <!-- CARD 1: DROP YOUR CUT -->
+          <div class="bg-[#11141c] border border-[#1d2330] rounded-2xl p-6 flex flex-col justify-between shadow-xl min-h-[320px]">
+            <div class="flex items-center justify-between pb-3 border-b border-slate-800/60">
+              <span class="font-semibold text-slate-200">1. Select cut</span>
+              <span class="font-mono text-slate-500 text-[10px]">STEP 01</span>
+            </div>
+
+            <div onclick="simulateFileUpload()" class="my-4 flex-1 border border-dashed border-slate-700 hover:border-amber-400/80 bg-[#0a0c10] rounded-xl flex flex-col items-center justify-center p-6 text-center cursor-pointer transition group">
+              <div class="w-12 h-12 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-xl mb-3 group-hover:scale-110 transition">
+                🎬
+              </div>
+              <span id="hubDropTitle" class="text-sm font-semibold text-white group-hover:text-amber-400 transition">
+                Drop your film cut here
+              </span>
+              <span id="hubDropSub" class="text-[11px] text-slate-500 mt-1">
+                Click to browse files (MP4, MOV, ProRes)
+              </span>
+            </div>
+
+            <div class="flex items-center justify-between pt-1 text-[11px] text-slate-500 font-mono">
+              <span>Local playback · No cloud upload</span>
+              <span class="text-emerald-400 font-semibold">100% Private</span>
+            </div>
+          </div>
+
+          <!-- CARD 2: SET UP YOUR ROOM (MATCHING SCREENSHOT 02 / 02) -->
+          <div class="bg-[#11141c] border border-[#1d2330] rounded-2xl p-6 flex flex-col justify-between shadow-xl min-h-[350px]">
+            <div class="flex items-center justify-between pb-3 border-b border-slate-800/60">
+              <span class="font-medium text-slate-200 text-sm">Set up your room</span>
+              <span class="font-mono text-slate-500 text-[11px]">02 / 02</span>
+            </div>
+
+            <!-- Host / Join segmented switch -->
+            <div class="grid grid-cols-2 p-1 bg-[#0a0c10] border border-slate-800/90 rounded-xl my-2">
+              <button id="btnRoleHost" onclick="setScreeningRole('host')" class="py-1.5 text-xs font-semibold rounded-lg bg-[#242b38] text-white shadow transition">
+                Host
+              </button>
+              <button id="btnRoleJoin" onclick="setScreeningRole('join')" class="py-1.5 text-xs font-medium rounded-lg text-slate-400 hover:text-white transition">
+                Join
+              </button>
+            </div>
+
+            <div class="flex flex-col gap-3 my-1">
+              <!-- Room code section -->
+              <div id="hostCodeBox" class="flex flex-col gap-1.5">
+                <label class="text-[11px] text-slate-400 font-medium">Room code</label>
+                <div class="h-10 px-3.5 bg-[#0a0c10] border border-slate-800 rounded-xl flex items-center justify-between">
+                  <span id="displayHostCode" class="font-mono font-bold text-white tracking-wider text-base">9503</span>
+                  <button onclick="copyHostCode()" class="text-xs font-medium text-indigo-400 hover:text-indigo-300 transition flex items-center gap-1">
+                    <span id="copyCodeLabel">Copy code</span>
+                    <span>↗</span>
+                  </button>
+                </div>
+              </div>
+
+              <div id="joinCodeBox" class="hidden flex flex-col gap-1.5">
+                <label class="text-[11px] text-slate-400 font-medium">Room code</label>
+                <div class="h-10 px-3.5 bg-[#0a0c10] border border-slate-800 rounded-xl flex items-center">
+                  <input type="text" id="inputJoinCode" maxlength="4" placeholder="Enter 4-digit code (e.g. 9503)" class="w-full bg-transparent text-white font-mono font-bold placeholder:text-slate-600 placeholder:font-sans placeholder:font-normal text-sm focus:outline-none">
+                </div>
+              </div>
+
+              <!-- Your name section -->
+              <div class="flex flex-col gap-1.5">
+                <label class="text-[11px] text-slate-400 font-medium">Your name</label>
+                <div class="h-10 px-3.5 bg-[#0a0c10] border border-slate-800 rounded-xl flex items-center justify-between">
+                  <input type="text" id="inputUserName" value="Alex" placeholder="Enter your name" class="bg-transparent text-white font-medium text-xs flex-1 focus:outline-none">
+                  <div id="selectedAvatarBadge" class="w-7 h-7 rounded-lg bg-[#181f2a] border border-slate-700/80 flex items-center justify-center text-sm shadow-inner">🎬</div>
+                </div>
+              </div>
+
+              <!-- Character tokens (20 tokens in 2 rows of 10) -->
+              <div class="flex flex-col gap-1.5">
+                <label class="text-[11px] text-slate-400 font-medium">Character token</label>
+                <div id="tokenGrid" class="grid grid-cols-10 gap-1 p-2 bg-[#0a0c10] border border-slate-800 rounded-xl text-center">
+                  <button type="button" onclick="selectToken(this, '🎬')" class="token-btn selected h-7 rounded-lg bg-[#242b38] flex items-center justify-center text-sm ring-1 ring-indigo-400 transition hover:bg-[#2e3747]">🎬</button>
+                  <button type="button" onclick="selectToken(this, '🦊')" class="token-btn h-7 rounded-lg bg-[#121620] flex items-center justify-center text-sm transition hover:bg-[#242b38]">🦊</button>
+                  <button type="button" onclick="selectToken(this, '⚡')" class="token-btn h-7 rounded-lg bg-[#121620] flex items-center justify-center text-sm transition hover:bg-[#242b38]">⚡</button>
+                  <button type="button" onclick="selectToken(this, '🦁')" class="token-btn h-7 rounded-lg bg-[#121620] flex items-center justify-center text-sm transition hover:bg-[#242b38]">🦁</button>
+                  <button type="button" onclick="selectToken(this, '🎭')" class="token-btn h-7 rounded-lg bg-[#121620] flex items-center justify-center text-sm transition hover:bg-[#242b38]">🎭</button>
+                  <button type="button" onclick="selectToken(this, '🚀')" class="token-btn h-7 rounded-lg bg-[#121620] flex items-center justify-center text-sm transition hover:bg-[#242b38]">🚀</button>
+                  <button type="button" onclick="selectToken(this, '🦉')" class="token-btn h-7 rounded-lg bg-[#121620] flex items-center justify-center text-sm transition hover:bg-[#242b38]">🦉</button>
+                  <button type="button" onclick="selectToken(this, '🎨')" class="token-btn h-7 rounded-lg bg-[#121620] flex items-center justify-center text-sm transition hover:bg-[#242b38]">🎨</button>
+                  <button type="button" onclick="selectToken(this, '👁️')" class="token-btn h-7 rounded-lg bg-[#121620] flex items-center justify-center text-sm transition hover:bg-[#242b38]">👁️</button>
+                  <button type="button" onclick="selectToken(this, '✂️')" class="token-btn h-7 rounded-lg bg-[#121620] flex items-center justify-center text-sm transition hover:bg-[#242b38]">✂️</button>
+                  <button type="button" onclick="selectToken(this, '🍿')" class="token-btn h-7 rounded-lg bg-[#121620] flex items-center justify-center text-sm transition hover:bg-[#242b38]">🍿</button>
+                  <button type="button" onclick="selectToken(this, '🎓')" class="token-btn h-7 rounded-lg bg-[#121620] flex items-center justify-center text-sm transition hover:bg-[#242b38]">🎓</button>
+                  <button type="button" onclick="selectToken(this, '🎥')" class="token-btn h-7 rounded-lg bg-[#121620] flex items-center justify-center text-sm transition hover:bg-[#242b38]">🎥</button>
+                  <button type="button" onclick="selectToken(this, '🎞️')" class="token-btn h-7 rounded-lg bg-[#121620] flex items-center justify-center text-sm transition hover:bg-[#242b38]">🎞️</button>
+                  <button type="button" onclick="selectToken(this, '🎧')" class="token-btn h-7 rounded-lg bg-[#121620] flex items-center justify-center text-sm transition hover:bg-[#242b38]">🎧</button>
+                  <button type="button" onclick="selectToken(this, '🎙️')" class="token-btn h-7 rounded-lg bg-[#121620] flex items-center justify-center text-sm transition hover:bg-[#242b38]">🎙️</button>
+                  <button type="button" onclick="selectToken(this, '☕')" class="token-btn h-7 rounded-lg bg-[#121620] flex items-center justify-center text-sm transition hover:bg-[#242b38]">☕</button>
+                  <button type="button" onclick="selectToken(this, '🔥')" class="token-btn h-7 rounded-lg bg-[#121620] flex items-center justify-center text-sm transition hover:bg-[#242b38]">🔥</button>
+                  <button type="button" onclick="selectToken(this, '💡')" class="token-btn h-7 rounded-lg bg-[#121620] flex items-center justify-center text-sm transition hover:bg-[#242b38]">💡</button>
+                  <button type="button" onclick="selectToken(this, '⭐')" class="token-btn h-7 rounded-lg bg-[#121620] flex items-center justify-center text-sm transition hover:bg-[#242b38]">⭐</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Primary Action Button (Matches Screenshot) -->
+            <button id="btnCard2Action" onclick="handleCard2Action()" class="w-full h-11 mt-3 rounded-xl bg-[#e2e8f0] hover:bg-white text-slate-900 font-semibold text-xs transition flex items-center justify-center gap-1.5 shadow">
+              <span id="btnCard2Label">Open projector display</span>
+              <span>↗</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- RECENT CUTS SHELF (Just clean filenames, no heavy project management) -->
+        <div class="flex flex-col gap-2 pt-2">
+          <div class="flex items-center justify-between text-slate-400 text-xs">
+            <span class="font-medium">Recent cuts screened on this Mac</span>
+            <span class="font-mono text-[10px] text-slate-500">Quick re-screen</span>
+          </div>
+          <div class="grid grid-cols-3 gap-3">
+            <div onclick="loadMockCut('Mara_RoughCut_v04.mov')" class="p-3 rounded-xl bg-[#11141c] hover:bg-[#171c26] border border-slate-800/80 cursor-pointer transition flex items-center justify-between group">
+              <div class="flex flex-col truncate pr-2">
+                <span class="font-medium text-slate-200 group-hover:text-amber-400 transition truncate">Mara_RoughCut_v04.mov</span>
+                <span class="text-[10px] text-slate-500 font-mono mt-0.5">Yesterday · 14 markers</span>
+              </div>
+              <span class="text-slate-600 group-hover:text-slate-300 font-mono text-xs">›</span>
+            </div>
+
+            <div onclick="loadMockCut('Scene_12_Action_Beat.mp4')" class="p-3 rounded-xl bg-[#11141c] hover:bg-[#171c26] border border-slate-800/80 cursor-pointer transition flex items-center justify-between group">
+              <div class="flex flex-col truncate pr-2">
+                <span class="font-medium text-slate-200 group-hover:text-amber-400 transition truncate">Scene_12_Action_Beat.mp4</span>
+                <span class="text-[10px] text-slate-500 font-mono mt-0.5">3 days ago · 8 markers</span>
+              </div>
+              <span class="text-slate-600 group-hover:text-slate-300 font-mono text-xs">›</span>
+            </div>
+
+            <div onclick="loadMockCut('Trailer_Teaser_FinalMix.mp4')" class="p-3 rounded-xl bg-[#11141c] hover:bg-[#171c26] border border-slate-800/80 cursor-pointer transition flex items-center justify-between group">
+              <div class="flex flex-col truncate pr-2">
+                <span class="font-medium text-slate-200 group-hover:text-amber-400 transition truncate">Trailer_Teaser_FinalMix.mp4</span>
+                <span class="text-[10px] text-slate-500 font-mono mt-0.5">Last week · 22 markers</span>
+              </div>
+              <span class="text-slate-600 group-hover:text-slate-300 font-mono text-xs">›</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- VIEW 2: LIVE SCREENING THEATER (PRESS 1, 2, 3, 4 AS MARKERS) -->
+    <section id="viewScreening" class="hidden flex-1 flex flex-col p-4 overflow-hidden relative bg-[#07080b]">
+      <!-- Cinema Screen Container -->
+      <div class="flex-1 bg-black rounded-2xl border border-slate-800/80 flex flex-col relative shadow-2xl overflow-hidden">
+        
+        <!-- Screen Top Bar Overlay -->
+        <div class="h-11 px-4 bg-gradient-to-b from-black/90 to-transparent flex items-center justify-between z-20">
+          <div class="flex items-center gap-3">
+            <span class="px-2 py-0.5 rounded bg-amber-400 text-black font-mono font-bold text-[10px] tracking-wider uppercase">Live Screening</span>
+            <span class="font-mono text-xs text-white font-medium" id="screeningCutTitle">Mara_RoughCut_v04.mov</span>
+            <span class="text-slate-500 font-mono text-[11px]">•</span>
+            <span class="font-mono text-[11px] text-amber-400" id="screeningTimecode">00:01:28:14</span>
+          </div>
+
+          <!-- Room attendees in screening -->
+          <div class="flex items-center gap-2">
+            <div class="flex items-center -space-x-1.5">
+              <span class="w-6 h-6 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-xs shadow" title="Alex (Host)">🎬</span>
+              <span class="w-6 h-6 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-xs shadow" title="Sarah (Director)">🍿</span>
+              <span class="w-6 h-6 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-xs shadow" title="David (Editor)">✂️</span>
+            </div>
+            <span class="text-[10px] font-mono text-slate-400">3 in room</span>
+            <button onclick="alert('Projector popped out to secondary display in full 10-bit cinema mode!')" class="ml-2 px-2.5 py-1 rounded-lg bg-[#141822] hover:bg-[#1f2636] border border-slate-800 text-slate-300 font-mono text-[11px] flex items-center gap-1 transition">
+              <span>📽️ Projector</span>
+              <span>↗</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Cinema Stage Center -->
+        <div class="flex-1 flex flex-col items-center justify-center relative">
+          <div class="text-center flex flex-col items-center">
+            <div id="cinemaPlayIcon" class="w-20 h-20 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-4xl mb-3 shadow-inner hover:scale-105 transition cursor-pointer" onclick="togglePlayback()">
+              🎬
+            </div>
+            <span class="font-mono text-sm text-slate-200 font-semibold" id="cinemaCutName">Mara_RoughCut_v04.mov</span>
+            <span class="text-xs text-slate-400 font-mono mt-1">Playing in Cinema Sync · Space to Pause / Play</span>
+          </div>
+
+          <!-- Silent Tactile Flash Toast (Flashes on keypress 1 2 3 4) -->
+          <div id="cueFlashToast" class="hidden absolute top-6 right-6 px-4 py-2 rounded-xl bg-slate-900/95 border border-amber-400/80 text-white font-mono text-xs flex items-center gap-2 shadow-2xl transition-all duration-200">
+            <span id="cueFlashDot" class="w-3 h-3 rounded-full bg-rose-500 animate-pulse"></span>
+            <span id="cueFlashText" class="font-bold">Logged Cue #1 (-12f latency compensated)</span>
+          </div>
+        </div>
+
+        <!-- Cinema Screen Bottom Transport Bar -->
+        <div class="h-12 px-4 bg-gradient-to-t from-black/90 to-transparent flex items-center justify-between z-20">
+          <div class="flex items-center gap-3">
+            <button onclick="togglePlayback()" id="btnTransportPlay" class="w-7 h-7 rounded-lg bg-amber-400 hover:bg-amber-300 text-black flex items-center justify-center font-bold text-xs transition">
+              ⏸
+            </button>
+            <span class="font-mono text-xs text-slate-300" id="transportTimecode">00:01:28:14</span>
+            <span class="font-mono text-[11px] text-slate-500">/ 00:08:42:00</span>
+          </div>
+
+          <!-- Mini timeline scrubber -->
+          <div class="flex-1 mx-6 h-1.5 bg-slate-800 rounded-full overflow-hidden cursor-pointer relative">
+            <div id="transportProgress" class="h-full bg-amber-400" style="width: 17%;"></div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <span class="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 font-mono text-[10px] text-amber-400 font-bold" id="liveScreeningCueCount">
+              3 Cues Logged
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- TACTILE BLIND REACTION KEYS (1, 2, 3, 4) -->
+      <div class="mt-3 bg-[#10131a] border border-[#1d2330] rounded-2xl p-4 flex flex-col md:flex-row items-center justify-between gap-4">
+        
+        <!-- Left: The 4 Big Tactile Keys -->
+        <div class="flex items-center gap-3 w-full md:w-auto">
+          <!-- Key 1: Dragging / Cut Early (Rose) -->
+          <button id="keyPad1" onclick="dropMockCue('1')" class="flex-1 md:flex-none h-14 px-4 rounded-xl bg-[#161a24] hover:bg-[#1f2534] border border-rose-500/40 hover:border-rose-500 flex items-center gap-3 transition active:scale-95 shadow group text-left">
+            <span class="w-8 h-8 rounded-lg bg-rose-500/20 border border-rose-500 text-rose-300 font-mono font-bold text-sm flex items-center justify-center group-hover:bg-rose-500 group-hover:text-black transition">1</span>
+            <div class="flex flex-col">
+              <span class="text-white font-semibold text-xs leading-none">Dragging / Trim</span>
+              <span class="text-[10px] text-slate-400 font-mono mt-0.5">Cut early / Off</span>
+            </div>
+          </button>
+
+          <!-- Key 2: Rhythm Flow (Amber) -->
+          <button id="keyPad2" onclick="dropMockCue('2')" class="flex-1 md:flex-none h-14 px-4 rounded-xl bg-[#161a24] hover:bg-[#1f2534] border border-amber-500/40 hover:border-amber-500 flex items-center gap-3 transition active:scale-95 shadow group text-left">
+            <span class="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-500 text-amber-300 font-mono font-bold text-sm flex items-center justify-center group-hover:bg-amber-500 group-hover:text-black transition">2</span>
+            <div class="flex flex-col">
+              <span class="text-white font-semibold text-xs leading-none">Good Beat / Flow</span>
+              <span class="text-[10px] text-slate-400 font-mono mt-0.5">Pacing locks in</span>
+            </div>
+          </button>
+
+          <!-- Key 3: Confusion / Jarring (Emerald) -->
+          <button id="keyPad3" onclick="dropMockCue('3')" class="flex-1 md:flex-none h-14 px-4 rounded-xl bg-[#161a24] hover:bg-[#1f2534] border border-emerald-500/40 hover:border-emerald-500 flex items-center gap-3 transition active:scale-95 shadow group text-left">
+            <span class="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500 text-emerald-300 font-mono font-bold text-sm flex items-center justify-center group-hover:bg-emerald-500 group-hover:text-black transition">3</span>
+            <div class="flex flex-col">
+              <span class="text-white font-semibold text-xs leading-none">Confusion / Jump</span>
+              <span class="text-[10px] text-slate-400 font-mono mt-0.5">Eye trace lost</span>
+            </div>
+          </button>
+
+          <!-- Key 4: Peak Moment (Cyan) -->
+          <button id="keyPad4" onclick="dropMockCue('4')" class="flex-1 md:flex-none h-14 px-4 rounded-xl bg-[#161a24] hover:bg-[#1f2534] border border-sky-500/40 hover:border-sky-500 flex items-center gap-3 transition active:scale-95 shadow group text-left">
+            <span class="w-8 h-8 rounded-lg bg-sky-500/20 border border-sky-500 text-sky-300 font-mono font-bold text-sm flex items-center justify-center group-hover:bg-sky-500 group-hover:text-black transition">4</span>
+            <div class="flex flex-col">
+              <span class="text-white font-semibold text-xs leading-none">Impact / Peak</span>
+              <span class="text-[10px] text-slate-400 font-mono mt-0.5">Emotional punch</span>
+            </div>
+          </button>
+        </div>
+
+        <!-- Center instructions -->
+        <div class="hidden xl:flex flex-col text-slate-400 text-[11px] leading-tight max-w-xs font-mono">
+          <span class="text-white font-medium">Blind Keys Active</span>
+          <span>Press <b>1, 2, 3, 4</b> on your keyboard without looking down. -12f reflex offset auto-applied.</span>
+        </div>
+
+        <!-- Right: Advance to Review Button -->
+        <button onclick="setPreviewState('review')" class="h-12 px-6 rounded-xl bg-slate-200 hover:bg-white text-black font-semibold text-xs flex items-center justify-center gap-2 shadow transition shrink-0">
+          <span>Finish & Review Cues</span>
+          <span class="text-sm">→</span>
+        </button>
+
+      </div>
+    </section>
+
+    <!-- VIEW 3: REVIEW CONSOLE (AFTER SCREENING IS COMPLETE) -->
+    <section id="viewReview" class="hidden flex-1 flex overflow-hidden">
+      <!-- LEFT STAGE: Cinema View + Timeline -->
+      <div class="flex-1 flex flex-col p-4 border-r border-[#1a202c] overflow-hidden">
+        
+        <!-- Video Screen -->
+        <div class="flex-1 bg-black rounded-xl border border-slate-800/80 flex items-center justify-center relative shadow-2xl overflow-hidden">
+          <div class="text-center flex flex-col items-center">
+            <span class="text-5xl mb-2">🎬</span>
+            <span class="font-mono text-sm text-slate-300 font-semibold" id="playerCutTitle">Mara_RoughCut_v04.mov</span>
+            <span class="text-xs text-slate-500 font-mono mt-1">SMPTE 00:01:24:18 · 24.00 fps</span>
+          </div>
+
+          <!-- Active Cue Tag on Video -->
+          <div class="absolute top-4 left-4 px-3 py-1.5 rounded-lg bg-black/80 border border-slate-700 text-xs font-mono flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+            <span class="text-white font-bold">Cue #2 · 00:01:24:18</span>
+            <span class="text-slate-500">•</span>
+            <span class="text-slate-300">Cut feels 6 frames early</span>
+          </div>
+        </div>
+
+        <!-- Audience Rhythm & Reaction Timeline -->
+        <div class="mt-3 bg-[#11141c] border border-[#1d2330] rounded-xl p-3.5 flex flex-col gap-2">
+          <div class="flex items-center justify-between text-xs">
+            <div class="flex items-center gap-2">
+              <span class="font-bold font-mono text-slate-300 uppercase tracking-wider text-[11px]">Reaction Timeline & Heatmap</span>
+              <span class="text-[10px] text-purple-400 font-mono">• 2 Consensus Clusters</span>
+            </div>
+            <div class="flex items-center gap-2 font-mono text-[11px] text-slate-400">
+              <span>00:01:24:18 / 00:08:42:00</span>
+            </div>
+          </div>
+
+          <!-- Scrubber Track with Avatars & Glows -->
+          <div class="relative h-12 bg-[#090b0e] rounded-lg border border-slate-800 flex items-center px-4 cursor-pointer">
+            <!-- Glow Cluster 1 -->
+            <div class="absolute left-[24%] top-0 bottom-0 w-24 bg-purple-500/20 rounded-full blur-sm pointer-events-none"></div>
+            <!-- Glow Cluster 2 -->
+            <div class="absolute left-[58%] top-0 bottom-0 w-20 bg-amber-500/20 rounded-full blur-sm pointer-events-none"></div>
+
+            <!-- Avatars on Timeline -->
+            <div class="absolute left-[24%] -top-2 flex items-center -space-x-2">
+              <span class="w-7 h-7 rounded-full bg-purple-900 border-2 border-purple-400 flex items-center justify-center text-xs">2×</span>
+              <span class="w-7 h-7 rounded-full bg-slate-900 border-2 border-rose-500 flex items-center justify-center text-sm shadow">🎬</span>
+            </div>
+
+            <div class="absolute left-[58%] -top-2">
+              <span class="w-7 h-7 rounded-full bg-slate-900 border-2 border-amber-400 flex items-center justify-center text-sm shadow">🍿</span>
+            </div>
+
+            <div class="absolute left-[82%] -top-2">
+              <span class="w-7 h-7 rounded-full bg-slate-900 border-2 border-emerald-400 flex items-center justify-center text-sm shadow">✂️</span>
+            </div>
+
+            <!-- Progress bar -->
+            <div class="w-full h-1 bg-slate-800 rounded-full overflow-hidden">
+              <div class="h-full bg-amber-400" style="width: 24%;"></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- RIGHT SIDEBAR: EDITORIAL CUE SHEET -->
+      <aside class="w-96 bg-[#0f1218] flex flex-col border-l border-[#1a202c]">
+        <div class="p-3.5 border-b border-slate-800 flex items-center justify-between">
+          <div>
+            <h2 class="font-bold text-white text-xs uppercase tracking-wider font-mono">Editorial Cue Sheet</h2>
+            <p class="text-[10px] text-slate-500">Ready to export to Resolve / Premiere</p>
+          </div>
+          <span class="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-amber-400 font-mono text-[10px] font-bold">
+            3 Cues
+          </span>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-3 flex flex-col gap-2.5 custom-scroll">
+          
+          <!-- Cue Card 1 (Consensus) -->
+          <div class="p-3 rounded-xl border border-purple-500/60 bg-purple-950/20 shadow">
+            <div class="flex items-center justify-between mb-1.5">
+              <div class="flex items-center gap-1.5">
+                <span class="w-2.5 h-2.5 rounded-full bg-rose-500 shadow"></span>
+                <span class="font-mono font-bold text-white text-xs">00:01:24:18</span>
+                <span class="px-1.5 py-0.2 rounded bg-purple-900 border border-purple-400 text-purple-200 font-mono text-[9px] font-bold">2 Votes</span>
+              </div>
+              <div class="flex items-center -space-x-1">
+                <span class="w-5 h-5 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-[11px]">🎬</span>
+                <span class="w-5 h-5 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-[11px]">🍿</span>
+              </div>
+            </div>
+            <p class="text-xs text-slate-300 leading-relaxed">Cut feels 6 frames early; let the actor exhale before cutting to reverse.</p>
+            <div class="mt-2 pt-1.5 border-t border-purple-900/40 flex items-center justify-between text-[10px] font-mono text-slate-400">
+              <span>Mara + Alex</span>
+              <span class="text-amber-400">Resolve: Red</span>
+            </div>
+          </div>
+
+          <!-- Cue Card 2 -->
+          <div class="p-3 rounded-xl border border-slate-800 bg-[#12151d] hover:border-slate-700 transition">
+            <div class="flex items-center justify-between mb-1.5">
+              <div class="flex items-center gap-1.5">
+                <span class="w-2.5 h-2.5 rounded-full bg-amber-400 shadow"></span>
+                <span class="font-mono font-bold text-white text-xs">00:03:42:04</span>
+              </div>
+              <span class="w-5 h-5 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-[11px]">🍿</span>
+            </div>
+            <p class="text-xs text-slate-300 leading-relaxed">Sound bridge starts abruptly here. Smooth transition into room tone.</p>
+            <div class="mt-2 pt-1.5 border-t border-slate-800 flex items-center justify-between text-[10px] font-mono text-slate-400">
+              <span>Alex</span>
+              <span class="text-amber-400">Resolve: Yellow</span>
+            </div>
+          </div>
+
+          <!-- Cue Card 3 -->
+          <div class="p-3 rounded-xl border border-slate-800 bg-[#12151d] hover:border-slate-700 transition">
+            <div class="flex items-center justify-between mb-1.5">
+              <div class="flex items-center gap-1.5">
+                <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow"></span>
+                <span class="font-mono font-bold text-white text-xs">00:06:10:12</span>
+              </div>
+              <span class="w-5 h-5 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-[11px]">✂️</span>
+            </div>
+            <p class="text-xs text-slate-300 leading-relaxed">Pacing accelerates nicely into the climax. Good cut point.</p>
+            <div class="mt-2 pt-1.5 border-t border-slate-800 flex items-center justify-between text-[10px] font-mono text-slate-400">
+              <span>Director</span>
+              <span class="text-amber-400">Resolve: Green</span>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="p-3 border-t border-slate-800 bg-[#0c0e14]">
+          <button class="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs flex items-center justify-center gap-1.5 shadow transition">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+            <span>Export Mara_RoughCut_v04.edl</span>
+          </button>
+        </div>
+      </aside>
+    </section>
+
+    <!-- VIEW C: ARCHITECTURAL AUDIT (PROJECT CEREMONY VS SESSION TOOL) -->
+    <section id="viewAudit" class="hidden flex-1 overflow-y-auto p-6 md:p-8 flex flex-col items-center">
+      <div class="w-full max-w-3xl flex flex-col gap-6">
+        
+        <div>
+          <span class="text-amber-400 font-mono text-xs uppercase tracking-wider font-semibold">Product Architecture Audit</span>
+          <h2 class="text-2xl font-bold text-white mt-1">Do we really need "New Project", "Open Project", and File Menus?</h2>
+          <p class="text-xs text-slate-400 mt-1">Answering your question about whether users ever revisit screening projects after exporting the EDL.</p>
+        </div>
+
+        <!-- The Reality Comparison Card -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          
+          <!-- Old Desktop Metaphor (Bloated) -->
+          <div class="p-5 rounded-2xl bg-[#10131a] border border-rose-900/30 flex flex-col justify-between">
+            <div>
+              <div class="flex items-center gap-2 mb-2 text-rose-400 font-mono text-xs font-bold uppercase">
+                <span>❌ Old Desktop Paradigm</span>
+              </div>
+              <ul class="space-y-2 text-xs text-slate-400 leading-relaxed">
+                <li>• <b>"File ▾ New Project"</b> forces the user to name a container before doing anything.</li>
+                <li>• <b>"Open Project / Save / Saved"</b> badges clutter the screen when working on video files.</li>
+                <li>• Popups ask <i>"Discard unsaved changes?"</i> even when all you did was preview a 5-second video.</li>
+                <li>• Two stacked header bars: one for the app, one for the room.</li>
+              </ul>
+            </div>
+            <div class="mt-4 p-3 rounded-lg bg-rose-950/20 border border-rose-900/40 text-[11px] text-rose-300">
+              <b>Result:</b> High friction, modal popups, and confusion.
+            </div>
+          </div>
+
+          <!-- Modern Session Metaphor (Clean & Fast) -->
+          <div class="p-5 rounded-2xl bg-[#10131a] border border-emerald-900/40 flex flex-col justify-between">
+            <div>
+              <div class="flex items-center gap-2 mb-2 text-emerald-400 font-mono text-xs font-bold uppercase">
+                <span>✓ Modern Session Paradigm</span>
+              </div>
+              <ul class="space-y-2 text-xs text-slate-400 leading-relaxed">
+                <li>• <b>File-Centric:</b> The video file IS the session. You drop `Cut_v04.mov`, that's your cut.</li>
+                <li>• <b>One Unified Top Bar:</b> Seamless brand emblem, active cut name, mode switch, and export.</li>
+                <li>• <b>Zero-Friction Revisit:</b> Recent cuts are saved silently in local storage. Just click them.</li>
+                <li>• <b>The Real Finish Line:</b> The deliverable is the <b>.EDL</b> file. Once imported into DaVinci Resolve or Premiere, the editor works in the NLE, not in old project menus.</li>
+              </ul>
+            </div>
+            <div class="mt-4 p-3 rounded-lg bg-emerald-950/20 border border-emerald-900/50 text-[11px] text-emerald-300">
+              <b>Result:</b> Instant, cinema-grade flow. Like a whiteboard: screen, mark, export, done.
+            </div>
+          </div>
+
+        </div>
+
+        <!-- The 5 Elements to Retire -->
+        <div class="bg-[#10131a] border border-slate-800 rounded-2xl p-5 flex flex-col gap-3">
+          <h3 class="font-bold text-white text-xs uppercase font-mono tracking-wider">What We Can Safely Remove:</h3>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-slate-300">
+            <div class="p-3 rounded-xl bg-black/40 border border-slate-800/80">
+              <b class="text-white block mb-0.5">1. The Second Header Bar</b>
+              <span class="text-slate-400">Eliminate the iframe's duplicate top bar. The main App header becomes the single bar for all modes.</span>
+            </div>
+            <div class="p-3 rounded-xl bg-black/40 border border-slate-800/80">
+              <b class="text-white block mb-0.5">2. "File ▾" Dropdown Menu</b>
+              <span class="text-slate-400">Replace with direct actions: drop cut, recent cuts list, export EDL.</span>
+            </div>
+            <div class="p-3 rounded-xl bg-black/40 border border-slate-800/80">
+              <b class="text-white block mb-0.5">3. Technical Metadata in Screening</b>
+              <span class="text-slate-400">Hide `24 FPS / 0 shots / 00:00:08:15` and `Saved` pill during screening. It belongs only in Studio.</span>
+            </div>
+            <div class="p-3 rounded-xl bg-black/40 border border-slate-800/80">
+              <b class="text-white block mb-0.5">4. "Discard Changes?" Prompts</b>
+              <span class="text-slate-400">Everything auto-saves quietly into local storage. No modal traps.</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    let currentCut = null;
+    let currentRole = 'host';
+    let currentAvatar = '🎬';
+    let isPlaying = true;
+    let cueCount = 3;
+    let playbackSeconds = 88; // 00:01:28
+    let playbackTimer = null;
+
+    function formatSMPTE(sec) {
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      const mm = String(m).padStart(2, '0');
+      const ss = String(s).padStart(2, '0');
+      return `00:${mm}:${ss}:14`;
+    }
+
+    function startPlaybackTimer() {
+      if (playbackTimer) clearInterval(playbackTimer);
+      playbackTimer = setInterval(() => {
+        if (!isPlaying) return;
+        playbackSeconds = (playbackSeconds + 1) % 522; // up to 08:42
+        const smpte = formatSMPTE(playbackSeconds);
+        const st = document.getElementById('screeningTimecode');
+        const tt = document.getElementById('transportTimecode');
+        const prog = document.getElementById('transportProgress');
+        if (st) st.textContent = smpte;
+        if (tt) tt.textContent = smpte;
+        if (prog) prog.style.width = `${(playbackSeconds / 522) * 100}%`;
+      }, 1000);
+    }
+
+    function togglePlayback() {
+      isPlaying = !isPlaying;
+      const playIcon = document.getElementById('cinemaPlayIcon');
+      const transBtn = document.getElementById('btnTransportPlay');
+      if (playIcon) playIcon.textContent = isPlaying ? '🎬' : '⏸';
+      if (transBtn) transBtn.textContent = isPlaying ? '⏸' : '▶';
+    }
+
+    function setPreviewState(state) {
+      const btnHub = document.getElementById('btnStateHub');
+      const btnScreening = document.getElementById('btnStateScreening');
+      const btnReview = document.getElementById('btnStateReview');
+      const btnAudit = document.getElementById('btnStateAudit');
+
+      const viewHub = document.getElementById('viewHub');
+      const viewScreening = document.getElementById('viewScreening');
+      const viewReview = document.getElementById('viewReview');
+      const viewAudit = document.getElementById('viewAudit');
+      const cutLabel = document.getElementById('headerCutLabel');
+      const badge = document.getElementById('reviewCueBadge');
+
+      [btnHub, btnScreening, btnReview, btnAudit].forEach(b => {
+        if (b) b.className = "px-3 py-1 rounded-lg bg-slate-800 text-slate-300 hover:text-white font-medium text-xs transition";
+      });
+
+      viewHub.classList.add('hidden');
+      viewScreening.classList.add('hidden');
+      viewReview.classList.add('hidden');
+      viewAudit.classList.add('hidden');
+
+      if (state === 'hub') {
+        if (btnHub) btnHub.className = "px-3 py-1 rounded-lg bg-amber-400 text-black font-semibold text-xs transition shadow";
+        viewHub.classList.remove('hidden');
+        cutLabel.textContent = currentCut ? `Cut: ${currentCut}` : "No video loaded";
+        updateModeButtons('screening');
+      } else if (state === 'screening') {
+        if (btnScreening) btnScreening.className = "px-3 py-1 rounded-lg bg-amber-400 text-black font-semibold text-xs transition shadow";
+        viewScreening.classList.remove('hidden');
+        if (!currentCut) currentCut = "Mara_RoughCut_v04.mov";
+        cutLabel.textContent = `Cut: ${currentCut}`;
+        badge.classList.remove('hidden');
+        updateModeButtons('screening');
+        startPlaybackTimer();
+      } else if (state === 'review') {
+        if (btnReview) btnReview.className = "px-3 py-1 rounded-lg bg-amber-400 text-black font-semibold text-xs transition shadow";
+        viewReview.classList.remove('hidden');
+        if (!currentCut) currentCut = "Mara_RoughCut_v04.mov";
+        cutLabel.textContent = `Cut: ${currentCut}`;
+        badge.classList.remove('hidden');
+        updateModeButtons('review');
+      } else if (state === 'audit') {
+        if (btnAudit) btnAudit.className = "px-3 py-1 rounded-lg bg-amber-400 text-black font-semibold text-xs transition shadow";
+        viewAudit.classList.remove('hidden');
+      }
+    }
+
+    function setMode(mode) {
+      updateModeButtons(mode);
+      if (mode === 'screening') {
+        if (currentCut) {
+          setPreviewState('screening');
+        } else {
+          setPreviewState('hub');
+        }
+      } else if (mode === 'review') {
+        setPreviewState('review');
+      } else if (mode === 'studio') {
+        alert("✂️ Studio mode: Analyze shot sizes, cut frequencies, cast appearances, and DME audio stems.");
+      } else if (mode === 'explore') {
+        alert("🧭 Explore mode: Macro pace distributions and version-to-version cut comparison.");
+      }
+    }
+
+    function updateModeButtons(mode) {
+      const s = document.getElementById('modeBtnScreening');
+      const r = document.getElementById('modeBtnReview');
+      const st = document.getElementById('modeBtnStudio');
+      const ex = document.getElementById('modeBtnExplore');
+      [s, r, st, ex].forEach(b => {
+        if (b) b.className = "px-3.5 py-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition flex items-center gap-1.5";
+      });
+      if (mode === 'screening' && s) {
+        s.className = "px-3.5 py-1.5 rounded-lg bg-amber-400 text-black font-semibold transition flex items-center gap-1.5 shadow-sm";
+      } else if (mode === 'review' && r) {
+        r.className = "px-3.5 py-1.5 rounded-lg bg-amber-400 text-black font-semibold transition flex items-center gap-1.5 shadow-sm";
+      } else if (mode === 'studio' && st) {
+        st.className = "px-3.5 py-1.5 rounded-lg bg-amber-400 text-black font-semibold transition flex items-center gap-1.5 shadow-sm";
+      } else if (mode === 'explore' && ex) {
+        ex.className = "px-3.5 py-1.5 rounded-lg bg-amber-400 text-black font-semibold transition flex items-center gap-1.5 shadow-sm";
+      }
+    }
+
+    // Role switcher (Host / Join)
+    function setScreeningRole(role) {
+      currentRole = role;
+      const hostBtn = document.getElementById('btnRoleHost');
+      const joinBtn = document.getElementById('btnRoleJoin');
+      const hostBox = document.getElementById('hostCodeBox');
+      const joinBox = document.getElementById('joinCodeBox');
+      const btnAction = document.getElementById('btnCard2Label');
+
+      if (role === 'host') {
+        hostBtn.className = "py-1.5 text-xs font-semibold rounded-lg bg-[#242b38] text-white shadow transition";
+        joinBtn.className = "py-1.5 text-xs font-medium rounded-lg text-slate-400 hover:text-white transition";
+        hostBox.classList.remove('hidden');
+        joinBox.classList.add('hidden');
+        if (btnAction) btnAction.textContent = "Open projector display";
+      } else {
+        joinBtn.className = "py-1.5 text-xs font-semibold rounded-lg bg-[#242b38] text-white shadow transition";
+        hostBtn.className = "py-1.5 text-xs font-medium rounded-lg text-slate-400 hover:text-white transition";
+        hostBox.classList.add('hidden');
+        joinBox.classList.remove('hidden');
+        if (btnAction) btnAction.textContent = "Connect to session";
+      }
+    }
+
+    function copyHostCode() {
+      const label = document.getElementById('copyCodeLabel');
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText("9503").then(() => {
+          if (label) {
+            label.textContent = "Copied!";
+            setTimeout(() => { label.textContent = "Copy code"; }, 1500);
+          }
+        });
+      }
+    }
+
+    function selectToken(btn, emoji) {
+      currentAvatar = emoji;
+      const badge = document.getElementById('selectedAvatarBadge');
+      if (badge) badge.textContent = emoji;
+      document.querySelectorAll('#tokenGrid .token-btn').forEach(b => {
+        b.className = "token-btn h-7 rounded-lg bg-[#121620] flex items-center justify-center text-sm transition hover:bg-[#242b38]";
+      });
+      btn.className = "token-btn selected h-7 rounded-lg bg-[#242b38] flex items-center justify-center text-sm ring-1 ring-indigo-400 transition hover:bg-[#2e3747]";
+    }
+
+    function handleCard2Action() {
+      if (!currentCut) currentCut = "Mara_RoughCut_v04.mov";
+      loadMockCut(currentCut);
+    }
+
+    function simulateFileUpload() {
+      loadMockCut("Mara_RoughCut_v04.mov");
+    }
+
+    function loadMockCut(name) {
+      currentCut = name;
+      document.getElementById('headerCutLabel').textContent = `Cut: ${name}`;
+      document.getElementById('playerCutTitle').textContent = name;
+      document.getElementById('screeningCutTitle').textContent = name;
+      document.getElementById('cinemaCutName').textContent = name;
+      // Directly enter live screening theater
+      setPreviewState('screening');
+    }
+
+    // Cue Categories for 1, 2, 3, 4
+    const CUE_INFO = {
+      '1': { label: 'Dragging / Trim', dot: 'bg-rose-500', resolve: 'Red' },
+      '2': { label: 'Good Beat / Flow', dot: 'bg-amber-400', resolve: 'Yellow' },
+      '3': { label: 'Confusion / Jump', dot: 'bg-emerald-400', resolve: 'Green' },
+      '4': { label: 'Impact / Peak', dot: 'bg-sky-400', resolve: 'Cyan' }
+    };
+
+    function dropMockCue(key) {
+      const cue = CUE_INFO[key];
+      if (!cue) return;
+
+      cueCount++;
+      const liveCounter = document.getElementById('liveScreeningCueCount');
+      const headerBadge = document.getElementById('reviewCueBadge');
+      if (liveCounter) liveCounter.textContent = `${cueCount} Cues Logged`;
+      if (headerBadge) {
+        headerBadge.textContent = cueCount;
+        headerBadge.classList.remove('hidden');
+      }
+
+      // Flash button active state
+      const pad = document.getElementById(`keyPad${key}`);
+      if (pad) {
+        pad.classList.add('ring-2', 'ring-white', 'scale-95');
+        setTimeout(() => pad.classList.remove('ring-2', 'ring-white', 'scale-95'), 200);
+      }
+
+      // Flash corner silent feedback toast
+      const toast = document.getElementById('cueFlashToast');
+      const dot = document.getElementById('cueFlashDot');
+      const text = document.getElementById('cueFlashText');
+      const smpte = formatSMPTE(playbackSeconds);
+
+      if (toast && text && dot) {
+        dot.className = `w-3 h-3 rounded-full ${cue.dot} animate-pulse`;
+        text.textContent = `✓ ${currentAvatar} Logged [${key} - ${cue.label}] at ${smpte} (-12f compensated)`;
+        toast.classList.remove('hidden');
+        clearTimeout(toast._timer);
+        toast._timer = setTimeout(() => {
+          toast.classList.add('hidden');
+        }, 2200);
+      }
+    }
+
+    // Global Key Listener for 1, 2, 3, 4 & Space
+    window.addEventListener('keydown', (e) => {
+      // Don't capture when typing in text input
+      if (['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
+
+      if (['1', '2', '3', '4'].includes(e.key)) {
+        e.preventDefault();
+        dropMockCue(e.key);
+      } else if (e.code === 'Space') {
+        e.preventDefault();
+        togglePlayback();
+      }
+    });
+
+    // Start with Hub view
+    setPreviewState('hub');
+  </script>
+</body>
+</html>

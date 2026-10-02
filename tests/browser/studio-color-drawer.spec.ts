@@ -55,10 +55,8 @@ test("Studio Color drawer design, interactions, views, curves, barcode seeking, 
   const monitorBoxWhileOpen = await monitor.boundingBox();
   expect(monitorBoxWhileOpen!.width).toBeLessThanOrEqual(monitorInitialBox!.width);
 
-  // 4. Verify Drawer Header
-  const drawerTitle = page.locator(".color-drawer-title");
-  await expect(drawerTitle).toBeVisible();
-  await expect(drawerTitle).toHaveText("COLOR READING");
+  // 4. Verify Drawer Header (with redundant title omitted)
+  await expect(page.locator(".color-drawer-title")).toHaveCount(0);
 
   const drawerSubtitle = page.locator(".color-drawer-subtitle");
   await expect(drawerSubtitle).toBeVisible();

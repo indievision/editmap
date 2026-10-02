@@ -243,6 +243,23 @@ export interface FocalPoint {
   type: "eyes" | "face" | "person" | "saliency" | "center";
   /** Detection confidence score 0.0 to 1.0 */
   confidence: number;
+  gazeDirection?: "screen-left" | "screen-right" | "direct";
+  sharpness?: number;
+  areaPercent?: number;
+}
+
+export interface GazeMomentum {
+  /** Normalized horizontal optical flow velocity: negative = leftward, positive = rightward (-1.0 to 1.0) */
+  vx: number;
+  /** Normalized vertical optical flow velocity: negative = upward, positive = downward (-1.0 to 1.0) */
+  vy: number;
+  /** Velocity magnitude scaled 0 to 100 */
+  velocity: number;
+  /** Kinetic alignment between gaze momentum and saccadic jump vector */
+  alignment: "momentum-match" | "neutral" | "momentum-collision" | "static";
+  /** Cosine alignment score -1.0 to 1.0 */
+  cosineScore?: number;
+  trajectoryAngle?: number;
 }
 
 export interface EyeTraceCutReading {
@@ -252,10 +269,25 @@ export interface EyeTraceCutReading {
   jumpDistance: number;
   /** Jump distance as a percentage of screen diagonal (0 to 100) */
   jumpDistancePercent: number;
-  /** Walter Murch saccadic threshold classification */
-  rating: "smooth" | "natural" | "jarring";
+  /** Saccadic classification (Option A: anchored / shifted / scattered, smooth/natural/jarring kept for compat) */
+  rating: "anchored" | "shifted" | "scattered" | "smooth" | "natural" | "jarring";
   /** Horizontal gaze/flow across cut */
   screenDirection?: "left-to-right" | "right-to-left" | "neutral";
+  /** Optical flow gaze momentum & kinetic collision (Phase 2) */
+  momentum?: GazeMomentum;
+  /** 180° Axis Clash Warning */
+  axisClash?: boolean;
+  axisClashDetail?: string;
+  /** Character Replacement / Jump-Cut Collision */
+  characterReplacement?: boolean;
+  characterReplacementDetail?: string;
+  /** Depth / Focal Plane Accommodation Shift */
+  depthShift?: {
+    outgoingSharpness: number;
+    incomingSharpness: number;
+    shift: "near-to-far" | "far-to-near" | "constant";
+    magnitude: "subtle" | "moderate" | "high";
+  };
 }
 
 /** A manual reading of one ordered pair; it never changes the shot tags. */
@@ -352,6 +384,12 @@ export interface ScreeningMark {
   resolved: boolean;
   trimFrames?: number;
   audioLeadFrames?: number;
+  colorHex?: string;
+  colorKey?: string;
+  authorName?: string;
+  authorAvatar?: string;
+  smpte?: string;
+  thumbnail?: string;
 }
 
 export interface ComparisonObservation {
@@ -407,6 +445,8 @@ export function newProject(): Project {
     recordOrigin: "00:00:00:00",
     dropFrame: false,
     shots: [],
+    screeningMarks: [],
+    sequences: [],
     savedExploreSequences: [],
     savedExploreComparisons: [],
     colorMode: "shotSize",

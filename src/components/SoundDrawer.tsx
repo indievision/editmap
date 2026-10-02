@@ -208,25 +208,6 @@ export const SoundDrawer = memo(function SoundDrawer({
 
   return (
     <div className="sound-drawer panel" aria-label="Audio & loudness drawer">
-      {/* Header matching minimal mockup */}
-      <div className="sound-drawer-head">
-        <div className="sound-drawer-title-group">
-          <div className="sound-drawer-kicker">EDITMAP / STUDIO</div>
-          <h2 className="sound-drawer-title">Audio & loudness</h2>
-        </div>
-        {onClose && (
-          <button
-            type="button"
-            className="studio-drawer-close-btn sound-drawer-close-btn"
-            onClick={onClose}
-            title="Close audio drawer (Esc)"
-            aria-label="Close audio drawer"
-          >
-            ✕
-          </button>
-        )}
-      </div>
-
       {/* Tabs Row */}
       <div className="sound-tabs-bar">
         <div className="sound-subtabs-wrap" role="tablist" aria-label="Audio subviews">
@@ -301,6 +282,17 @@ export const SoundDrawer = memo(function SoundDrawer({
             >
               <span className="rescan-icon">↻</span>
               <span>{loudnessAnalysis ? "Re-scan" : "Scan audio"}</span>
+            </button>
+          )}
+          {onClose && (
+            <button
+              type="button"
+              className="studio-drawer-close-btn sound-drawer-close-btn"
+              onClick={onClose}
+              title="Close audio drawer (Esc)"
+              aria-label="Close audio drawer"
+            >
+              ✕
             </button>
           )}
         </div>

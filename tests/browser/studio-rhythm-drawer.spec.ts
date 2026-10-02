@@ -60,10 +60,9 @@ test("Studio Rhythm drawer design, interactions, seeking, tabs, and layout prese
   // Timeline below monitor remains visible
   await expect(shotTrack).toBeVisible();
 
-  // 4. Verify Drawer Header and Title
-  const drawerTitle = page.locator(".rhythm-drawer-title");
-  await expect(drawerTitle).toBeVisible();
-  await expect(drawerTitle).toHaveText("Editing rhythm");
+  // 4. Verify Drawer subtabs are visible and redundant title is omitted
+  await expect(page.locator(".rhythm-tabs.drawer-subtabs")).toBeVisible();
+  await expect(page.locator(".rhythm-drawer-title")).toHaveCount(0);
 
   // 5. Test close via 'X' button
   const closeBtn = page.locator(".rhythm-drawer-close-btn");

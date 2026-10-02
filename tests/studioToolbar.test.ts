@@ -15,34 +15,34 @@ test("Studio upper-left analytical views match approved order", () => {
 });
 
 test("Simplified Studio toolbar groups and order specifications", () => {
-  const editorialOrder = ["Split", "Mark", "Snap", "Squint"];
-  const navOrder = ["Zoom out", "Zoom", "Zoom in", "Fit", "Full screen"];
-  const expandedToolsOrder = ["Rhythm", "Framing", "Structure", "Sound", "Cuts", "Cast", "Color"];
+  const toolbarOrder = [
+    "Split",
+    "Merge",
+    "In",
+    "Out",
+    "Clear",
+    "Snap",
+    "Marker",
+    "Squint",
+    "Fit",
+    "Zoom-",
+    "Zoom",
+    "Zoom+",
+    "Fullscreen",
+  ];
 
-  // Main toolbar has no duplicated analytical tool buttons or palette toggle
-  assert.equal(editorialOrder.length, 4);
-  assert.equal(navOrder.length, 5);
-  assert.equal(expandedToolsOrder.length, 7);
-
-  // Left group: editorial controls
-  assert.equal(editorialOrder[0], "Split");
-  assert.equal(editorialOrder[1], "Mark");
-  assert.equal(editorialOrder[2], "Snap");
-  assert.equal(editorialOrder[3], "Squint");
-
-  // Right group: navigation controls
-  assert.equal(navOrder[0], "Zoom out");
-  assert.equal(navOrder[1], "Zoom");
-  assert.equal(navOrder[2], "Zoom in");
-  assert.equal(navOrder[3], "Fit");
-  assert.equal(navOrder[4], "Full screen");
-
-  // Expanded Studio compact Tools menu order
-  assert.equal(expandedToolsOrder[0], "Rhythm");
-  assert.equal(expandedToolsOrder[1], "Framing");
-  assert.equal(expandedToolsOrder[2], "Structure");
-  assert.equal(expandedToolsOrder[3], "Sound");
-  assert.equal(expandedToolsOrder[4], "Cuts");
-  assert.equal(expandedToolsOrder[5], "Cast");
-  assert.equal(expandedToolsOrder[6], "Color");
+  assert.equal(toolbarOrder.length, 13);
+  assert.equal(toolbarOrder[0], "Split");
+  assert.equal(toolbarOrder[1], "Merge");
+  assert.equal(toolbarOrder[2], "In");
+  assert.equal(toolbarOrder[3], "Out");
+  assert.equal(toolbarOrder[4], "Clear");
+  assert.equal(toolbarOrder[5], "Snap");
+  assert.equal(toolbarOrder[6], "Marker");
+  assert.equal(toolbarOrder[7], "Squint");
+  assert.equal(toolbarOrder[8], "Fit");
+  assert.equal(toolbarOrder[9], "Zoom-");
+  assert.equal(toolbarOrder[10], "Zoom");
+  assert.equal(toolbarOrder[11], "Zoom+");
+  assert.equal(toolbarOrder[12], "Fullscreen");
 });

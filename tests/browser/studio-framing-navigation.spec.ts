@@ -80,7 +80,7 @@ test("Studio Framing navigation: dedicated tab, default Distribution, Progressio
 
   const framingDrawer = page.locator(".framing-drawer");
   await expect(framingDrawer).toBeVisible();
-  await expect(framingDrawer.locator(".framing-drawer-title")).toHaveText("Framing");
+  await expect(framingDrawer.locator(".framing-drawer-title")).toHaveCount(0);
 
   // Verify Framing has two subsections: Distribution and Progression
   const framingSubtabs = framingDrawer.locator(".rhythm-subtab-btn");

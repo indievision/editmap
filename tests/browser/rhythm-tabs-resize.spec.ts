@@ -28,10 +28,9 @@ test("editing rhythm tabs scrolling, smaller font, and smooth resizing across al
   // Open the Studio contextual detail drawer to inspect rhythm tabs
   await page.locator('.studio-rail-btn[aria-label="Rhythm"]').click();
 
-  // 2. Check Editing Rhythm Title and font size
-  const rhythmTitle = page.locator(".rhythm-drawer-title, .rhythm-tabs h2").first();
-  await expect(rhythmTitle).toBeVisible();
-  await expect(rhythmTitle).toHaveText("Editing rhythm");
+  // 2. Check Editing Rhythm subtabs and ensure title is omitted
+  await expect(page.locator(".rhythm-tabs.drawer-subtabs")).toBeVisible();
+  await expect(page.locator(".rhythm-drawer-title, .rhythm-tabs h2")).toHaveCount(0);
 
   // 3. Drag left splitter narrower to test overflow
   const leftHandle = page.locator(".resize-handle-left");

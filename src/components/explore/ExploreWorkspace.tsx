@@ -65,16 +65,6 @@ export default function ExploreWorkspace({
               className={`explore-subnav-tab ${activeSubpage === "assemble" ? "active" : ""}`}
               onClick={() => handleSubpageChange("assemble")}
             >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
-                <rect x="2" y="2" width="20" height="20" rx="2.5" />
-                <line x1="7" y1="2" x2="7" y2="22" />
-                <line x1="17" y1="2" x2="17" y2="22" />
-                <line x1="2" y1="12" x2="22" y2="12" />
-                <line x1="2" y1="7" x2="7" y2="7" />
-                <line x1="2" y1="17" x2="7" y2="17" />
-                <line x1="17" y1="17" x2="22" y2="17" />
-                <line x1="17" y1="7" x2="22" y2="7" />
-              </svg>
               <span>Assemble</span>
             </button>
 
@@ -88,10 +78,6 @@ export default function ExploreWorkspace({
               className={`explore-subnav-tab ${activeSubpage === "compare" ? "active" : ""}`}
               onClick={() => handleSubpageChange("compare")}
             >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
-                <rect x="3" y="3" width="8" height="18" rx="1.5" />
-                <rect x="13" y="3" width="8" height="18" rx="1.5" />
-              </svg>
               <span>Compare</span>
             </button>
           </div>

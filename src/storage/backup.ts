@@ -5,6 +5,7 @@ import {
   type MotionProfile,
   type EyeTraceCutReading,
   type FocalPoint,
+  type GazeMomentum,
   peopleLabels,
   shotSizes,
   soundKinds,
@@ -111,9 +112,32 @@ function focalPoint(raw: unknown): FocalPoint {
   const v = object(raw, "Focal point");
   return { x: bounded(v.x, "Focal x", 0, 1), y: bounded(v.y, "Focal y", 0, 1), type: oneOf(v.type, ["eyes", "face", "person", "saliency", "center"] as const, "Focal method"), confidence: bounded(v.confidence, "Focal confidence", 0, 1) };
 }
+function gazeMomentum(raw: unknown): GazeMomentum {
+  const v = object(raw, "Gaze momentum");
+  return {
+    vx: number(v.vx, "Gaze vx"),
+    vy: number(v.vy, "Gaze vy"),
+    velocity: bounded(v.velocity, "Gaze velocity", 0, 100),
+    alignment: oneOf(v.alignment, ["momentum-match", "neutral", "momentum-collision", "static"] as const, "Momentum alignment"),
+    ...(v.cosineScore !== undefined ? { cosineScore: number(v.cosineScore, "Cosine score") } : {}),
+  };
+}
 function eyeTrace(raw: unknown): EyeTraceCutReading {
   const v = object(raw, "Eye trace");
-  return { outgoingFocalPoint: focalPoint(v.outgoingFocalPoint), incomingFocalPoint: focalPoint(v.incomingFocalPoint), jumpDistance: bounded(v.jumpDistance, "Jump distance", 0, Math.SQRT2), jumpDistancePercent: bounded(v.jumpDistancePercent, "Jump percent", 0, 100), rating: oneOf(v.rating, ["smooth", "natural", "jarring"] as const, "Eye trace rating"), ...(v.screenDirection === undefined ? {} : { screenDirection: oneOf(v.screenDirection, ["left-to-right", "right-to-left", "neutral"] as const, "Screen direction") }) };
+  return {
+    outgoingFocalPoint: focalPoint(v.outgoingFocalPoint),
+    incomingFocalPoint: focalPoint(v.incomingFocalPoint),
+    jumpDistance: bounded(v.jumpDistance, "Jump distance", 0, Math.SQRT2),
+    jumpDistancePercent: bounded(v.jumpDistancePercent, "Jump percent", 0, 100),
+    rating: oneOf(v.rating, ["anchored", "shifted", "scattered", "smooth", "natural", "jarring"] as const, "Eye trace rating"),
+    ...(v.screenDirection === undefined ? {} : { screenDirection: oneOf(v.screenDirection, ["left-to-right", "right-to-left", "neutral"] as const, "Screen direction") }),
+    ...(v.momentum === undefined ? {} : { momentum: gazeMomentum(v.momentum) }),
+    ...(v.axisClash === undefined ? {} : { axisClash: Boolean(v.axisClash) }),
+    ...(typeof v.axisClashDetail === "string" ? { axisClashDetail: v.axisClashDetail } : {}),
+    ...(v.characterReplacement === undefined ? {} : { characterReplacement: Boolean(v.characterReplacement) }),
+    ...(typeof v.characterReplacementDetail === "string" ? { characterReplacementDetail: v.characterReplacementDetail } : {}),
+    ...(v.depthShift ? { depthShift: v.depthShift as any } : {}),
+  };
 }
 
 function validateShot(raw: unknown, i: number): Shot {

@@ -146,7 +146,7 @@ async function detectVideoShotsInBrowser(
   options: VideoScanOptions = {},
 ): Promise<Shot[]> {
   const {
-    sampleIntervalSeconds = 0.25,
+    sampleIntervalSeconds = 0.5,
     fps = 24,
     dropFrame = false,
     adaptiveThreshold = 2.8,
@@ -167,6 +167,10 @@ async function detectVideoShotsInBrowser(
     video.muted = true;
     video.preload = "auto";
     video.playsInline = true;
+    video.style.cssText = "position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;z-index:-1;";
+    if (typeof document !== "undefined" && document.body) {
+      document.body.appendChild(video);
+    }
 
     const canvas = document.createElement("canvas");
     canvas.width = CANVAS_WIDTH;
@@ -174,6 +178,7 @@ async function detectVideoShotsInBrowser(
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
     if (!ctx) {
+      if (video.parentNode) video.parentNode.removeChild(video);
       return reject(new Error("Could not create 2D canvas context for scene detection."));
     }
 
@@ -187,6 +192,9 @@ async function detectVideoShotsInBrowser(
     const cleanup = () => {
       video.removeAttribute("src");
       video.load();
+      if (video.parentNode) {
+        video.parentNode.removeChild(video);
+      }
     };
 
     signal?.addEventListener("abort", () => {
@@ -199,13 +207,25 @@ async function detectVideoShotsInBrowser(
       reject(new Error("Failed to load video for scene detection."));
     };
 
-    video.onloadedmetadata = async () => {
+    const runDetection = async () => {
       try {
         const duration = video.duration;
         if (!duration || duration <= 0 || !Number.isFinite(duration)) {
           cleanup();
           return resolve([]);
         }
+
+        // Immediately report 0% with total duration so live timecode displays right away
+        onProgress({
+          percent: 0,
+          currentTime: 0,
+          totalDuration: duration,
+          shotsCount: 1,
+        });
+
+        const effectiveStride = options.sampleIntervalSeconds ?? (
+          duration > 300 ? 1.0 : (duration > 120 ? 0.75 : 0.5)
+        );
 
         const seekTo = (targetSeconds: number): Promise<void> =>
           new Promise<void>((res, rej) => {
@@ -272,7 +292,7 @@ async function detectVideoShotsInBrowser(
               let tHigh = currentTime;
               let frameHigh = currentFrameData;
 
-              const maxIters = Math.ceil(Math.log2(timeSpan / frameDuration));
+              const maxIters = Math.min(4, Math.ceil(Math.log2(timeSpan / frameDuration)));
               for (let iter = 0; iter < maxIters && (tHigh - tLow) > frameDuration; iter++) {
                 if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
@@ -312,8 +332,8 @@ async function detectVideoShotsInBrowser(
             lastSampleTime = currentTime;
           }
 
-          // Advance time
-          currentTime += sampleIntervalSeconds;
+          // Advance time with effective stride
+          currentTime += effectiveStride;
           sampleCount++;
 
           // Notify progress
@@ -327,9 +347,9 @@ async function detectVideoShotsInBrowser(
             });
           }
 
-          // Periodic yield to UI event loop every 5 samples
-          if (sampleCount % 5 === 0) {
-            await new Promise((r) => setTimeout(r, 0));
+          // Periodic yield to UI event loop and hardware video decoder
+          if (sampleCount % 2 === 0) {
+            await new Promise((r) => setTimeout(r, 16));
           }
         }
 
@@ -344,6 +364,13 @@ async function detectVideoShotsInBrowser(
       }
     };
 
+    if (video.readyState >= 1) {
+      void runDetection();
+    } else {
+      video.onloadedmetadata = () => void runDetection();
+    }
+
     video.src = videoUrl;
+    video.load();
   });
 }

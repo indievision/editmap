@@ -5,7 +5,9 @@ import {
   generateSteppedFramingPath,
   generatePacingPathAndArea,
   generateMotionFlowPathAndArea,
+  generateCutDensityPathAndArea,
 } from "../src/timeline/FullscreenMapVisualization";
+import { formatTimecode } from "../src/utils/timecode";
 import type { Shot, Project } from "../src/models/project";
 
 test("generateSymmetricalWaveformPath returns empty string for empty levels or non-positive duration", () => {
@@ -154,4 +156,45 @@ test("generateMotionFlowPathAndArea generates smooth kinetic flow wave and close
   assert.ok(res.area.startsWith(res.path), "Area begins with curve path");
   assert.ok(res.area.endsWith("Z"), "Area closes with Z");
   assert.ok(res.area.includes("L 80.0"), "Area extends to full timeline canvas width");
+});
+
+test("generateCutDensityPathAndArea produces smooth kinetic energy wave and closed SVG area", () => {
+  const shots: Shot[] = [
+    {
+      id: "s1",
+      index: 1,
+      startSeconds: 0,
+      endSeconds: 3,
+      duration: 3,
+    },
+    {
+      id: "s2",
+      index: 2,
+      startSeconds: 3,
+      endSeconds: 5,
+      duration: 2,
+    },
+    {
+      id: "s3",
+      index: 3,
+      startSeconds: 5,
+      endSeconds: 6,
+      duration: 1,
+    },
+  ];
+  const scale = 10;
+  const height = 50;
+  const res = generateCutDensityPathAndArea(shots, 6, scale, height);
+  assert.equal(res.hasData, true);
+  assert.ok(res.path.startsWith("M "), "Path starts with M command");
+  assert.ok(res.path.includes("C "), "Path contains smooth cubic curves");
+  assert.ok(res.area.startsWith(res.path), "Area begins with curve path");
+  assert.ok(res.area.endsWith("Z"), "Area closes with Z");
+  assert.ok(res.area.includes("L 60.0"), "Area extends to full timeline canvas width");
+});
+
+test("formatTimecode produces SMPTE compliant timecode for HUD readout", () => {
+  assert.equal(formatTimecode(0, 24), "00:00:00:00");
+  assert.equal(formatTimecode(1.5, 24), "00:00:01:12");
+  assert.equal(formatTimecode(65.25, 24), "00:01:05:06");
 });

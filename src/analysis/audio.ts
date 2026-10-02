@@ -45,6 +45,8 @@ export type AudioPoint = {
   time: number;
   db: number;
   normalized: number;
+  peakDb?: number;
+  peakNormalized?: number;
 };
 
 export function audioIntensityCurve(
@@ -58,6 +60,8 @@ export function audioIntensityCurve(
       time: duration > 0 ? (i * duration) / Math.max(1, pointsCount - 1) : 0,
       db: -48,
       normalized: 0,
+      peakDb: -48,
+      peakNormalized: 0,
     }));
   }
 
@@ -71,17 +75,31 @@ export function audioIntensityCurve(
     const startBin = Math.floor(windowStart / binDuration);
     const endBin = Math.min(waveform.length - 1, Math.ceil(windowEnd / binDuration));
 
+    let sumWeight = 0;
+    let sumSq = 0;
     let maxAmp = 0;
+
     if (startBin <= endBin && startBin >= 0) {
       for (let b = startBin; b <= endBin; b++) {
-        if (waveform[b]! > maxAmp) maxAmp = waveform[b]!;
+        const binCenterTime = (b + 0.5) * binDuration;
+        const normalizedDist = Math.abs(binCenterTime - time) / (windowSeconds / 2 || 1);
+        const w = Math.cos(Math.min(1, normalizedDist) * (Math.PI / 2));
+        const amp = waveform[b] ?? 0;
+        sumSq += amp * amp * w;
+        sumWeight += w;
+        if (amp > maxAmp) maxAmp = amp;
       }
     }
 
-    const db = amplitudeToDb(maxAmp);
-    const normalized = (db + 48) / 48; // -48dB -> 0, 0dB -> 1
+    const rms = sumWeight > 0 ? Math.sqrt(sumSq / sumWeight) : 0;
+    const effectiveAmp = Math.min(1, Math.max(rms * 1.35, maxAmp * 0.7, (rms * 2 + maxAmp) / 3));
 
-    return { time, db, normalized };
+    const db = amplitudeToDb(effectiveAmp);
+    const normalized = (db + 48) / 48; // -48dB -> 0, 0dB -> 1
+    const peakDb = amplitudeToDb(maxAmp);
+    const peakNormalized = (peakDb + 48) / 48;
+
+    return { time, db, normalized, peakDb, peakNormalized };
   });
 }
 

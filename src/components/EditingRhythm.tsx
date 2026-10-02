@@ -122,23 +122,8 @@ const EditingRhythm = memo(function EditingRhythm({
   return (
     <section className={`editing-rhythm panel ${variant === "drawer" ? "editing-rhythm-drawer" : ""}`}>
       {variant === "drawer" ? (
-        <>
-          <div className="rhythm-drawer-head">
-            <h2 className="rhythm-drawer-title">Editing rhythm</h2>
-            {onClose && (
-              <button
-                type="button"
-                className="studio-drawer-close-btn rhythm-drawer-close-btn"
-                onClick={onClose}
-                title="Close editing rhythm drawer (Esc)"
-                aria-label="Close editing rhythm drawer"
-              >
-                ✕
-              </button>
-            )}
-          </div>
-          <div className="rhythm-tabs drawer-subtabs" role="tablist" aria-label="Editing rhythm views">
-            <div className="rhythm-subtabs-wrap">
+        <div className="rhythm-tabs drawer-subtabs" role="tablist" aria-label="Editing rhythm views">
+          <div className="rhythm-subtabs-wrap">
               <button
                 type="button"
                 role="tab"
@@ -190,11 +175,20 @@ const EditingRhythm = memo(function EditingRhythm({
                 Motion energy
               </button>
             </div>
+            {onClose && (
+              <button
+                type="button"
+                className="studio-drawer-close-btn rhythm-drawer-close-btn"
+                onClick={onClose}
+                title="Close editing rhythm drawer (Esc)"
+                aria-label="Close editing rhythm drawer"
+              >
+                ✕
+              </button>
+            )}
           </div>
-        </>
       ) : (
         <div className="rhythm-tabs" aria-label="Editing rhythm views">
-          <h2>Editing rhythm</h2>
           <div className="rhythm-tabs-nav">
             {canScrollLeft && (
               <button
@@ -297,6 +291,7 @@ const EditingRhythm = memo(function EditingRhythm({
           url={url}
           selected={selected}
           onSelect={onSelect}
+          onSeek={onSeek}
           onUpdateShots={onUpdateShots}
           onOpenCompare={handleOpenCompare}
         />

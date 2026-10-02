@@ -3,6 +3,7 @@ import {
   analyzeCutEyeTrace,
   annotationFor,
   calculateCutVisualDelta,
+  calculateEyeTrace,
   colorMatchAtCut,
   cutPairAt,
   durationChange,
@@ -17,8 +18,9 @@ import {
 } from "../models/project";
 import { actualRate, formatTimecode } from "../utils/timecode";
 import { isHardCut } from "../analysis/pacing";
+import { SaccadicCutFlow, GhostFocalReticle, type CutViewMode } from "./SaccadicCutFlow";
 
-type Frames = { outgoing?: string; incoming?: string; unavailable?: boolean };
+type Frames = { outgoing?: string; incoming?: string; outgoingPrev?: string; unavailable?: boolean };
 
 function useBoundaryFrames(url: string, pair: CutPair | undefined, fps: number) {
   const [frames, setFrames] = useState<Frames>({});
@@ -69,9 +71,10 @@ function useBoundaryFrames(url: string, pair: CutPair | undefined, fps: number) 
         decoder.src = url;
         await ready;
         const frame = 1 / actualRate(fps);
+        const outgoingPrev = await capture(Math.max(pair.outgoing.startSeconds, pair.time - 2 * frame));
         const outgoing = await capture(Math.max(pair.outgoing.startSeconds, pair.time - frame));
         const incoming = await capture(Math.min(pair.incoming.endSeconds - frame / 2, pair.time + frame));
-        if (!cancelled) setFrames({ outgoing, incoming });
+        if (!cancelled) setFrames({ outgoing, incoming, outgoingPrev });
       } catch {
         if (!cancelled) setFrames({ unavailable: true });
       }
@@ -89,19 +92,50 @@ function FocalReticle({
   point,
   label,
   role,
+  onDragPoint,
 }: {
   point: FocalPoint;
   label: string;
   role: "outgoing" | "incoming";
+  onDragPoint?: (newPoint: FocalPoint) => void;
 }) {
+  const [isDragging, setIsDragging] = useState(false);
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    if (!onDragPoint) return;
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  useEffect(() => {
+    if (!isDragging || !onDragPoint) return;
+    const onMove = (e: PointerEvent) => {
+      const el = document.elementFromPoint(e.clientX, e.clientY)?.closest(".cut-frame-box, .cut-frame-container");
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const nx = Math.max(0.02, Math.min(0.98, (e.clientX - rect.left) / rect.width));
+      const ny = Math.max(0.02, Math.min(0.98, (e.clientY - rect.top) / rect.height));
+      onDragPoint({ ...point, x: Number(nx.toFixed(3)), y: Number(ny.toFixed(3)), type: "eyes", confidence: 1.0 });
+    };
+    const onUp = () => setIsDragging(false);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [isDragging, onDragPoint, point]);
+
   return (
     <div
-      className={`focal-reticle focal-reticle-${point.type} ${role}`}
+      className={`focal-reticle focal-reticle-${point.type} ${role} ${isDragging ? "dragging" : ""}`}
       style={{
         left: `${point.x * 100}%`,
         top: `${point.y * 100}%`,
+        cursor: onDragPoint ? (isDragging ? "grabbing" : "grab") : undefined,
       }}
-      title={`Focal attention: ${point.type.toUpperCase()} (${Math.round(point.confidence * 100)}% conf) at ${Math.round(point.x * 100)}%, ${Math.round(point.y * 100)}%`}
+      onPointerDown={handlePointerDown}
+      title={`Focal attention: ${point.type.toUpperCase()} (${Math.round(point.confidence * 100)}% conf) at ${Math.round(point.x * 100)}%, ${Math.round(point.y * 100)}%${onDragPoint ? " · Drag to position on eyes" : ""}`}
     >
       <div className="reticle-ring" />
       <div className="reticle-crosshair-h" />
@@ -145,6 +179,7 @@ export default function CutReading({
   const [showEyeTrace, setShowEyeTrace] = useState(true);
   const [squintCut, setSquintCut] = useState(false);
   const [analyzingEyeTrace, setAnalyzingEyeTrace] = useState(false);
+  const [cutViewMode, setCutViewMode] = useState<CutViewMode>("split");
   const frames = useBoundaryFrames(url, pair, project.frameRate);
 
   const annotation = pair ? annotationFor(project.cutAnnotations, pair) : null;
@@ -161,12 +196,38 @@ export default function CutReading({
     ]);
   };
 
-  // Automatically compute Eye-Trace if not yet analyzed for this cut
+  const handleRescanEyeTrace = () => {
+    if (!frames.outgoing || !frames.incoming) return;
+    setAnalyzingEyeTrace(true);
+    void analyzeCutEyeTrace(frames.outgoing, frames.incoming, frames.outgoingPrev)
+      .then((res) => {
+        if (res) {
+          updateAnnotation({ eyeTrace: res });
+        }
+      })
+      .finally(() => {
+        setAnalyzingEyeTrace(false);
+      });
+  };
+
+  // Automatically compute Eye-Trace if not yet analyzed or if previously stuck with legacy center-collapse bug
   useEffect(() => {
-    if (!frames.outgoing || !frames.incoming || !pair || eyeTrace) return;
+    if (!frames.outgoing || !frames.incoming || !pair) return;
+
+    // Detect if this cut has the old legacy center-collapse bug (both face near center <=12% hop)
+    const isLegacyBuggyTrace =
+      eyeTrace &&
+      eyeTrace.outgoingFocalPoint.type === "face" &&
+      eyeTrace.incomingFocalPoint.type === "face" &&
+      Math.abs(eyeTrace.outgoingFocalPoint.x - 0.5) < 0.08 &&
+      Math.abs(eyeTrace.incomingFocalPoint.x - 0.5) < 0.08 &&
+      eyeTrace.jumpDistancePercent <= 12;
+
+    if (eyeTrace && !isLegacyBuggyTrace) return;
+
     let cancelled = false;
     setAnalyzingEyeTrace(true);
-    void analyzeCutEyeTrace(frames.outgoing, frames.incoming)
+    void analyzeCutEyeTrace(frames.outgoing, frames.incoming, frames.outgoingPrev)
       .then((res) => {
         if (!cancelled && res) {
           updateAnnotation({ eyeTrace: res });
@@ -178,7 +239,7 @@ export default function CutReading({
     return () => {
       cancelled = true;
     };
-  }, [frames.outgoing, frames.incoming, pair?.incoming.id, eyeTrace]);
+  }, [frames.outgoing, frames.incoming, frames.outgoingPrev, pair?.incoming.id, eyeTrace]);
 
   if (!pair || !annotation) {
     if (variant === "drawer") {
@@ -186,7 +247,6 @@ export default function CutReading({
         <section className="cut-drawer panel" aria-label="Cut reading drawer">
           <div className="cut-drawer-head">
             <div className="cut-drawer-title-group">
-              <h2 className="cut-drawer-title">CUT READING</h2>
               <p className="cut-drawer-subtitle">Study what changes at an edit.</p>
             </div>
             {onClose && (
@@ -215,7 +275,6 @@ export default function CutReading({
       <section className="cut-reading panel">
         <div className="section-head">
           <div>
-            <span className="eyebrow">CUT READING</span>
             <span className="muted">Study what changes at an edit.</span>
           </div>
           {onClose && (
@@ -239,11 +298,11 @@ export default function CutReading({
   if (variant === "drawer") {
     const degrees = eyeTrace ? ((eyeTrace.jumpDistancePercent / 100) * 35).toFixed(1) : null;
     const ratingLabel = eyeTrace
-      ? eyeTrace.rating === "smooth"
-        ? "Smooth"
-        : eyeTrace.rating === "natural"
-        ? "Moderate"
-        : "Jarring"
+      ? eyeTrace.rating === "anchored" || eyeTrace.rating === "smooth"
+        ? "Anchored"
+        : eyeTrace.rating === "shifted" || eyeTrace.rating === "natural"
+        ? "Shifted"
+        : "Scattered"
       : null;
     const deltaD = pair.incoming.duration - pair.outgoing.duration;
     const deltaSign = deltaD >= 0 ? "+" : "";
@@ -255,7 +314,6 @@ export default function CutReading({
         {/* 1. Header */}
         <div className="cut-drawer-head">
           <div className="cut-drawer-title-group">
-            <h2 className="cut-drawer-title">CUT READING</h2>
             <p className="cut-drawer-subtitle">
               Shot {String(pair.outgoing.index).padStart(3, "0")} → {String(pair.incoming.index).padStart(3, "0")}
             </p>
@@ -360,8 +418,26 @@ export default function CutReading({
             )}
           </div>
 
+          {/* Saccadic Cut Flow & Vector Overlay */}
+          {frames.outgoing && frames.incoming && eyeTrace && showEyeTrace && (
+            <SaccadicCutFlow
+              outgoingFrame={frames.outgoing}
+              incomingFrame={frames.incoming}
+              eyeTrace={eyeTrace}
+              viewMode={cutViewMode}
+              onViewModeChange={setCutViewMode}
+              squint={squintCut}
+              onUpdateEyeTrace={(updated) => updateAnnotation({ eyeTrace: updated })}
+              onRescanEyeTrace={handleRescanEyeTrace}
+              isRescanning={analyzingEyeTrace}
+            />
+          )}
+
           {/* 3. Comparison Frames */}
-          <div className="cut-drawer-frames">
+          <div
+            className="cut-drawer-frames"
+            style={{ display: cutViewMode !== "split" && eyeTrace && showEyeTrace ? "none" : undefined }}
+          >
             <div className="cut-frame-card">
               <div className="cut-frame-card-head">
                 OUTGOING · {formatTimecode(Math.max(pair.outgoing.startSeconds, pair.time - 1 / actualRate(project.frameRate)), project.frameRate, project.dropFrame)}
@@ -388,7 +464,18 @@ export default function CutReading({
                   <span className="cut-viewfinder-label">OUT</span>
                 </div>
                 {showEyeTrace && eyeTrace?.outgoingFocalPoint && frames.outgoing && (
-                  <FocalReticle point={eyeTrace.outgoingFocalPoint} label="OUT" role="outgoing" />
+                  <FocalReticle
+                    point={eyeTrace.outgoingFocalPoint}
+                    label="OUT"
+                    role="outgoing"
+                    onDragPoint={(newP) => {
+                      const updated = calculateEyeTrace(newP, eyeTrace.incomingFocalPoint, eyeTrace.momentum);
+                      updateAnnotation({ eyeTrace: updated });
+                    }}
+                  />
+                )}
+                {showEyeTrace && eyeTrace?.incomingFocalPoint && frames.outgoing && (
+                  <GhostFocalReticle point={eyeTrace.incomingFocalPoint} role="target" label="IN TARGET" />
                 )}
               </div>
             </div>
@@ -419,11 +506,23 @@ export default function CutReading({
                   <span className="cut-viewfinder-label">IN</span>
                 </div>
                 {showEyeTrace && eyeTrace?.incomingFocalPoint && frames.incoming && (
-                  <FocalReticle point={eyeTrace.incomingFocalPoint} label="IN" role="incoming" />
+                  <FocalReticle
+                    point={eyeTrace.incomingFocalPoint}
+                    label="IN"
+                    role="incoming"
+                    onDragPoint={(newP) => {
+                      const updated = calculateEyeTrace(eyeTrace.outgoingFocalPoint, newP, eyeTrace.momentum);
+                      updateAnnotation({ eyeTrace: updated });
+                    }}
+                  />
+                )}
+                {showEyeTrace && eyeTrace?.outgoingFocalPoint && frames.incoming && (
+                  <GhostFocalReticle point={eyeTrace.outgoingFocalPoint} role="origin" label="OUT ORIGIN" />
                 )}
               </div>
             </div>
           </div>
+
 
           {/* 4. Evidence Rows */}
           <div className="cut-drawer-section cut-evidence-section">
@@ -438,7 +537,29 @@ export default function CutReading({
                 </span>
                 <span className="cut-evidence-value">
                   {eyeTrace ? (
-                    `${degrees}° (${ratingLabel})`
+                    <>
+                      {degrees}° ({ratingLabel})
+                      {eyeTrace.axisClash && (
+                        <span className="axis-clash-tag" title={eyeTrace.axisClashDetail || "180° axis clash: eyelines clash across the edit boundary"}>
+                          {" "}· ⚠️ 180° Axis Clash
+                        </span>
+                      )}
+                      {eyeTrace.characterReplacement && (
+                        <span className="replacement-tag" title={eyeTrace.characterReplacementDetail || "Subject substituted in same retinal position"}>
+                          {" "}· ⚡ Position Collision
+                        </span>
+                      )}
+                      {eyeTrace.depthShift && eyeTrace.depthShift.shift !== "constant" && (
+                        <span className="depth-shift-tag" title={`Depth accommodation: ${eyeTrace.depthShift.shift} (${eyeTrace.depthShift.magnitude})`}>
+                          {" "}· 👁️ {eyeTrace.depthShift.shift === "near-to-far" ? "Near→Far Depth" : "Far→Near Depth"}
+                        </span>
+                      )}
+                      {eyeTrace.momentum && eyeTrace.momentum.alignment !== "static" && (
+                        <span className={`momentum-tag ${eyeTrace.momentum.alignment}`}>
+                          {" "}· {eyeTrace.momentum.alignment === "momentum-match" ? "Momentum Match" : "Kinetic Collision"}
+                        </span>
+                      )}
+                    </>
                   ) : analyzingEyeTrace ? (
                     <span className="analyzing-shimmer">Scanning eye-trace…</span>
                   ) : (
@@ -486,10 +607,10 @@ export default function CutReading({
                     <circle cx="12" cy="12" r="10" />
                     <path d="M12 2a10 10 0 0 1 0 20z" fill="currentColor" opacity="0.3" />
                   </svg>
-                  Visual delta
+                  Visual change
                 </span>
                 <span className="cut-evidence-value">
-                  ΔLuma {deltaLumaSign}{Math.round(visualDelta.deltaLuma * 100)}% &nbsp; ΔChroma {deltaChromaSign}{Math.round(visualDelta.deltaChroma * 100)}%
+                  Brightness {deltaLumaSign}{Math.round(visualDelta.deltaLuma * 100)}% &nbsp; Color {deltaChromaSign}{Math.round(visualDelta.deltaChroma * 100)}%
                 </span>
               </div>
 
@@ -608,7 +729,6 @@ export default function CutReading({
     <section className="cut-reading panel">
       <div className="section-head">
         <div>
-          <span className="eyebrow">CUT READING</span>
           <span className="muted">
             Shot {String(pair.outgoing.index).padStart(3, "0")} → {String(pair.incoming.index).padStart(3, "0")}
           </span>
@@ -676,7 +796,25 @@ export default function CutReading({
         </div>
       </div>
 
-      <div className="cut-frames">
+      {/* Saccadic Cut Flow & Vector Overlay */}
+      {frames.outgoing && frames.incoming && eyeTrace && showEyeTrace && (
+        <SaccadicCutFlow
+          outgoingFrame={frames.outgoing}
+          incomingFrame={frames.incoming}
+          eyeTrace={eyeTrace}
+          viewMode={cutViewMode}
+          onViewModeChange={setCutViewMode}
+          squint={squintCut}
+          onUpdateEyeTrace={(updated) => updateAnnotation({ eyeTrace: updated })}
+          onRescanEyeTrace={handleRescanEyeTrace}
+          isRescanning={analyzingEyeTrace}
+        />
+      )}
+
+      <div
+        className="cut-frames"
+        style={{ display: cutViewMode !== "split" && eyeTrace && showEyeTrace ? "none" : undefined }}
+      >
         <figure>
           <figcaption>
             OUTGOING · {formatTimecode(Math.max(pair.outgoing.startSeconds, pair.time - 1 / actualRate(project.frameRate)), project.frameRate, project.dropFrame)}
@@ -694,7 +832,18 @@ export default function CutReading({
               </div>
             )}
             {showEyeTrace && eyeTrace?.outgoingFocalPoint && frames.outgoing && (
-              <FocalReticle point={eyeTrace.outgoingFocalPoint} label="OUT" role="outgoing" />
+              <FocalReticle
+                point={eyeTrace.outgoingFocalPoint}
+                label="OUT"
+                role="outgoing"
+                onDragPoint={(newP) => {
+                  const updated = calculateEyeTrace(newP, eyeTrace.incomingFocalPoint, eyeTrace.momentum);
+                  updateAnnotation({ eyeTrace: updated });
+                }}
+              />
+            )}
+            {showEyeTrace && eyeTrace?.incomingFocalPoint && frames.outgoing && (
+              <GhostFocalReticle point={eyeTrace.incomingFocalPoint} role="target" label="IN TARGET" />
             )}
           </div>
         </figure>
@@ -715,15 +864,38 @@ export default function CutReading({
               </div>
             )}
             {showEyeTrace && eyeTrace?.incomingFocalPoint && frames.incoming && (
-              <FocalReticle point={eyeTrace.incomingFocalPoint} label="IN" role="incoming" />
+              <FocalReticle
+                point={eyeTrace.incomingFocalPoint}
+                label="IN"
+                role="incoming"
+                onDragPoint={(newP) => {
+                  const updated = calculateEyeTrace(eyeTrace.outgoingFocalPoint, newP, eyeTrace.momentum);
+                  updateAnnotation({ eyeTrace: updated });
+                }}
+              />
+            )}
+            {showEyeTrace && eyeTrace?.outgoingFocalPoint && frames.incoming && (
+              <GhostFocalReticle point={eyeTrace.outgoingFocalPoint} role="origin" label="OUT ORIGIN" />
             )}
           </div>
         </figure>
       </div>
 
+
       <div className="cut-evidence">
         <div className={`cut-eyetrace-tile ${eyeTrace ? eyeTrace.rating : ""}`}>
-          <span>Eye-Trace Jump (Murch Rule)</span>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>Eye-Trace Jump (Murch Rule)</span>
+            <button
+              type="button"
+              className="cut-eyetrace-rescan-btn"
+              onClick={handleRescanEyeTrace}
+              disabled={analyzingEyeTrace || !frames.outgoing || !frames.incoming}
+              title="Auto-detect actor eyes and re-align saccadic vector via AI vision"
+            >
+              {analyzingEyeTrace ? "Scanning…" : "Re-scan Eyes"}
+            </button>
+          </div>
           <b>
             {eyeTrace ? (
               <>
@@ -731,6 +903,11 @@ export default function CutReading({
                 <span className={`rating-badge ${eyeTrace.rating}`}>
                   {eyeTrace.rating.toUpperCase()}
                 </span>
+                {eyeTrace.momentum && eyeTrace.momentum.alignment !== "static" && (
+                  <span className={`momentum-tag ${eyeTrace.momentum.alignment}`}>
+                    {" "}· {eyeTrace.momentum.alignment === "momentum-match" ? "MOMENTUM MATCH" : "COLLISION"}
+                  </span>
+                )}
               </>
             ) : analyzingEyeTrace ? (
               <span className="analyzing-shimmer">Scanning eye-trace…</span>
@@ -764,7 +941,7 @@ export default function CutReading({
           <span>Sensory Shock Index</span>
           <b>{visualDelta.shockScore} / 100</b>
           <small>
-            ΔV = {visualDelta.deltaV.toFixed(2)} (ΔLuma: {visualDelta.deltaLuma.toFixed(2)}, ΔChroma:{" "}
+            ΔV = {visualDelta.deltaV.toFixed(2)} (Brightness: {visualDelta.deltaLuma.toFixed(2)}, Color:{" "}
             {visualDelta.deltaChroma.toFixed(2)})
           </small>
         </div>

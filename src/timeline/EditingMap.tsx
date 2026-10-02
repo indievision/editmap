@@ -1,5 +1,5 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { Project, Shot, SpeechAnalysis, LoudnessAnalysis, SequenceMarker } from "../models/project";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import type { Project, Shot, SpeechAnalysis, LoudnessAnalysis, SequenceMarker, CutAnnotation, EyeTraceCutReading } from "../models/project";
 import { classifyCut, pauseRegions } from "../analysis/speech";
 import { lufsToNormalized } from "../analysis/loudness";
 import { colorMappings, sizeColors } from "../analysis/colors";
@@ -9,10 +9,13 @@ import { getSnapTime, quantizeToFrame } from "./timelineOps";
 import { cutTimes, pacingCurve, pacingAt, computeCutShockData } from "../analysis/pacing";
 import { framingRank } from "../analysis/framing";
 import { classifyKineticVelocity, classifyMomentumTransition } from "../analysis/motion";
+import { detectWhiplashClusters, scanProjectEyeTrace, type BatchScanProgress } from "../analysis/cuts";
+import { generatePolyphonicScore } from "../analysis/polyphony";
 import { getSquintFilter } from "../utils/squint";
 import {
   generatePacingPathAndArea,
   generateMotionFlowPathAndArea,
+  generateCutDensityPathAndArea,
   generateSymmetricalWaveformPath,
   generateSteppedFramingPath,
 } from "./FullscreenMapVisualization";
@@ -55,6 +58,7 @@ export const DEFAULT_MAP_LAYERS: MapLayerState = {
 };
 
 export type StudioTrackId =
+  | "markers"
   | "story"
   | "shots"
   | "pacing"
@@ -66,6 +70,7 @@ export type StudioTrackId =
   | "sound";
 
 export const DEFAULT_STUDIO_LANE_HEIGHTS: Record<StudioTrackId, number> = {
+  markers: 34,
   story: 38,
   shots: 50,
   pacing: 42,
@@ -78,6 +83,7 @@ export const DEFAULT_STUDIO_LANE_HEIGHTS: Record<StudioTrackId, number> = {
 };
 
 export const MIN_STUDIO_LANE_HEIGHTS: Record<StudioTrackId, number> = {
+  markers: 24,
   story: 24,
   shots: 28,
   pacing: 24,
@@ -217,6 +223,8 @@ export default memo(function EditingMap({
   drawerOpen,
   onSelectTab,
   onToggleDrawer,
+  url,
+  onUpdateCutAnnotations,
 }: {
   project: Project;
   thumbnails: Record<string, string>;
@@ -247,7 +255,7 @@ export default memo(function EditingMap({
   isDmeSeparating?: boolean;
   dmeSeparationStatus?: string;
   hasVideo?: boolean;
-  workspaceMode?: "studio" | "explore" | "review";
+  workspaceMode?: "studio" | "explore" | "review" | "screening";
   expanded?: boolean;
   onToggleExpanded?: () => void;
   showLayersControl?: boolean;
@@ -272,6 +280,8 @@ export default memo(function EditingMap({
   onScrollChange?: (scrollLeft: number) => void;
   onOpenFullscreen?: () => void;
   onOpenInspector?: () => void;
+  url?: string;
+  onUpdateCutAnnotations?: (annotations: CutAnnotation[]) => void;
   activeTab?: StudioToolTab;
   drawerOpen?: boolean;
   onSelectTab?: (tab: StudioToolTab) => void;
@@ -284,6 +294,9 @@ export default memo(function EditingMap({
   const minimapRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   const minimapDragging = useRef(false);
+  const minimapDragOffset = useRef(0);
+  const minimapRafId = useRef<number | null>(null);
+  const [isMinimapDragging, setIsMinimapDragging] = useState(false);
   const rangeAnchor = useRef<number | null>(null);
   const suppressMapClick = useRef(false);
   const [dragRange, setDragRange] = useState<{ start: number; end: number }>();
@@ -329,6 +342,7 @@ export default memo(function EditingMap({
   } | null>(null);
 
   const [collapsedTracks, setCollapsedTracks] = useState<Record<StudioTrackId, boolean>>({
+    markers: false,
     story: false,
     shots: false,
     pacing: false,
@@ -340,6 +354,7 @@ export default memo(function EditingMap({
     sound: false,
   });
   const [soloTrack, setSoloTrack] = useState<StudioTrackId | null>(null);
+  const [showVoltageOverlay, setShowVoltageOverlay] = useState(false);
 
   const [laneHeights, setLaneHeights] = useState<Record<StudioTrackId, number>>({
     ...DEFAULT_STUDIO_LANE_HEIGHTS,
@@ -450,10 +465,14 @@ export default memo(function EditingMap({
   const [localZoom, setLocalZoom] = useState(1);
   const zoom = propZoom !== undefined ? propZoom : localZoom;
 
+  const prevZoomRef = useRef(zoom);
+  const isZoomingRef = useRef(false);
+
   const setZoom = useCallback(
     (action: number | ((prev: number) => number)) => {
       const next = typeof action === "function" ? action(zoom) : action;
       const clamped = Math.max(1, Math.min(128, next));
+      isZoomingRef.current = true;
       setLocalZoom(clamped);
       onZoomChange?.(clamped);
     },
@@ -463,7 +482,36 @@ export default memo(function EditingMap({
   const [localScrollLeft, setLocalScrollLeft] = useState(0);
   const scrollLeft = propScrollLeft !== undefined ? propScrollLeft : localScrollLeft;
 
+  useLayoutEffect(() => {
+    if (prevZoomRef.current !== zoom || isZoomingRef.current) {
+      prevZoomRef.current = zoom;
+      isZoomingRef.current = false;
+      if (zoom <= 1.001 && minimapDragging.current) {
+        minimapDragging.current = false;
+        setIsMinimapDragging(false);
+        if (minimapRafId.current !== null) {
+          cancelAnimationFrame(minimapRafId.current);
+          minimapRafId.current = null;
+        }
+      }
+      const el = viewport.current;
+      if (!el) return;
+      const dur = Math.max(project.duration, 1);
+      const newCanvasWidth = Math.max(width, width * zoom);
+      const newScale = newCanvasWidth / dur;
+      const playheadX = time * newScale;
+      const targetScrollLeft = Math.max(
+        0,
+        Math.min(newCanvasWidth - width, playheadX - width / 2),
+      );
+      el.scrollLeft = targetScrollLeft;
+      setLocalScrollLeft(targetScrollLeft);
+      onScrollChange?.(targetScrollLeft);
+    }
+  }, [zoom, width, time, project.duration, onScrollChange]);
+
   useEffect(() => {
+    if (minimapDragging.current) return;
     if (propScrollLeft !== undefined && viewport.current) {
       if (Math.abs(viewport.current.scrollLeft - propScrollLeft) > 2) {
         viewport.current.scrollLeft = propScrollLeft;
@@ -615,6 +663,69 @@ export default memo(function EditingMap({
     }
     return map;
   }, [cutShockData]);
+
+  const eyeTraceMap = useMemo(() => {
+    const map = new Map<string, EyeTraceCutReading>();
+    if (project.cutAnnotations) {
+      for (const ann of project.cutAnnotations) {
+        if (ann.eyeTrace) {
+          map.set(`${ann.outgoingId}->${ann.incomingId}`, ann.eyeTrace);
+        }
+      }
+    }
+    return map;
+  }, [project.cutAnnotations]);
+
+  const whiplashClusters = useMemo(() => {
+    return detectWhiplashClusters(project.shots, project.cutAnnotations);
+  }, [project.shots, project.cutAnnotations]);
+
+  const scannedCutCount = eyeTraceMap.size;
+  const totalCutCount = Math.max(0, project.shots.length - 1);
+
+  const [isBatchScanningSaccades, setIsBatchScanningSaccades] = useState(false);
+  const [batchScanProgress, setBatchScanProgress] = useState<BatchScanProgress>({ current: 0, total: 0, percent: 0 });
+  const batchScanAbortRef = useRef<AbortController | null>(null);
+
+  const handleStartBatchScan = useCallback(async () => {
+    if (!url || !onUpdateCutAnnotations || isBatchScanningSaccades) return;
+    const controller = new AbortController();
+    batchScanAbortRef.current = controller;
+    setIsBatchScanningSaccades(true);
+    setBatchScanProgress({ current: 0, total: totalCutCount, percent: 0 });
+
+    try {
+      const updated = await scanProjectEyeTrace(
+        project.shots,
+        project.cutAnnotations,
+        url,
+        project.frameRate,
+        (p) => setBatchScanProgress(p),
+        controller.signal
+      );
+      if (!controller.signal.aborted) {
+        onUpdateCutAnnotations(updated);
+      }
+    } catch {
+      // Aborted or error
+    } finally {
+      setIsBatchScanningSaccades(false);
+      batchScanAbortRef.current = null;
+    }
+  }, [url, onUpdateCutAnnotations, isBatchScanningSaccades, project.shots, project.cutAnnotations, project.frameRate, totalCutCount]);
+
+  useEffect(() => {
+    if (
+      url &&
+      onUpdateCutAnnotations &&
+      project.shots.length >= 2 &&
+      eyeTraceMap.size === 0 &&
+      !isBatchScanningSaccades
+    ) {
+      handleStartBatchScan();
+    }
+  }, [url, project.shots.length, eyeTraceMap.size, onUpdateCutAnnotations, handleStartBatchScan, isBatchScanningSaccades]);
+
   const pacingPoints = useMemo(
     () => pacingCurve(cuts, duration, 30),
     [cuts, duration]
@@ -627,20 +738,11 @@ export default memo(function EditingMap({
     return Math.max(12, Math.ceil(Math.max(...pacingPoints.map((p) => p.rate), 0) / 5) * 5);
   }, [pacingPoints]);
 
-  const pacingSvgPath = useMemo(() => {
-    if (!pacingPoints.length || duration <= 0) return "";
-    return pacingPoints
-      .map(
-        (p, i) =>
-          `${i === 0 ? "M" : "L"} ${(p.time * scale).toFixed(1)},${(44 - (p.rate / maxPacingRate) * 36).toFixed(1)}`
-      )
-      .join(" ");
-  }, [pacingPoints, duration, scale, maxPacingRate]);
-
-  const pacingSvgArea = useMemo(() => {
-    if (!pacingSvgPath || duration <= 0) return "";
-    return `${pacingSvgPath} L ${(duration * scale).toFixed(1)},48 L 0,48 Z`;
-  }, [pacingSvgPath, duration, scale]);
+  const riverPacing = useMemo(() => {
+    return generatePacingPathAndArea(project.shots, duration, scale, 48);
+  }, [project.shots, duration, scale]);
+  const pacingSvgPath = riverPacing.path;
+  const pacingSvgArea = riverPacing.area;
 
   const pacingCategory = useMemo(() => {
     const rate = currentPacing.rate;
@@ -669,6 +771,16 @@ export default memo(function EditingMap({
     return generatePacingPathAndArea(project.shots, duration, scale, laneHeights.pacing);
   }, [project.shots, duration, scale, laneHeights.pacing]);
 
+  const cutDensityWave = useMemo(() => {
+    return generateCutDensityPathAndArea(
+      project.shots,
+      duration,
+      scale,
+      laneHeights.cutDensity,
+      project.cutAnnotations
+    );
+  }, [project.shots, duration, scale, laneHeights.cutDensity, project.cutAnnotations]);
+
   const studioMedianPacing = useMemo(() => {
     if (!project.shots.length) return 8;
     const cuts = cutTimes(project.shots);
@@ -677,6 +789,46 @@ export default memo(function EditingMap({
     const rates = pts.map((p) => p.rate).sort((a, b) => a - b);
     return rates[Math.floor(rates.length / 2)] || 8;
   }, [project.shots, duration]);
+
+  const studioVoltage = useMemo(() => {
+    if (!showVoltageOverlay || !project.shots.length || duration <= 0) return null;
+    const score = generatePolyphonicScore(project, Math.max(80, Math.min(400, Math.round(duration * 2))), 20);
+    const chords = score.chords;
+    if (!chords.length) return null;
+
+    const h = laneHeights.pacing;
+    const vPts: [number, number][] = [];
+    const aPts: [number, number][] = [];
+
+    for (const c of chords) {
+      const x = c.time * scale;
+      const yV = 4 + (h - 8) * (1 - c.visualVoltage / 100);
+      const yA = 4 + (h - 8) * (1 - c.acousticVoltage / 100);
+      vPts.push([x, yV]);
+      aPts.push([x, yA]);
+    }
+
+    const build = (pts: [number, number][]) => {
+      let p = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+      for (let i = 1; i < pts.length; i++) {
+        p += ` L ${pts[i][0].toFixed(1)} ${pts[i][1].toFixed(1)}`;
+      }
+      return p;
+    };
+
+    const visualPath = build(vPts);
+    const acousticPath = build(aPts);
+    const visualArea = `${visualPath} L ${vPts[vPts.length - 1][0].toFixed(1)} ${h} L 0 ${h} Z`;
+    const acousticArea = `${acousticPath} L ${aPts[aPts.length - 1][0].toFixed(1)} ${h} L 0 ${h} Z`;
+
+    return {
+      visualPath,
+      visualArea,
+      acousticPath,
+      acousticArea,
+      score,
+    };
+  }, [showVoltageOverlay, project, duration, scale, laneHeights.pacing]);
 
   const studioMotion = useMemo(() => {
     return generateMotionFlowPathAndArea(project.shots, duration, scale, laneHeights.motion);
@@ -1120,7 +1272,7 @@ export default memo(function EditingMap({
   }, []);
 
   useEffect(() => {
-    if (dragging.current) return;
+    if (dragging.current || minimapDragging.current) return;
     const el = viewport.current;
     if (!el) return;
     const x = time * scale;
@@ -1163,15 +1315,46 @@ export default memo(function EditingMap({
     }
   }, [time, range, project, onUpdateSequences, onSelectSequence, onRangeChange, isTrackCollapsed, toggleTrackCollapse]);
 
+  const handleMarkIn = useCallback(() => {
+    const frameRate = project?.frameRate || 24;
+    const exactFrameTime = quantizeToFrame(time, frameRate);
+    onRangeChange?.({
+      start: exactFrameTime,
+      end: range?.end !== undefined && range.end > exactFrameTime ? range.end : undefined,
+    });
+  }, [time, project, range, onRangeChange]);
+
+  const handleMarkOut = useCallback(() => {
+    const frameRate = project?.frameRate || 24;
+    const exactFrameTime = quantizeToFrame(time, frameRate);
+    onRangeChange?.({
+      start: range?.start !== undefined && range.start < exactFrameTime ? range.start : undefined,
+      end: exactFrameTime,
+    });
+  }, [time, project, range, onRangeChange]);
+
+  const handleClearInOut = useCallback(() => {
+    onRangeChange?.(undefined);
+  }, [onRangeChange]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (
-        e.altKey ||
-        e.ctrlKey ||
-        e.metaKey ||
         (e.target as HTMLElement)?.closest(
           "input,textarea,select,[contenteditable=true]"
         )
+      ) {
+        return;
+      }
+      if ((e.code === "KeyX" || e.key.toLowerCase() === "x" || e.key === "≈") && (e.altKey || e.metaKey)) {
+        e.preventDefault();
+        handleClearInOut();
+        return;
+      }
+      if (
+        e.altKey ||
+        e.ctrlKey ||
+        e.metaKey
       ) {
         return;
       }
@@ -1197,6 +1380,12 @@ export default memo(function EditingMap({
       } else if (e.key === "m" || e.key === "M") {
         e.preventDefault();
         handleMark();
+      } else if (e.key === "i" || e.key === "I") {
+        e.preventDefault();
+        handleMarkIn();
+      } else if (e.key === "o" || e.key === "O") {
+        e.preventDefault();
+        handleMarkOut();
       } else if (e.key === "s" || e.key === "S") {
         e.preventDefault();
         onToggleSnap?.();
@@ -1219,21 +1408,134 @@ export default memo(function EditingMap({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [time, selectedCut, onSplitShot, onDeleteCut, onToggleSnap, onNudgeCut, handleMark]);
+  }, [time, selectedCut, onSplitShot, onDeleteCut, onToggleSnap, onNudgeCut, handleMark, handleMarkIn, handleMarkOut, handleClearInOut]);
 
   const pointAt = (clientX: number) =>
     Math.max(0, Math.min(project.duration, (clientX - canvas.current!.getBoundingClientRect().left) / scale));
 
-  // Minimap interactions
-  const handleMinimapInteraction = (clientX: number) => {
-    const el = minimapRef.current;
-    const vp = viewport.current;
-    if (!el || !vp) return;
-    const rect = el.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    const targetCenter = ratio * canvasWidth;
-    vp.scrollLeft = Math.max(0, Math.min(canvasWidth - width, targetCenter - width / 2));
-  };
+  // Cleanup minimap rAF on unmount
+  useEffect(() => {
+    return () => {
+      if (minimapRafId.current !== null) {
+        cancelAnimationFrame(minimapRafId.current);
+      }
+    };
+  }, []);
+
+  // Minimap interactions (smooth, non-jumping, glitch-free)
+  const updateMinimapScroll = useCallback(
+    (clientX: number, isInitialClick: boolean = false) => {
+      const el = minimapRef.current;
+      const vp = viewport.current;
+      if (!el || !vp) return;
+      const rect = el.getBoundingClientRect();
+      if (rect.width <= 0) return;
+
+      const maxScroll = Math.max(0, canvasWidth - width);
+      if (maxScroll <= 0) return;
+
+      const currentBoxWidth = Math.max(8, Math.min(rect.width, (width / canvasWidth) * rect.width));
+      const clickX = clientX - rect.left;
+
+      if (isInitialClick) {
+        const currentScroll = vp.scrollLeft;
+        const currentBoxLeft = (currentScroll / canvasWidth) * rect.width;
+        // If clicking within the active visible viewport window, drag with offset to prevent sudden jumping
+        if (clickX >= currentBoxLeft && clickX <= currentBoxLeft + currentBoxWidth) {
+          minimapDragOffset.current = clickX - currentBoxLeft;
+        } else {
+          // If clicking elsewhere on track, center viewport window around click
+          minimapDragOffset.current = currentBoxWidth / 2;
+        }
+      }
+
+      const availableTrackWidth = Math.max(1, rect.width - currentBoxWidth);
+      const targetBoxLeft = Math.max(
+        0,
+        Math.min(availableTrackWidth, clickX - minimapDragOffset.current),
+      );
+      const targetScroll = Math.max(
+        0,
+        Math.min(maxScroll, (targetBoxLeft / availableTrackWidth) * maxScroll),
+      );
+
+      vp.scrollLeft = targetScroll;
+      setLocalScrollLeft(targetScroll);
+      onScrollChange?.(targetScroll);
+    },
+    [canvasWidth, width, onScrollChange],
+  );
+
+  const handleMinimapPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return;
+      minimapDragging.current = true;
+      setIsMinimapDragging(true);
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {}
+      updateMinimapScroll(e.clientX, true);
+    },
+    [updateMinimapScroll],
+  );
+
+  const handleMinimapPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!minimapDragging.current) return;
+      const clientX = e.clientX;
+      if (minimapRafId.current !== null) {
+        cancelAnimationFrame(minimapRafId.current);
+      }
+      minimapRafId.current = requestAnimationFrame(() => {
+        updateMinimapScroll(clientX, false);
+      });
+    },
+    [updateMinimapScroll],
+  );
+
+  const handleMinimapPointerUp = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (minimapDragging.current) {
+        minimapDragging.current = false;
+        setIsMinimapDragging(false);
+        if (minimapRafId.current !== null) {
+          cancelAnimationFrame(minimapRafId.current);
+          minimapRafId.current = null;
+        }
+        updateMinimapScroll(e.clientX, false);
+      }
+      try {
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }
+      } catch {}
+    },
+    [updateMinimapScroll],
+  );
+
+  const handleMergeCut = useCallback(() => {
+    if (!onDeleteCut) return;
+    if (selectedCut) {
+      onDeleteCut(selectedCut);
+      return;
+    }
+    // If no cut is currently selected, find cut nearest to current time
+    if (project?.shots && project.shots.length > 1) {
+      let nearestCutId: string | null = null;
+      let minDiff = Infinity;
+      for (let i = 1; i < project.shots.length; i++) {
+        const cutTime = project.shots[i].startSeconds;
+        const diff = Math.abs(time - cutTime);
+        if (diff < minDiff) {
+          minDiff = diff;
+          nearestCutId = project.shots[i].id;
+        }
+      }
+      if (nearestCutId) {
+        onDeleteCut(nearestCutId);
+      }
+    }
+  }, [onDeleteCut, selectedCut, project?.shots, time]);
 
   return (
     <section className={`map panel mode-${workspaceMode}`}>
@@ -1245,9 +1547,13 @@ export default memo(function EditingMap({
           onToggleDrawer={onToggleDrawer}
           expanded={expanded}
           onSplit={() => onSplitShot?.(time)}
+          onMerge={handleMergeCut}
           onMark={handleMark}
           snapToCuts={Boolean(snapToCuts)}
           onToggleSnap={() => onToggleSnap?.()}
+          onMarkIn={handleMarkIn}
+          onMarkOut={handleMarkOut}
+          onClearInOut={handleClearInOut}
           squintMode={Boolean(squintMode)}
           onToggleSquint={(active) => onToggleSquint?.(active)}
           zoom={zoom}
@@ -1269,11 +1575,6 @@ export default memo(function EditingMap({
             </span>
           </div>
 
-          {onToggleExpanded && (
-            <button type="button" className="studio-expand-map-btn" aria-pressed={expanded} onClick={onToggleExpanded}>
-              {expanded ? "Restore Studio" : "Expand map"}
-            </button>
-          )}
           {expanded && (
             <details className="studio-layer-menu">
               <summary>Layers</summary>
@@ -1452,33 +1753,51 @@ export default memo(function EditingMap({
                 <span>Score</span>
               </button>
             )}
+
+            {onToggleExpanded && (
+              <button
+                type="button"
+                className={`studio-expand-map-toggle-btn map-expand-icon-btn ${expanded ? "active" : ""}`}
+                onClick={onToggleExpanded}
+                title={expanded ? "Restore Studio workspace" : "Expand map (hide upper workspace)"}
+                aria-label={expanded ? "Restore Studio workspace" : "Expand map"}
+                aria-pressed={expanded}
+              >
+                {expanded ? (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <polyline points="4 14 10 14 10 20" />
+                    <polyline points="20 10 14 10 14 4" />
+                    <line x1="14" y1="10" x2="21" y2="3" />
+                    <line x1="3" y1="21" x2="10" y2="14" />
+                  </svg>
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <polyline points="15 3 21 3 21 9" />
+                    <polyline points="9 21 3 21 3 15" />
+                    <line x1="21" y1="3" x2="14" y2="10" />
+                    <line x1="3" y1="21" x2="10" y2="14" />
+                  </svg>
+                )}
+              </button>
+            )}
           </div>
         </div>
       )}
 
       {!isStudio && tagBar && <div className="map-top-bar">{tagBar}</div>}
 
-      {/* Studio Mode: Top Overview Scrubber Minimap */}
-      {isStudio && project.shots.length > 0 && (
+      {/* Studio Mode: Top Overview Scrubber Minimap (only shown when zoomed in, avoiding visual noise at 100% view) */}
+      {isStudio && project.shots.length > 0 && zoom > 1.001 && (
         <div className="studio-top-overview">
           <div
-            className="studio-overview-track"
+            className={`studio-overview-track ${isMinimapDragging ? "dragging" : ""}`}
             ref={minimapRef}
-            onClick={(e) => handleMinimapInteraction(e.clientX)}
-            onPointerDown={(e) => {
-              if (e.button !== 0) return;
-              minimapDragging.current = true;
-              handleMinimapInteraction(e.clientX);
-              e.currentTarget.setPointerCapture(e.pointerId);
-            }}
-            onPointerMove={(e) => {
-              if (minimapDragging.current) handleMinimapInteraction(e.clientX);
-            }}
-            onPointerUp={(e) => {
-              minimapDragging.current = false;
-              e.currentTarget.releasePointerCapture(e.pointerId);
-            }}
-            title="Click or drag to scroll timeline window"
+            onPointerDown={handleMinimapPointerDown}
+            onPointerMove={handleMinimapPointerMove}
+            onPointerUp={handleMinimapPointerUp}
+            onPointerCancel={handleMinimapPointerUp}
+            onLostPointerCapture={handleMinimapPointerUp}
+            title="Click or drag to pan timeline"
           >
             {project.shots.map((s) => (
               <div
@@ -1491,7 +1810,7 @@ export default memo(function EditingMap({
               />
             ))}
             <div
-              className="studio-overview-viewport"
+              className={`studio-overview-viewport ${isMinimapDragging ? "dragging" : ""}`}
               style={{
                 left: `${(scrollLeft / canvasWidth) * 100}%`,
                 width: `${Math.min(100, (width / canvasWidth) * 100)}%`,
@@ -1513,6 +1832,60 @@ export default memo(function EditingMap({
         {isStudio && (
           <div ref={trackHeaders} className="studio-track-headers" role="region" aria-label="Timeline track controls">
             <div className="studio-header-cell ruler-spacer" />
+
+            {/* 0. Markers Header (First Track from Top to Bottom) */}
+            <div
+              className={`studio-header-cell markers-header ${isTrackCollapsed("markers") ? "collapsed" : ""}`}
+              style={{ height: isTrackCollapsed("markers") ? 0 : laneHeights.markers }}
+            >
+              <div className="studio-header-row">
+                <div className="studio-header-left">
+                  <button
+                    type="button"
+                    className="studio-track-fold-btn"
+                    onClick={() => toggleTrackCollapse("markers")}
+                    title={isTrackCollapsed("markers") ? "Expand Markers track" : "Collapse Markers track"}
+                    aria-label={isTrackCollapsed("markers") ? "Expand Markers track" : "Collapse Markers track"}
+                  >
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points={isTrackCollapsed("markers") ? "9 18 15 12 9 6" : "6 9 12 15 18 9"} />
+                    </svg>
+                  </button>
+                  <span className="studio-track-title">Markers</span>
+                  {project.screeningMarks && project.screeningMarks.length > 0 && (
+                    <span className="studio-track-count-badge" title={`${project.screeningMarks.length} review cues`}>
+                      {project.screeningMarks.length}
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className={`studio-track-solo-btn ${soloTrack === "markers" ? "active" : ""}`}
+                  onClick={() => toggleTrackSolo("markers")}
+                  title={soloTrack === "markers" ? "Unsolo Markers track" : "Solo Markers track"}
+                  aria-label={soloTrack === "markers" ? "Unsolo Markers track" : "Solo Markers track"}
+                >
+                  S
+                </button>
+              </div>
+              <div
+                className={`studio-lane-resizer ${resizingTrack === "markers" ? "resizing" : ""}`}
+                role="separator"
+                tabIndex={0}
+                aria-orientation="horizontal"
+                aria-label="Resize Markers lane"
+                aria-valuenow={laneHeights.markers}
+                aria-valuemin={MIN_STUDIO_LANE_HEIGHTS.markers}
+                onPointerDown={(e) => handleResizePointerDown("markers", e)}
+                onPointerMove={handleResizePointerMove}
+                onPointerUp={handleResizePointerUp}
+                onPointerCancel={handleResizePointerUp}
+                onDoubleClick={(e) => handleResizeDoubleClick("markers", e)}
+                onKeyDown={(e) => handleResizeKeyDown("markers", e)}
+              >
+                <div className="studio-lane-resizer-line" />
+              </div>
+            </div>
 
             {/* 1. Story Header */}
             <div
@@ -1630,17 +2003,38 @@ export default memo(function EditingMap({
                       <polyline points={isTrackCollapsed("pacing") ? "9 18 15 12 9 6" : "6 9 12 15 18 9"} />
                     </svg>
                   </button>
-                  <span className="studio-track-title">Pacing</span>
+                  <span className="studio-track-title">{showVoltageOverlay ? "Voltage" : "Pacing"}</span>
                 </div>
-                <button
-                  type="button"
-                  className={`studio-track-solo-btn ${soloTrack === "pacing" ? "active" : ""}`}
-                  onClick={() => toggleTrackSolo("pacing")}
-                  title={soloTrack === "pacing" ? "Unsolo Pacing track" : "Solo Pacing track"}
-                  aria-label={soloTrack === "pacing" ? "Unsolo Pacing track" : "Solo Pacing track"}
-                >
-                  S
-                </button>
+                <div className="studio-header-right">
+                  <button
+                    type="button"
+                    className={`studio-track-mode-btn ${showVoltageOverlay ? "active" : ""}`}
+                    onClick={() => setShowVoltageOverlay((prev) => !prev)}
+                    title={showVoltageOverlay ? "Switch back to standard Pacing curve" : "Eisenstein Sensory Voltage & Counterpoint overlay"}
+                    aria-label="Toggle Eisenstein Voltage overlay"
+                    style={{
+                      fontSize: "10px",
+                      padding: "1px 5px",
+                      borderRadius: "4px",
+                      background: showVoltageOverlay ? "rgba(168, 85, 247, 0.25)" : "transparent",
+                      border: showVoltageOverlay ? "1px solid rgba(168, 85, 247, 0.6)" : "1px solid rgba(255, 255, 255, 0.12)",
+                      color: showVoltageOverlay ? "#c084fc" : "#94a3b8",
+                      cursor: "pointer",
+                      marginRight: "4px",
+                    }}
+                  >
+                    ⚡
+                  </button>
+                  <button
+                    type="button"
+                    className={`studio-track-solo-btn ${soloTrack === "pacing" ? "active" : ""}`}
+                    onClick={() => toggleTrackSolo("pacing")}
+                    title={soloTrack === "pacing" ? "Unsolo Pacing track" : "Solo Pacing track"}
+                    aria-label={soloTrack === "pacing" ? "Unsolo Pacing track" : "Solo Pacing track"}
+                  >
+                    S
+                  </button>
+                </div>
               </div>
               <div
                 className={`studio-lane-resizer ${resizingTrack === "pacing" ? "resizing" : ""}`}
@@ -1681,15 +2075,22 @@ export default memo(function EditingMap({
                   </button>
                   <span className="studio-track-title">Cut density</span>
                 </div>
-                <button
-                  type="button"
-                  className={`studio-track-solo-btn ${soloTrack === "cutDensity" ? "active" : ""}`}
-                  onClick={() => toggleTrackSolo("cutDensity")}
-                  title={soloTrack === "cutDensity" ? "Unsolo Cut Density track" : "Solo Cut Density track"}
-                  aria-label={soloTrack === "cutDensity" ? "Unsolo Cut Density track" : "Solo Cut Density track"}
-                >
-                  S
-                </button>
+                <div className="studio-header-right">
+                  {isBatchScanningSaccades && (
+                    <span className="saccade-scan-status scanning" title="Analyzing cut dynamics in background...">
+                      {batchScanProgress.percent}%
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    className={`studio-track-solo-btn ${soloTrack === "cutDensity" ? "active" : ""}`}
+                    onClick={() => toggleTrackSolo("cutDensity")}
+                    title={soloTrack === "cutDensity" ? "Unsolo Cut Density track" : "Solo Cut Density track"}
+                    aria-label={soloTrack === "cutDensity" ? "Unsolo Cut Density track" : "Solo Cut Density track"}
+                  >
+                    S
+                  </button>
+                </div>
               </div>
               <div
                 className={`studio-lane-resizer ${resizingTrack === "cutDensity" ? "resizing" : ""}`}
@@ -2040,7 +2441,14 @@ export default memo(function EditingMap({
           className={`map-scroll ${isStudio ? "studio-scroll-area" : ""}`}
           ref={viewport}
         onScroll={(e) => {
-          if (trackHeaders.current) trackHeaders.current.style.transform = `translateY(${-e.currentTarget.scrollTop}px)`;
+          const st = e.currentTarget.scrollTop;
+          if (trackHeaders.current) {
+            requestAnimationFrame(() => {
+              if (trackHeaders.current) {
+                trackHeaders.current.style.transform = `translateY(${-st}px)`;
+              }
+            });
+          }
           const sl = e.currentTarget.scrollLeft;
           setLocalScrollLeft(sl);
           onScrollChange?.(sl);
@@ -2129,6 +2537,71 @@ export default memo(function EditingMap({
           {/* STUDIO MODE MULTI-TRACK RHYTHM WORKSTATION */}
           {isStudio ? (
             <div className="studio-tracks-stack" aria-label="Studio rhythm timeline tracks">
+              {/* 0. Markers Lane (Review Markers & Cues from Screening Room) */}
+              <div
+                className={`studio-lane studio-markers-lane ${isTrackCollapsed("markers") ? "collapsed" : ""}`}
+                aria-label="Review markers track"
+                style={{
+                  height: isTrackCollapsed("markers") ? 0 : `${laneHeights.markers}px`,
+                }}
+              >
+                {!isTrackCollapsed("markers") && (
+                  <>
+                    {(!project.screeningMarks || project.screeningMarks.length === 0) ? (
+                      <div className="studio-lane-empty-hint">
+                        <span>No review markers · Press 1–4 in Review to drop cues</span>
+                      </div>
+                    ) : (
+                      project.screeningMarks.map((m, idx) => {
+                        const mTime = m.time ?? m.anchorTime ?? 0;
+                        const x = mTime * scale;
+                        const color = m.colorHex || "#e5a93c";
+                        const tcStr = formatTimecode(mTime, project.frameRate, project.dropFrame);
+                        const isNearPlayhead = Math.abs(time - mTime) < 0.25;
+
+                        return (
+                          <div
+                            key={m.id || `marker-${idx}`}
+                            className={`studio-review-marker-pin ${isNearPlayhead ? "active" : ""}`}
+                            style={{
+                              left: `${x}px`,
+                              "--marker-color": color,
+                            } as React.CSSProperties}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              (onSeek || onScrub)?.(mTime);
+                            }}
+                            title={`${m.authorAvatar || "🎬"} ${m.authorName || "Reviewer"} · ${tcStr}${m.notes ? `\n"${m.notes}"` : ""}`}
+                          >
+                            <div className="studio-marker-stem" />
+                            <div className="studio-marker-badge">
+                              <span className="studio-marker-avatar">{m.authorAvatar || "🎬"}</span>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </>
+                )}
+                <div
+                  className={`studio-lane-resizer ${resizingTrack === "markers" ? "resizing" : ""}`}
+                  role="separator"
+                  tabIndex={0}
+                  aria-orientation="horizontal"
+                  aria-label="Resize Markers lane"
+                  aria-valuenow={laneHeights.markers}
+                  aria-valuemin={MIN_STUDIO_LANE_HEIGHTS.markers}
+                  onPointerDown={(e) => handleResizePointerDown("markers", e)}
+                  onPointerMove={handleResizePointerMove}
+                  onPointerUp={handleResizePointerUp}
+                  onPointerCancel={handleResizePointerUp}
+                  onDoubleClick={(e) => handleResizeDoubleClick("markers", e)}
+                  onKeyDown={(e) => handleResizeKeyDown("markers", e)}
+                >
+                  <div className="studio-lane-resizer-line" />
+                </div>
+              </div>
+
               {/* Story Lane (Moments & Passages, Draft In/Out, Adjustments) */}
               <div
                 className={`studio-lane studio-story-lane ${isTrackCollapsed("story") ? "collapsed" : ""}`}
@@ -2316,7 +2789,8 @@ export default memo(function EditingMap({
                   const effDur = Math.max(0, endSec - startSec);
                   const w = effDur * scale;
                   const isSelected = selected === s.id;
-                  const isPlaying = time >= startSec && time <= endSec;
+                  const isLastShot = s.index === project.shots.length || s.endSeconds >= duration - 0.001;
+                  const isPlaying = time >= startSec && (isLastShot ? time <= endSec : time < endSec);
                   const isHighlighted = highlightedShotIds?.includes(s.id);
                   const hasHighlightFilter = Boolean(highlightedShotIds && highlightedShotIds.length > 0);
                   const characterClass = hasHighlightFilter
@@ -2329,6 +2803,7 @@ export default memo(function EditingMap({
                     (selectedSequenceId && project.sequences?.some((seq) => seq.id === selectedSequenceId && (seq.kind ?? "passage") === "passage" && s.endSeconds > seq.startSeconds && s.startSeconds < seq.endSeconds))
                   );
                   const thumb = thumbnails[s.id];
+                  const framingColor = s.shotSize && s.shotSize !== "Unknown" ? sizeColors[s.shotSize] : undefined;
 
                   return (
                     <button
@@ -2350,37 +2825,18 @@ export default memo(function EditingMap({
                       title={`Shot ${s.index} · ${s.shotSize} · ${effDur.toFixed(2)}s`}
                       aria-label={`Shot ${s.index}`}
                     >
-                      {thumb && w >= 32 ? (
-                        <>
-                          <div className="studio-shot-head-frame">
-                            <img src={thumb} alt="" className="studio-shot-img" draggable={false} />
-                            {s.shotSize && s.shotSize !== "Unknown" && w >= 44 && (
-                              <span
-                                className="studio-shot-tag-badge"
-                                style={{
-                                  borderLeft: sizeColors[s.shotSize] ? `2px solid ${sizeColors[s.shotSize]}` : undefined,
-                                }}
-                              >
-                                {s.shotSize}
-                              </span>
-                            )}
-                          </div>
-                          <div className="studio-shot-body">
-                            {w >= 100 && (
-                              <span className="studio-shot-body-index">Shot {s.index}</span>
-                            )}
-                            {w >= 150 && (
-                              <span className="studio-shot-body-dur">{effDur.toFixed(1)}s</span>
-                            )}
-                          </div>
-                        </>
-                      ) : (
-                        <div className="studio-shot-placeholder">
-                          <span>{String(s.index).padStart(3, "0")}</span>
-                          {s.shotSize && s.shotSize !== "Unknown" && w >= 48 && (
-                            <span className="shot-size-label">{s.shotSize}</span>
-                          )}
+                      {thumb ? (
+                        <div className="studio-shot-frame">
+                          <img src={thumb} alt="" className="studio-shot-img" draggable={false} />
                         </div>
+                      ) : (
+                        <div className="studio-shot-placeholder" />
+                      )}
+                      {framingColor && (
+                        <div
+                          className="studio-shot-framing-stripe"
+                          style={{ backgroundColor: framingColor }}
+                        />
                       )}
                     </button>
                   );
@@ -2392,6 +2848,7 @@ export default memo(function EditingMap({
                   const cutPos = isBeingDragged
                     ? activeCutDrag.currentTime * scale
                     : incoming.startSeconds * scale;
+                  const cutEye = eyeTraceMap.get(`${outgoing.id}->${incoming.id}`);
                   return (
                     <div
                       key={`studio-cut-${incoming.id}`}
@@ -2402,7 +2859,7 @@ export default memo(function EditingMap({
                       aria-valuenow={incoming.startSeconds}
                       aria-valuemin={outgoing.startSeconds}
                       aria-valuemax={incoming.endSeconds}
-                      className={`studio-cut-boundary cut-boundary ${selectedCut === incoming.id ? "selected" : ""} ${isBeingDragged ? "dragging" : ""}`}
+                      className={`studio-cut-boundary cut-boundary ${selectedCut === incoming.id ? "selected" : ""} ${isBeingDragged ? "dragging" : ""} ${cutEye ? `saccade-${cutEye.rating}` : ""}`}
                       style={{ left: cutPos }}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -2492,7 +2949,13 @@ export default memo(function EditingMap({
                       }}
                       title="Drag to roll cut"
                     >
-                      {isBeingDragged && <div className="studio-cut-line" />}
+                      <div className="studio-cut-line" />
+                      {cutEye && (
+                        <span
+                          className={`cut-saccade-pip ${cutEye.rating} ${cutEye.momentum?.alignment === "momentum-collision" ? "collision" : ""}`}
+                          title={`Saccade Hop: ${cutEye.jumpDistancePercent}% (${cutEye.rating})${cutEye.momentum?.alignment === "momentum-collision" ? " · Kinetic Collision" : ""}`}
+                        />
+                      )}
                       {isBeingDragged && (
                         <div className="studio-cut-delta-badge">
                           <small>
@@ -2534,27 +2997,118 @@ export default memo(function EditingMap({
                 style={{ height: isTrackCollapsed("pacing") ? 0 : `${laneHeights.pacing}px` }}
               >
                 <svg className="studio-lane-svg" width={canvasWidth} height={laneHeights.pacing} aria-hidden="true">
-                  <defs>
-                    <linearGradient id="studioPacingGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-                      <stop offset="0%" stopColor="#eae6df" stopOpacity="0.08" />
-                      <stop offset="100%" stopColor="#eae6df" stopOpacity="0.00" />
-                    </linearGradient>
-                  </defs>
-                  {studioPacing.area && (
-                    <path d={studioPacing.area} fill="url(#studioPacingGrad)" />
+                  {showVoltageOverlay && studioVoltage ? (
+                    <>
+                      <defs>
+                        <linearGradient id="studioVoltageVisualGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                          <stop offset="0%" stopColor="#c084fc" stopOpacity="0.35" />
+                          <stop offset="100%" stopColor="#7c3aed" stopOpacity="0.02" />
+                        </linearGradient>
+                        <linearGradient id="studioVoltageAcousticGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                          <stop offset="0%" stopColor="#fde047" stopOpacity="0.3" />
+                          <stop offset="100%" stopColor="#ca8a04" stopOpacity="0.02" />
+                        </linearGradient>
+                      </defs>
+                      {/* Counterpoint zones in subtle background tint */}
+                      {studioVoltage.score.counterpoints.map((cp) => (
+                        <rect
+                          key={cp.id}
+                          x={cp.startTime * scale}
+                          y={2}
+                          width={Math.max(2, (cp.endTime - cp.startTime) * scale)}
+                          height={laneHeights.pacing - 4}
+                          fill={cp.type === "visual-fury-sonic-calm" ? "rgba(168, 85, 247, 0.16)" : "rgba(234, 179, 8, 0.16)"}
+                          stroke={cp.type === "visual-fury-sonic-calm" ? "rgba(168, 85, 247, 0.3)" : "rgba(234, 179, 8, 0.3)"}
+                          strokeWidth="1"
+                        />
+                      ))}
+                      {studioVoltage.visualArea && <path d={studioVoltage.visualArea} fill="url(#studioVoltageVisualGrad)" />}
+                      {studioVoltage.acousticArea && <path d={studioVoltage.acousticArea} fill="url(#studioVoltageAcousticGrad)" />}
+                      {studioVoltage.visualPath && <path d={studioVoltage.visualPath} fill="none" stroke="#c084fc" strokeWidth="1.5" strokeLinecap="round" />}
+                      {studioVoltage.acousticPath && <path d={studioVoltage.acousticPath} fill="none" stroke="#facc15" strokeWidth="1.5" strokeLinecap="round" />}
+                      {/* Climax pulse points */}
+                      {studioVoltage.score.climaxes.map((climax) => (
+                        <g key={climax.id} transform={`translate(${climax.peakTime * scale}, 6)`}>
+                          <circle r="3" fill="#facc15" stroke="#fff" strokeWidth="1" />
+                        </g>
+                      ))}
+                      {/* Playhead indicator dot */}
+                      <circle
+                        cx={time * scale}
+                        cy={laneHeights.pacing / 2}
+                        r="3"
+                        fill="#38bdf8"
+                        stroke="#0c0e11"
+                        strokeWidth="1.5"
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <defs>
+                        <linearGradient id="studioPacingGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                          <stop offset="0%" stopColor="#f59e0b" stopOpacity="0.32" />
+                          <stop offset="45%" stopColor="#d97706" stopOpacity="0.14" />
+                          <stop offset="100%" stopColor="#b45309" stopOpacity="0.01" />
+                        </linearGradient>
+                      </defs>
+                      {/* Subtle rhythmic guide lines */}
+                      <line
+                        x1="0"
+                        y1={laneHeights.pacing * 0.5}
+                        x2={canvasWidth}
+                        y2={laneHeights.pacing * 0.5}
+                        stroke="rgba(245, 158, 11, 0.08)"
+                        strokeDasharray="4 4"
+                        strokeWidth="1"
+                      />
+                      <line
+                        x1="0"
+                        y1={laneHeights.pacing * 0.25}
+                        x2={canvasWidth}
+                        y2={laneHeights.pacing * 0.25}
+                        stroke="rgba(245, 158, 11, 0.05)"
+                        strokeDasharray="2 4"
+                        strokeWidth="1"
+                      />
+                      {studioPacing.area && (
+                        <path d={studioPacing.area} fill="url(#studioPacingGrad)" />
+                      )}
+                      {studioPacing.path && (
+                        <>
+                          {/* Ambient luminous underglow */}
+                          <path
+                            d={studioPacing.path}
+                            fill="none"
+                            stroke="rgba(245, 158, 11, 0.25)"
+                            strokeWidth="3.5"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                          {/* Crisp crest stroke */}
+                          <path
+                            d={studioPacing.path}
+                            fill="none"
+                            stroke="#fbbf24"
+                            strokeWidth="1.5"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </>
+                      )}
+                      {/* Playhead indicator dot riding curve */}
+                      {(() => {
+                        const dotY = studioPacing.getYAtTime
+                          ? studioPacing.getYAtTime(time)
+                          : Math.max(4, Math.min(laneHeights.pacing - 4, laneHeights.pacing - (currentPacing.rate / maxPacingRate) * (laneHeights.pacing - 8)));
+                        return (
+                          <g transform={`translate(${time * scale}, ${dotY})`}>
+                            <circle r="6" fill="rgba(251, 191, 36, 0.2)" />
+                            <circle r="3" fill="#fffbeb" stroke="#d97706" strokeWidth="1.5" />
+                          </g>
+                        );
+                      })()}
+                    </>
                   )}
-                  {studioPacing.path && (
-                    <path d={studioPacing.path} fill="none" stroke="#eae6df" strokeWidth="1.5" strokeLinecap="round" />
-                  )}
-                  {/* Playhead indicator dot riding curve */}
-                  <circle
-                    cx={time * scale}
-                    cy={Math.max(4, Math.min(laneHeights.pacing - 4, laneHeights.pacing - (currentPacing.rate / maxPacingRate) * (laneHeights.pacing - 8)))}
-                    r="3"
-                    fill="#eae6df"
-                    stroke="#0c0e11"
-                    strokeWidth="1.5"
-                  />
                 </svg>
                 <div
                   className={`studio-lane-resizer ${resizingTrack === "pacing" ? "resizing" : ""}`}
@@ -2582,39 +3136,214 @@ export default memo(function EditingMap({
                 style={{ height: isTrackCollapsed("cutDensity") ? 0 : `${laneHeights.cutDensity}px` }}
               >
                 <svg className="studio-lane-svg" width={canvasWidth} height={laneHeights.cutDensity} aria-hidden="true">
-                  {/* Faint median baseline */}
+                  <defs>
+                    <linearGradient id="studioCutDensityEnergyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                      <stop offset="0%" stopColor="#f43f5e" stopOpacity="0.32" />
+                      <stop offset="40%" stopColor="#f97316" stopOpacity="0.16" />
+                      <stop offset="100%" stopColor="#f97316" stopOpacity="0.01" />
+                    </linearGradient>
+                    <linearGradient id="studioCutStemEmeraldGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                      <stop offset="0%" stopColor="#34d399" stopOpacity="0.95" />
+                      <stop offset="100%" stopColor="#34d399" stopOpacity="0.15" />
+                    </linearGradient>
+                    <linearGradient id="studioCutStemAmberGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                      <stop offset="0%" stopColor="#fbbf24" stopOpacity="0.95" />
+                      <stop offset="100%" stopColor="#fbbf24" stopOpacity="0.15" />
+                    </linearGradient>
+                    <linearGradient id="studioCutStemRubyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                      <stop offset="0%" stopColor="#f87171" stopOpacity="1" />
+                      <stop offset="100%" stopColor="#f87171" stopOpacity="0.2" />
+                    </linearGradient>
+                    <linearGradient id="studioWhiplashGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                      <stop offset="0%" stopColor="rgba(239, 68, 68, 0.3)" />
+                      <stop offset="50%" stopColor="rgba(244, 63, 94, 0.45)" />
+                      <stop offset="100%" stopColor="rgba(239, 68, 68, 0.3)" />
+                    </linearGradient>
+                  </defs>
+
+                  {/* Continuous Kinetic Energy Underglow / Cut Density Envelope */}
+                  {cutDensityWave.hasData && (
+                    <>
+                      <path d={cutDensityWave.area} fill="url(#studioCutDensityEnergyGrad)" />
+                      <path
+                        d={cutDensityWave.path}
+                        fill="none"
+                        stroke="rgba(251, 146, 60, 0.45)"
+                        strokeWidth="1.2"
+                        strokeLinecap="round"
+                      />
+                    </>
+                  )}
+
+                  {/* Subtle median reference baseline */}
                   <line
                     x1="0"
                     y1={laneHeights.cutDensity - Math.min(1, studioMedianPacing / maxPacingRate) * (laneHeights.cutDensity - 8)}
                     x2={canvasWidth}
                     y2={laneHeights.cutDensity - Math.min(1, studioMedianPacing / maxPacingRate) * (laneHeights.cutDensity - 8)}
-                    stroke="rgba(234, 230, 223, 0.12)"
+                    stroke="rgba(234, 230, 223, 0.1)"
                     strokeDasharray="4,4"
                     strokeWidth="1"
                   />
-                  {/* Slender cut stems along baseline */}
-                  {visibleCuts.map(({ incoming }, idx) => {
-                    const cutX = incoming.startSeconds * scale;
-                    const shock = cutShockMap.get(Math.round(incoming.startSeconds * 1000)) ?? 20;
-                    const maxStemH = laneHeights.cutDensity - 6;
-                    const stemH = Math.min(maxStemH, Math.max(5, (shock / 100) * maxStemH));
+
+                  {/* Whiplash Clusters (consecutive jarring cuts warning banners) */}
+                  {whiplashClusters.map((cluster) => {
+                    const clusterX1 = cluster.startTime * scale;
+                    const clusterX2 = Math.max(clusterX1 + 28, cluster.endTime * scale);
+                    const clusterW = clusterX2 - clusterX1;
                     return (
-                      <line
-                        key={`stem-${incoming.id}-${idx}`}
-                        x1={cutX}
-                        y1={laneHeights.cutDensity}
-                        x2={cutX}
-                        y2={laneHeights.cutDensity - stemH}
-                        stroke="rgba(154, 160, 166, 0.55)"
-                        strokeWidth="1"
-                      />
+                      <g
+                        key={cluster.id}
+                        className="saccade-whiplash-cluster"
+                        transform={`translate(${clusterX1}, 2)`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSeek(cluster.startTime);
+                          if (onCut) {
+                            const firstCutIncoming = project.shots.find((s) => s.id === cluster.cuts[0].incomingId);
+                            if (firstCutIncoming) onCut(firstCutIncoming);
+                          }
+                        }}
+                        style={{ cursor: "pointer" }}
+                      >
+                        <title>{`Whiplash Cluster: ${cluster.cutCount} jarring cuts in close succession (avg ${cluster.avgJumpPercent}% hop). Click to inspect.`}</title>
+                        <rect
+                          x="0"
+                          y="0"
+                          width={clusterW}
+                          height="14"
+                          rx="4"
+                          fill="url(#studioWhiplashGrad)"
+                          stroke="rgba(248, 113, 113, 0.8)"
+                          strokeWidth="1"
+                        />
+                        {clusterW >= 55 && (
+                          <text x="5" y="10.5" fontSize="8.5" fill="#fee2e2" fontWeight="600" letterSpacing="0.02em">
+                            ⚡ WHIPLASH · {cluster.cutCount} cuts
+                          </text>
+                        )}
+                      </g>
                     );
                   })}
-                  {/* Cut shock spike markers */}
+
+                  {/* Luminous Cut Impact Needles with Saccade / Shock dynamics */}
+                  {visibleCuts.map(({ incoming, outgoing }, idx) => {
+                    const cutX = incoming.startSeconds * scale;
+                    const key = `${outgoing.id}->${incoming.id}`;
+                    const eye = eyeTraceMap.get(key);
+                    const shock = cutShockMap.get(Math.round(incoming.startSeconds * 1000)) ?? 20;
+
+                    const jump = eye ? eye.jumpDistancePercent : shock;
+                    const maxStemH = laneHeights.cutDensity - 8;
+                    const stemH = Math.min(maxStemH, Math.max(7, (jump / 100) * maxStemH));
+                    const topY = laneHeights.cutDensity - stemH;
+
+                    let strokeGrad = "url(#studioCutStemAmberGrad)";
+                    let headColor = "#fbbf24";
+                    let haloColor = "rgba(251, 191, 36, 0.35)";
+                    let isJarring = false;
+                    let isCollision = false;
+
+                    if (eye) {
+                      if (eye.rating === "anchored" || eye.rating === "smooth") {
+                        strokeGrad = "url(#studioCutStemEmeraldGrad)";
+                        headColor = "#34d399";
+                        haloColor = "rgba(52, 211, 153, 0.35)";
+                      } else if (eye.rating === "shifted" || eye.rating === "natural") {
+                        strokeGrad = "url(#studioCutStemAmberGrad)";
+                        headColor = "#fbbf24";
+                        haloColor = "rgba(251, 191, 36, 0.35)";
+                      } else {
+                        strokeGrad = "url(#studioCutStemRubyGrad)";
+                        headColor = "#f87171";
+                        haloColor = "rgba(248, 113, 113, 0.55)";
+                        isJarring = true;
+                      }
+                      if (eye.momentum?.alignment === "momentum-collision") {
+                        isCollision = true;
+                      }
+                    }
+
+                    return (
+                      <g
+                        key={`stem-${incoming.id}-${idx}`}
+                        className="studio-cut-impact-node"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSeek(incoming.startSeconds);
+                          if (onCut) onCut(incoming);
+                        }}
+                        style={{ cursor: "pointer" }}
+                      >
+                        <title>{`Cut at ${formatTimecode(incoming.startSeconds, project.frameRate, project.dropFrame)}: ${eye ? `${eye.rating.toUpperCase()} (${eye.jumpDistancePercent}% jump)` : `Shock ${shock}`}`}</title>
+                        {/* Slender luminous vertical needle */}
+                        <line
+                          x1={cutX}
+                          y1={laneHeights.cutDensity}
+                          x2={cutX}
+                          y2={topY}
+                          stroke={strokeGrad}
+                          strokeWidth={isJarring ? 2 : 1.5}
+                          strokeLinecap="round"
+                        />
+                        {/* Soft Outer Halo */}
+                        <circle
+                          cx={cutX}
+                          cy={topY}
+                          r={isJarring ? 5.5 : 3.5}
+                          fill={haloColor}
+                        />
+                        {/* Glowing Impact Bead */}
+                        <circle
+                          cx={cutX}
+                          cy={topY}
+                          r={isJarring ? 2.5 : 1.8}
+                          fill={headColor}
+                          stroke="#0a0c0d"
+                          strokeWidth="0.5"
+                        />
+                        {/* Jarring pulse ring */}
+                        {isJarring && (
+                          <circle
+                            cx={cutX}
+                            cy={topY}
+                            r="6.5"
+                            fill="none"
+                            stroke="#f87171"
+                            strokeWidth="0.8"
+                            strokeDasharray="2,2"
+                            opacity="0.8"
+                          />
+                        )}
+                        {/* Directional Shift indicator */}
+                        {eye?.screenDirection && eye.screenDirection !== "neutral" && (
+                          <polygon
+                            points={
+                              eye.screenDirection === "left-to-right"
+                                ? `${cutX + 3},${topY - 1} ${cutX + 7},${topY} ${cutX + 3},${topY + 1}`
+                                : `${cutX - 3},${topY - 1} ${cutX - 7},${topY} ${cutX - 3},${topY + 1}`
+                            }
+                            fill={headColor}
+                            opacity={0.8}
+                          />
+                        )}
+                        {/* Axis Clash Warning */}
+                        {eye?.axisClash && (
+                          <text x={cutX} y={Math.max(9, topY - 3)} fontSize="8" fill="#f59e0b" textAnchor="middle">⚠️</text>
+                        )}
+                        {/* Momentum Collision */}
+                        {isCollision && !eye?.axisClash && (
+                          <text x={cutX} y={Math.max(9, topY - 3)} fontSize="8" fill="#f59e0b" textAnchor="middle">⚡</text>
+                        )}
+                      </g>
+                    );
+                  })}
+
+                  {/* Cut shock light accents */}
                   {cutShockData.filter((c) => c.shockScore >= 42).map((c, idx) => (
                     <g key={`studio-shock-${idx}`} transform={`translate(${c.time * scale}, 0)`}>
-                      <line y1="4" y2={laneHeights.cutDensity} stroke="rgba(217, 119, 100, 0.65)" strokeWidth="1" strokeDasharray="2,2" />
-                      <circle cx="0" cy="6" r="2" fill="#d97764" />
+                      <line y1="2" y2={laneHeights.cutDensity} stroke="rgba(244, 63, 94, 0.35)" strokeWidth="1" strokeDasharray="2,3" />
+                      <polygon points="-2,2 0,5 2,2 0,-1" fill="#f43f5e" opacity="0.8" />
                     </g>
                   ))}
                 </svg>
@@ -2665,7 +3394,8 @@ export default memo(function EditingMap({
                       ? laneHeights.framing * 0.42
                       : laneHeights.framing * 0.72;
                   const isSelected = selected === s.id;
-                  const isPlaying = time >= s.startSeconds && time <= s.endSeconds;
+                  const isLastShot = s.index === project.shots.length || s.endSeconds >= duration - 0.001;
+                  const isPlaying = time >= s.startSeconds && (isLastShot ? time <= s.endSeconds : time < s.endSeconds);
                   const shotW = Math.max(2, s.duration * scale);
                   const shotX = s.startSeconds * scale;
                   const framingColor = sizeColors[s.shotSize] || "#64748b";
@@ -2766,10 +3496,10 @@ export default memo(function EditingMap({
               >
                 <svg className="studio-lane-svg studio-palette-svg" width={canvasWidth} height={laneHeights.palette} aria-hidden="true">
                   <defs>
-                    <filter id="studioWatercolorFilter" x="-10%" y="-20%" width="120%" height="140%">
-                      <feTurbulence type="fractalNoise" baseFrequency="0.04 0.12" numOctaves="2" result="noise" />
-                      <feDisplacementMap in="SourceGraphic" in2="noise" scale="3" xChannelSelector="R" yChannelSelector="G" result="displaced" />
-                      <feGaussianBlur in="displaced" stdDeviation="2.5" result="blurred" />
+                    <filter id="studioWatercolorFilter" filterUnits="userSpaceOnUse" x="0" y="0" width={canvasWidth} height={laneHeights.palette}>
+                      <feTurbulence type="fractalNoise" baseFrequency="0.03 0.08" numOctaves="1" result="noise" />
+                      <feDisplacementMap in="SourceGraphic" in2="noise" scale="2" xChannelSelector="R" yChannelSelector="G" result="displaced" />
+                      <feGaussianBlur in="displaced" stdDeviation="1.5" result="blurred" />
                       <feMerge>
                         <feMergeNode in="blurred" opacity="0.85" />
                         <feMergeNode in="SourceGraphic" opacity="0.55" />
@@ -2836,7 +3566,8 @@ export default memo(function EditingMap({
                   const shotX = s.startSeconds * scale;
                   const shotW = Math.max(4, s.duration * scale);
                   const isSelected = selected === s.id;
-                  const isPlaying = time >= s.startSeconds && time <= s.endSeconds;
+                  const isLastShot = s.index === project.shots.length || s.endSeconds >= duration - 0.001;
+                  const isPlaying = time >= s.startSeconds && (isLastShot ? time <= s.endSeconds : time < s.endSeconds);
                   const lumaPercent = Math.round((s.colorProfile?.luminance ?? 0.5) * 100);
                   const mood = s.colorProfile?.mood || s.shotSize;
                   const paletteColors = s.colorProfile?.palette?.slice(0, 5).join(", ") || "Framing scale fallback";
@@ -3178,13 +3909,6 @@ export default memo(function EditingMap({
                       aria-label="Unconfirmed tags"
                     />
                   )}
-                  {w > 25 && (
-                    <strong>{String(s.index).padStart(3, "0")}</strong>
-                  )}
-                  {w > 58 && (
-                    <span>{s.shotSize === "Unknown" ? "—" : s.shotSize}</span>
-                  )}
-                  {w > 90 && <small>{effDur.toFixed(2)}s</small>}
                 </button>
               );
             })}
@@ -3193,10 +3917,11 @@ export default memo(function EditingMap({
               const cutPos = isBeingDragged
                 ? activeCutDrag.currentTime * scale
                 : incoming.startSeconds * scale;
+              const cutEye = eyeTraceMap.get(`${outgoing.id}->${incoming.id}`);
               return (
                 <div
                   key={`cut-${incoming.id}`}
-                  className={`cut-boundary ${selectedCut === incoming.id ? "selected" : ""} ${isBeingDragged ? "dragging" : ""}`}
+                  className={`cut-boundary ${selectedCut === incoming.id ? "selected" : ""} ${isBeingDragged ? "dragging" : ""} ${cutEye ? `saccade-${cutEye.rating}` : ""}`}
                   style={{ left: cutPos }}
                   onPointerDown={(event) => {
                     if (event.button !== 0 || event.shiftKey) return;
@@ -3290,11 +4015,15 @@ export default memo(function EditingMap({
                     }
                   }}
                 >
-                  {isBeingDragged && (
-                    <div className="cut-grip-handle">
-                      <span className="cut-indicator-line" />
-                    </div>
-                  )}
+                  <div className="cut-grip-handle">
+                    <span className="cut-indicator-line" />
+                    {cutEye && (
+                      <span
+                        className={`cut-saccade-pip ${cutEye.rating} ${cutEye.momentum?.alignment === "momentum-collision" ? "collision" : ""}`}
+                        title={`Saccade Hop: ${cutEye.jumpDistancePercent}% (${cutEye.rating})${cutEye.momentum?.alignment === "momentum-collision" ? " · Kinetic Collision" : ""}`}
+                      />
+                    )}
+                  </div>
 
                   {isBeingDragged && activeCutDrag && (
                     <div className="cut-rolling-badge">
@@ -3340,13 +4069,22 @@ export default memo(function EditingMap({
                   <path d={pacingSvgArea} fill="url(#pacingRiverGradient)" />
                 )}
                 {pacingSvgPath && (
-                  <path
-                    d={pacingSvgPath}
-                    fill="none"
-                    stroke="#fbbf24"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                  />
+                  <>
+                    <path
+                      d={pacingSvgPath}
+                      fill="none"
+                      stroke="rgba(245, 158, 11, 0.25)"
+                      strokeWidth="4.5"
+                      strokeLinecap="round"
+                    />
+                    <path
+                      d={pacingSvgPath}
+                      fill="none"
+                      stroke="#fbbf24"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                    />
+                  </>
                 )}
                 {/* Sensory Shock spike indicators */}
                 {cutShockData.filter((c) => c.shockScore >= 45).map((c, idx) => (
@@ -3356,14 +4094,17 @@ export default memo(function EditingMap({
                   </g>
                 ))}
                 {/* Playhead indicator dot */}
-                <circle
-                  cx={time * scale}
-                  cy={44 - (currentPacing.rate / maxPacingRate) * 36}
-                  r="4"
-                  fill="#ffffff"
-                  stroke="#f59e0b"
-                  strokeWidth="2"
-                />
+                {(() => {
+                  const dotY = riverPacing.getYAtTime
+                    ? riverPacing.getYAtTime(time)
+                    : 44 - (currentPacing.rate / maxPacingRate) * 36;
+                  return (
+                    <g transform={`translate(${time * scale}, ${dotY})`}>
+                      <circle r="7" fill="rgba(251, 191, 36, 0.22)" />
+                      <circle r="3.5" fill="#ffffff" stroke="#f59e0b" strokeWidth="2" />
+                    </g>
+                  );
+                })()}
               </svg>
             </div>
           )}
@@ -3969,22 +4710,13 @@ export default memo(function EditingMap({
             </span>
           </div>
           <div
-            className="minimap-container"
+            className={`minimap-container ${isMinimapDragging ? "dragging" : ""}`}
             ref={minimapRef}
-            onClick={(e) => handleMinimapInteraction(e.clientX)}
-            onPointerDown={(e) => {
-              if (e.button !== 0) return;
-              minimapDragging.current = true;
-              handleMinimapInteraction(e.clientX);
-              e.currentTarget.setPointerCapture(e.pointerId);
-            }}
-            onPointerMove={(e) => {
-              if (minimapDragging.current) handleMinimapInteraction(e.clientX);
-            }}
-            onPointerUp={(e) => {
-              minimapDragging.current = false;
-              e.currentTarget.releasePointerCapture(e.pointerId);
-            }}
+            onPointerDown={handleMinimapPointerDown}
+            onPointerMove={handleMinimapPointerMove}
+            onPointerUp={handleMinimapPointerUp}
+            onPointerCancel={handleMinimapPointerUp}
+            onLostPointerCapture={handleMinimapPointerUp}
             title="Click or drag to scroll timeline"
           >
             <div className="minimap-tracks-wrap">
@@ -4013,7 +4745,7 @@ export default memo(function EditingMap({
               />
               {/* Viewport Box (highlight of current zoom / scroll window) */}
               <div
-                className="minimap-viewport-box"
+                className={`minimap-viewport-box ${isMinimapDragging ? "dragging" : ""}`}
                 style={{
                   left: `${(scrollLeft / canvasWidth) * 100}%`,
                   width: `${Math.min(100, (width / canvasWidth) * 100)}%`,

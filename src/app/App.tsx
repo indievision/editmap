@@ -9,13 +9,14 @@ import {
   type CharacterAnalysis,
   type CutAnnotation,
   type Project,
+  type ScreeningMark,
   type SequenceMarker,
   type Shot,
 } from "../models/project";
 import { parseEDL } from "../parsers/edl";
 import { actualRate, formatTimecode, rates } from "../utils/timecode";
 import { activeShot, clampSeek } from "../analysis/playback";
-import { listProjects, saveProject } from "../storage/projects";
+import { getProject, listProjects, saveProject } from "../storage/projects";
 import { MAX_BACKUP_BYTES, makeBackup, parseBackup } from "../storage/backup";
 import EditingMap, { DEFAULT_MAP_LAYERS, type MapLayerState } from "../timeline/EditingMap";
 import FullscreenMapVisualization from "../timeline/FullscreenMapVisualization";
@@ -25,7 +26,7 @@ import FramingDrawer from "../components/FramingDrawer";
 import SequenceReading, { type DraftRange, type TimeRange } from "../components/SequenceReading";
 import SoundDrawer from "../components/SoundDrawer";
 import CutReading from "../components/CutReading";
-import type { CutPair } from "../analysis/cuts";
+import { scanProjectEyeTrace, type CutPair } from "../analysis/cuts";
 import { useThumbnails } from "../video/useThumbnails";
 import { analyzeLocalAudio } from "../analysis/audio";
 import { separateDmeAudio } from "../analysis/dme";
@@ -47,6 +48,7 @@ import { splitShotAtTime, mergeShotsAtCut, rollCutBoundary, nudgeCutBoundary, qu
 import ProjectHeader, { type WorkspaceMode } from "../components/ProjectHeader";
 import ShotInspector from "../components/ShotInspector";
 import ScreeningReview from "../components/ScreeningReview";
+import DuetConsole from "../components/DuetConsole";
 import ExploreWorkspace from "../components/explore/ExploreWorkspace";
 import MapShotSummary from "../components/MapShotSummary";
 import ResizeHandle from "../components/ResizeHandle";
@@ -54,6 +56,7 @@ import { useWorkspaceLayout } from "../hooks/useWorkspaceLayout";
 import { getSquintFilter } from "../utils/squint";
 import WelcomeScreen from "../components/WelcomeScreen";
 import { StudioToolRail, type StudioToolTab } from "../components/StudioToolRail";
+import ScannerSettingsModal from "../components/ScannerSettingsModal";
 import type { MeasureId } from "../analysis/comparison";
 
 
@@ -117,35 +120,16 @@ const sizeShortcuts: Record<string, string> = {
   Unknown: "U",
 };
 
-export interface ScanOptions {
-  cuts: boolean;
-  framing: boolean;
-  cast: boolean;
-  dialogue: boolean;
-  loudness: boolean;
-  motion: boolean;
-  stems: boolean;
-}
-
-export const QUICK_ANALYSIS_PRESET: ScanOptions = {
-  cuts: true,
-  framing: true,
-  cast: true,
-  dialogue: true,
-  loudness: true,
-  motion: false,
-  stems: false,
-};
-
-export const FULL_ANALYSIS_PRESET: ScanOptions = {
-  cuts: true,
-  framing: true,
-  cast: true,
-  dialogue: true,
-  loudness: true,
-  motion: true,
-  stems: true,
-};
+export {
+  type ScanOptions,
+  QUICK_ANALYSIS_PRESET,
+  FULL_ANALYSIS_PRESET,
+} from "../models/scanOptions";
+import {
+  type ScanOptions,
+  QUICK_ANALYSIS_PRESET,
+  FULL_ANALYSIS_PRESET,
+} from "../models/scanOptions";
 
 export type AnalysisStage = "cuts" | "framing" | "characters" | "dialogue" | "loudness" | "motion" | "stems" | "done";
 
@@ -166,14 +150,20 @@ export interface UnifiedAnalysisProgress {
 }
 
 export interface BgScanStatus {
-  motionActive: boolean;
-  motionProgress: number;
-  stemsActive: boolean;
-  stemsStatusText: string;
+  active: boolean;
+  stage: AnalysisStage;
+  stageLabel: string;
+  progress: number;
+  stageProgress: number;
+  statusText: string;
+  motionActive?: boolean;
+  motionProgress?: number;
+  stemsActive?: boolean;
+  stemsStatusText?: string;
 }
 
 export default function App() {
-  const [project, setProject] = useState<Project | null>(null),
+  const [project, setProject] = useState<Project>(() => newProject()),
     [url, setUrl] = useState(""),
     [time, setTime] = useState(0),
     [playing, setPlaying] = useState(false),
@@ -203,7 +193,17 @@ export default function App() {
   const [scanningShot, setScanningShot] = useState(false);
   const [selectedCharacter, setSelectedCharacter] = useState<string>();
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
-  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("studio");
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("screening");
+  const [isScreeningRoomEntered, setIsScreeningRoomEntered] = useState(false);
+  const isScreeningSetup = workspaceMode === "screening" && !isScreeningRoomEntered;
+  const [filmReplacementPending, setFilmReplacementPending] = useState<{
+    type: "file";
+    file: File | string;
+    name: string;
+  } | {
+    type: "project";
+    project: Project;
+  } | null>(null);
   const workspaceRef = useRef<HTMLElement>(null);
   const {
     leftWidth,
@@ -223,7 +223,6 @@ export default function App() {
   const [inspectorDrawerOpen, setInspectorDrawerOpen] = useState(false);
   const [studioDrawerOpen, setStudioDrawerOpen] = useState(false);
   const [studioTagBarOpen, setStudioTagBarOpen] = useState(true);
-  const [focusMode, setFocusMode] = useState(false);
   const [deckTab, setDeckTab] = useState<StudioToolTab>("rhythm");
   const [initialCompareMeasure, setInitialCompareMeasure] = useState<MeasureId | undefined>();
   const [mapExpanded, setMapExpanded] = useState(false);
@@ -242,6 +241,8 @@ export default function App() {
   const [scanOptions, setScanOptions] = useState<ScanOptions>(QUICK_ANALYSIS_PRESET);
   const [bgScanStatus, setBgScanStatus] = useState<BgScanStatus | null>(null);
   const [showScanConfigModal, setShowScanConfigModal] = useState(false);
+  const [isInitialScanDismissed, setIsInitialScanDismissed] = useState(false);
+  const [scannerSettingsOpen, setScannerSettingsOpen] = useState(false);
   const dmeAbortRef = useRef<AbortController | null>(null);
   const speechAbortRef = useRef<AbortController | null>(null);
   const loudnessAbortRef = useRef<AbortController | null>(null);
@@ -387,6 +388,16 @@ export default function App() {
     });
   }, [project?.shots, reviewFilter, reviewSearchQuery]);
   useEffect(() => { projectRef.current = project; }, [project]);
+  useEffect(() => {
+    void listProjects().then((projects) => {
+      if (projects.length > 0 && (!projectRef.current || projectRef.current.shots.length === 0)) {
+        const candidate = projects.find((p) => p.shots && p.shots.length > 0) || projects[0];
+        if (candidate && candidate.shots && candidate.shots.length > 0) {
+          replace(candidate);
+        }
+      }
+    }).catch(() => {});
+  }, []);
   useEffect(
     () => () => {
       if (url) URL.revokeObjectURL(url);
@@ -485,8 +496,16 @@ export default function App() {
     }
   };
   const toggle = () => {
+    if (workspaceMode === "screening" || workspaceMode === "review") {
+      return;
+    }
     const v = video.current;
-    if (!v || !url) return;
+    if (!v || !url) {
+      if (project && project.shots.length > 0) {
+        setPlaying((p) => !p);
+      }
+      return;
+    }
     if (v.paused) {
       stopAt.current = null;
       if (
@@ -506,8 +525,20 @@ export default function App() {
       } else {
         playbackRange.current = null;
       }
-      void v.play().catch((e) => setError(e.message));
-    } else v.pause();
+      setPlaying(true);
+      const playPromise = v.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((e: Error) => {
+          if (e.name !== "AbortError") {
+            setError(e.message);
+          }
+        });
+      }
+    } else {
+      v.pause();
+      setPlaying(false);
+      setTime(v.currentTime);
+    }
   };
 
   const handleSplitShot = (targetTime: number) => {
@@ -621,6 +652,19 @@ export default function App() {
         return;
       }
       if (e.ctrlKey || e.metaKey) return;
+      if (isFullscreenGraph) {
+        // Fullscreen map has its own self-contained keyboard navigation and shortcuts
+        return;
+      }
+
+      if (e.key === "Escape" && workspaceMode === "screening") {
+        e.preventDefault();
+        setWorkspaceMode("review");
+        const iframe = document.querySelector(".duet-console-iframe") as HTMLIFrameElement | null;
+        iframe?.contentWindow?.postMessage({ type: "SET_MODE", mode: "review" }, "*");
+        return;
+      }
+
       if (workspaceMode !== "studio") return;
 
       if (e.key === "Escape") {
@@ -725,6 +769,11 @@ export default function App() {
         tagShot(size);
         return;
       }
+      if (e.key === "Escape") {
+        setIsInitialScanDismissed(true);
+        setShowScanConfigModal(false);
+        return;
+      }
       if (e.code === "Space" && !(e.target as HTMLElement).closest("button")) {
         e.preventDefault();
         toggle();
@@ -739,12 +788,31 @@ export default function App() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   });
+
+  useEffect(() => {
+    if (workspaceMode === "screening" || workspaceMode === "review") {
+      if (video.current) {
+        video.current.pause();
+        video.current.muted = true;
+      }
+      setPlaying(false);
+    } else if (workspaceMode === "studio") {
+      if (video.current) {
+        video.current.muted = false;
+      }
+    }
+  }, [workspaceMode]);
   useEffect(() => {
     if (!playing) return;
     let handle = 0;
+    let lastTickTime = performance.now();
     const tick = () => {
       const v = video.current;
-      if (v) {
+      if (v && url) {
+        if (v.paused) {
+          setPlaying(false);
+          return;
+        }
         const range = playbackRange.current;
         let pausedBoundary = false;
         const frameSec = 1 / (project?.frameRate || 24);
@@ -765,21 +833,30 @@ export default function App() {
           pausedBoundary = true;
         }
 
-        const now = performance.now();
-        const active = project ? activeShot(project.shots, v.currentTime) : undefined;
-        const shotChanged = active?.id !== lastActiveShotId.current;
-
-        if (pausedBoundary || shotChanged || now - lastTimeUpdate.current >= 100) {
-          lastTimeUpdate.current = now;
-          lastActiveShotId.current = active?.id;
-          setTime(v.currentTime);
+        if (pausedBoundary) {
+          setPlaying(false);
+          return;
         }
+
+        setTime(v.currentTime);
+      } else {
+        const now = performance.now();
+        const dt = (now - lastTickTime) / 1000;
+        lastTickTime = now;
+        setTime((prev) => {
+          const maxDur = projectRef.current?.duration || 100;
+          if (prev + dt >= maxDur) {
+            setPlaying(false);
+            return maxDur;
+          }
+          return prev + dt;
+        });
       }
       handle = requestAnimationFrame(tick);
     };
     handle = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(handle);
-  }, [playing, project]);
+  }, [playing, project, url]);
   useEffect(() => {
     if (video.current) {
       video.current.volume = volume;
@@ -963,6 +1040,7 @@ export default function App() {
   );
 
   const replace = (p: Project) => {
+    projectRef.current = p;
     pendingFile.current = null;
     setLinkedMediaSignature(undefined);
     dmeAbortRef.current?.abort(); speechAbortRef.current?.abort(); loudnessAbortRef.current?.abort();
@@ -1073,8 +1151,31 @@ export default function App() {
     video.current?.pause();
     setTime(0);
     stopAt.current = null;
-    setUrl(URL.createObjectURL(file));
+    const newUrl = URL.createObjectURL(file);
+    if (typeof window !== "undefined") {
+      (window as any).selectedFile = file;
+      (window as any).__editmap_video_url = newUrl;
+    }
+    setUrl(newUrl);
     if (oldUrl) URL.revokeObjectURL(oldUrl);
+    const cleanName = file.name.replace(/\.[^/.]+$/, "");
+    setProject((curr) => {
+      if (!curr) return curr;
+      const shouldUpdateName = !curr.name || curr.name === "Untitled film" || curr.name === "Untitled Project";
+      return {
+        ...curr,
+        name: shouldUpdateName ? cleanName : curr.name,
+        videoMetadata: {
+          filename: file.name,
+          duration: candidate.duration,
+          width: candidate.width,
+          height: candidate.height,
+          size: file.size,
+        },
+        screeningMarks: mismatch || !expected ? [] : curr.screeningMarks,
+        updatedAt: new Date().toISOString(),
+      };
+    });
     setWaveform([]);
     const generation = mediaGeneration.current;
     void mediaSignature(file).then((signature) => { if (generation === mediaGeneration.current) setLinkedMediaSignature(signature); }).catch(() => undefined);
@@ -1220,15 +1321,21 @@ export default function App() {
       setError((e as Error).message);
     }
   };
-  const startUnifiedAnalysis = async (videoUrl = url, options: ScanOptions = scanOptions) => {
-    if (!project || !videoUrl || detectAbortRef.current) return;
+  const startUnifiedAnalysis = async (
+    videoUrl = url,
+    options: ScanOptions = scanOptions,
+    isBackground = false,
+    targetProjectId?: string
+  ) => {
+    const currentProject = projectRef.current || project;
+    if (!currentProject || !videoUrl || detectAbortRef.current) return;
     const abort = new AbortController();
-    const owner = project.id;
+    const owner = targetProjectId || currentProject.id;
     let sampler: Awaited<ReturnType<typeof createFrameSampler>> | undefined;
     detectAbortRef.current = abort;
 
-    const totalDur = project.duration || video.current?.duration || 1;
-    let workingShots: Shot[] = [...project.shots];
+    const totalDur = currentProject.duration || video.current?.duration || 1;
+    let workingShots: Shot[] = [...currentProject.shots];
 
     // Identify active foreground stages for smooth progress calculation
     const activeForegroundStages: AnalysisStage[] = [
@@ -1266,21 +1373,92 @@ export default function App() {
       return Math.round((doneW / totalW) * 100);
     };
 
+    const stageLabels: Record<AnalysisStage, string> = {
+      cuts: "Cuts",
+      framing: "Framing",
+      characters: "Cast",
+      dialogue: "Dialogue",
+      loudness: "Loudness",
+      motion: "Motion",
+      stems: "Stems",
+      done: "Complete",
+    };
+
     const initialStage = activeForegroundStages[0] || "done";
 
-    setAnalysisProgress({
-      stage: initialStage,
-      overallPercent: 0,
-      cutsFound: workingShots.length,
-      currentTime: 0,
-      totalDuration: totalDur,
-      framingDone: 0,
-      framingTotal: workingShots.length,
-      facesFound: 0,
-      statusText: options.cuts ? "Detecting scene cuts..." : "Preparing unified analysis...",
-      fullPipeline: true,
-      options,
-    });
+    const updateProgress = (
+      stage: AnalysisStage,
+      subPercent: number,
+      statusText: string,
+      extra?: {
+        cutsFound?: number;
+        currentTime?: number;
+        framingDone?: number;
+        facesFound?: number;
+        previewImage?: string;
+        previewDescription?: string;
+      }
+    ) => {
+      const overallPercent = calcOverallProgress(stage, subPercent);
+      const roundedSubPercent = Math.min(100, Math.round(subPercent));
+      if (isBackground) {
+        setBgScanStatus((prev) => ({
+          active: true,
+          stage,
+          stageLabel: stageLabels[stage] || stage,
+          progress: overallPercent,
+          stageProgress: roundedSubPercent,
+          statusText,
+          motionActive: prev?.motionActive ?? options.motion,
+          motionProgress: prev?.motionProgress ?? 0,
+          stemsActive: prev?.stemsActive ?? options.stems,
+          stemsStatusText: prev?.stemsStatusText ?? "",
+        }));
+      } else {
+        setAnalysisProgress((prev) => prev ? {
+          ...prev,
+          stage,
+          overallPercent,
+          statusText,
+          cutsFound: extra?.cutsFound !== undefined ? extra.cutsFound : prev.cutsFound,
+          currentTime: extra?.currentTime !== undefined ? extra.currentTime : prev.currentTime,
+          framingDone: extra?.framingDone !== undefined ? extra.framingDone : prev.framingDone,
+          facesFound: extra?.facesFound !== undefined ? extra.facesFound : prev.facesFound,
+          previewImage: extra?.previewImage !== undefined ? extra.previewImage : prev.previewImage,
+          previewDescription: extra?.previewDescription !== undefined ? extra.previewDescription : prev.previewDescription,
+        } : prev);
+      }
+    };
+
+    if (isBackground) {
+      setAnalysisProgress(null);
+      setBgScanStatus({
+        active: true,
+        stage: initialStage,
+        stageLabel: stageLabels[initialStage] || "Scan",
+        progress: 0,
+        stageProgress: 0,
+        statusText: options.cuts ? "Detecting scene cuts..." : "Preparing unified analysis...",
+        motionActive: options.motion,
+        motionProgress: 0,
+        stemsActive: options.stems,
+        stemsStatusText: "",
+      });
+    } else {
+      setAnalysisProgress({
+        stage: initialStage,
+        overallPercent: 0,
+        cutsFound: workingShots.length,
+        currentTime: 0,
+        totalDuration: totalDur,
+        framingDone: 0,
+        framingTotal: workingShots.length,
+        facesFound: 0,
+        statusText: options.cuts ? "Detecting scene cuts..." : "Preparing unified analysis...",
+        fullPipeline: true,
+        options,
+      });
+    }
 
     try {
       // -------------------------------------------------------------
@@ -1292,23 +1470,20 @@ export default function App() {
           dropFrame: project.dropFrame,
           signal: abort.signal,
           onProgress: (p) => {
-            setAnalysisProgress((prev) => prev ? {
-              ...prev,
+            const currentTc = formatTimecode(p.currentTime, project.frameRate, project.dropFrame);
+            const totalTc = formatTimecode(p.totalDuration, project.frameRate, project.dropFrame);
+            const detectorLabel = p.detector === "transnet" ? "TransNet V2" : "Browser";
+            const statusText = `Scanning cuts (${detectorLabel}) · ${p.shotsCount} cuts · ${currentTc} / ${totalTc}`;
+            updateProgress("cuts", p.percent, statusText, {
               cutsFound: p.shotsCount,
               currentTime: p.currentTime,
-              overallPercent: calcOverallProgress("cuts", p.percent),
-              statusText: p.detector === "browser"
-                ? `Scanning cuts with browser detector · ${p.shotsCount} shots found (${Math.round(p.percent)}%)`
-                : `Scanning cuts with TransNet V2 · ${p.shotsCount} shots found (${Math.round(p.percent)}%)`,
-            } : prev);
+            });
           },
-          onDetector: (detector, reason) => {
-            setAnalysisProgress((prev) => prev ? {
-              ...prev,
-              statusText: detector === "transnet"
-                ? "Scanning cuts with TransNet V2..."
-                : `Scanning cuts with browser detector${reason ? " · TransNet V2 unavailable" : ""}...`,
-            } : prev);
+          onDetector: (detector) => {
+            const statusText = detector === "transnet"
+              ? "Scanning cuts (TransNet V2)..."
+              : "Scanning cuts (Browser engine)...";
+            updateProgress("cuts", 0, statusText);
           },
         });
 
@@ -1326,14 +1501,22 @@ export default function App() {
         );
 
         // Immediate progressive render on timeline!
-        recordHistory(project);
+        recordHistory(projectRef.current || project);
         revision.current++;
-        setProject((curr) => curr?.id === owner ? {
-          ...curr,
-          shots: workingShots,
-          duration: maxDur,
-          updatedAt: new Date().toISOString(),
-        } : curr);
+        setProject((curr) => {
+          if (!curr) return curr;
+          return {
+            ...curr,
+            shots: workingShots,
+            duration: maxDur,
+            updatedAt: new Date().toISOString(),
+          };
+        });
+        if (projectRef.current) {
+          projectRef.current.shots = workingShots;
+          projectRef.current.duration = maxDur;
+        }
+        setIsInitialScanDismissed(true);
         setEdlRevision((rev) => rev + 1);
         setDirty(true);
         setSelected(undefined);
@@ -1350,15 +1533,9 @@ export default function App() {
       // STAGE 2: FRAMING & SHOT SIZES
       // -------------------------------------------------------------
       if (options.framing && !abort.signal.aborted) {
-        setAnalysisProgress((prev) => prev ? {
-          ...prev,
-          stage: "framing",
-          cutsFound: workingShots.length,
+        updateProgress("framing", 0, `Analyzing framing across ${workingShots.length} shots...`, {
           framingDone: 0,
-          framingTotal: workingShots.length,
-          overallPercent: calcOverallProgress("framing", 0),
-          statusText: `Analyzing framing across ${workingShots.length} shots...`,
-        } : prev);
+        });
 
         sampler = await createFrameSampler(videoUrl, abort.signal);
         let updatedShots = [...workingShots];
@@ -1382,14 +1559,11 @@ export default function App() {
             applyShotPatch(owner, currentShot.id, { ...tags, reviewStatus: "Needs review", suggestion: { ...tags, model: tags.model ?? MODEL, createdAt: new Date().toISOString() }, analysisFailures: undefined });
             const framingPercent = Math.round(((i + 1) / workingShots.length) * 100);
 
-            setAnalysisProgress((prev) => prev ? {
-              ...prev,
+            updateProgress("framing", framingPercent, `Analyzing framing · ${i + 1} of ${workingShots.length} shots (${framingPercent}%)`, {
               framingDone: i + 1,
-              overallPercent: calcOverallProgress("framing", framingPercent),
               previewImage: samples.previewImage,
               previewDescription: `Shot ${i + 1}: ${tags.shotSize} · ${tags.composition}`,
-              statusText: `Analyzing framing · ${i + 1} of ${workingShots.length} shots (${framingPercent}%)`,
-            } : prev);
+            });
           } catch (e) {
             if (abort.signal.aborted) break;
             const failure = { framing: { message: e instanceof Error ? e.message : "Framing failed", createdAt: new Date().toISOString() } };
@@ -1414,12 +1588,7 @@ export default function App() {
       if (options.cast && !abort.signal.aborted) {
         if (!sampler) sampler = await createFrameSampler(videoUrl, abort.signal);
         const peopleShots = workingShots.filter(isEligibleForCharacterScan);
-        setAnalysisProgress((prev) => prev ? {
-          ...prev,
-          stage: "characters",
-          overallPercent: calcOverallProgress("characters", 0),
-          statusText: `Discovering characters across ${peopleShots.length} shots with people...`,
-        } : prev);
+        updateProgress("characters", 0, `Discovering characters across ${peopleShots.length} shots with people...`);
 
         if (peopleShots.length > 0) {
           try {
@@ -1433,21 +1602,21 @@ export default function App() {
                 minAppearances: peopleShots.length >= 2 ? 2 : 1,
                 onProgress: (p) => {
                   const charPercent = Math.round((p.completedShots / p.totalShots) * 100);
-                  setAnalysisProgress((prev) => prev ? {
-                    ...prev,
-                    overallPercent: calcOverallProgress("characters", charPercent),
+                  const statusText = p.stage === "sampling"
+                    ? `Scanning faces · ${p.completedShots}/${p.totalShots} shots (${p.facesFound} faces found)`
+                    : `Clustering ${p.facesFound} faces into characters...`;
+                  updateProgress("characters", charPercent, statusText, {
                     facesFound: p.facesFound,
-                    statusText: p.stage === "sampling"
-                      ? `Scanning faces · ${p.completedShots}/${p.totalShots} shots (${p.facesFound} faces found)`
-                      : `Clustering ${p.facesFound} faces into characters...`,
-                  } : prev);
+                  });
                 },
                 onFrame: (shot, time, img) => {
-                  setAnalysisProgress((prev) => prev ? {
-                    ...prev,
-                    previewImage: img,
-                    previewDescription: `Shot ${shot.index} (${formatTimecode(time, project.frameRate, project.dropFrame)}): detecting cast`,
-                  } : prev);
+                  if (!isBackground) {
+                    setAnalysisProgress((prev) => prev ? {
+                      ...prev,
+                      previewImage: img,
+                      previewDescription: `Shot ${shot.index} (${formatTimecode(time, project.frameRate, project.dropFrame)}): detecting cast`,
+                    } : prev);
+                  }
                 },
               }
             );
@@ -1455,16 +1624,29 @@ export default function App() {
             if (!abort.signal.aborted) {
               newCast = autoResult.cast;
               newAnalyses = autoResult.shotAnalyses;
+              workingShots = workingShots.map((s) => {
+                const analysis = newAnalyses.get(s.id);
+                return analysis ? { ...s, characterAnalysis: analysis } : s;
+              });
               revision.current++;
-              setProject((curr) => curr?.id === owner ? {
-                ...curr,
-                shots: curr.shots.map(s => {
+              setProject((curr) => {
+                if (!curr) return curr;
+                const nextShots = curr.shots.map(s => {
                   const analysis = newAnalyses.get(s.id);
                   return !analysis || s.characterAnalysis?.reviewStatus === "Confirmed" || s.characterAnalysis?.manualReviewStatus === "Confirmed" ? s : { ...s, characterAnalysis: analysis };
-                }),
-                cast: mergeDiscoveredCast(curr.cast ?? [], newCast),
-                updatedAt: new Date().toISOString(),
-              } : curr);
+                });
+                const nextCast = mergeDiscoveredCast(curr.cast ?? [], newCast);
+                if (projectRef.current) {
+                  projectRef.current.shots = nextShots;
+                  projectRef.current.cast = nextCast;
+                }
+                return {
+                  ...curr,
+                  shots: nextShots,
+                  cast: nextCast,
+                  updatedAt: new Date().toISOString(),
+                };
+              });
             }
           } catch (e) {
             if (!abort.signal.aborted) console.warn("Character scan error:", e);
@@ -1478,14 +1660,9 @@ export default function App() {
       // -------------------------------------------------------------
       // STAGE 4: DIALOGUE SPEECH SCAN
       // -------------------------------------------------------------
-      const file = pendingFile.current;
+      const file = pendingFile.current ?? (typeof window !== "undefined" ? (window as any).selectedFile : undefined);
       if (options.dialogue && file && !abort.signal.aborted) {
-        setAnalysisProgress((prev) => prev ? {
-          ...prev,
-          stage: "dialogue",
-          overallPercent: calcOverallProgress("dialogue", 0),
-          statusText: "Preparing speech VAD scan...",
-        } : prev);
+        updateProgress("dialogue", 0, "Preparing speech VAD scan...");
 
         try {
           const signature = linkedMediaSignature || (await mediaSignature(file));
@@ -1493,16 +1670,18 @@ export default function App() {
 
           const speechResult = await scanSpeechAudio(file, signature, (job) => {
             const progress = Number.isFinite(job.progress) ? Math.round((job.progress ?? 0) * 100) : 0;
-            setAnalysisProgress((prev) => prev ? {
-              ...prev,
-              overallPercent: calcOverallProgress("dialogue", progress),
-              statusText: `Scanning speech VAD · ${progress}%`,
-            } : prev);
+            updateProgress("dialogue", progress, `Scanning speech VAD · ${progress}%`);
           }, abort.signal);
 
-          if (!abort.signal.aborted && projectRef.current?.id === owner) {
+          if (!abort.signal.aborted) {
             revision.current++;
-            setProject((curr) => curr?.id === owner ? { ...curr, speechAnalysis: speechResult, updatedAt: new Date().toISOString() } : curr);
+            setProject((curr) => {
+              if (!curr) return curr;
+              if (projectRef.current) {
+                projectRef.current.speechAnalysis = speechResult;
+              }
+              return { ...curr, speechAnalysis: speechResult, updatedAt: new Date().toISOString() };
+            });
           }
         } catch (err) {
           if (!abort.signal.aborted) console.warn("Speech scan skipped or failed:", err);
@@ -1513,12 +1692,7 @@ export default function App() {
       // STAGE 5: LOUDNESS SCAN
       // -------------------------------------------------------------
       if (options.loudness && file && !abort.signal.aborted) {
-        setAnalysisProgress((prev) => prev ? {
-          ...prev,
-          stage: "loudness",
-          overallPercent: calcOverallProgress("loudness", 0),
-          statusText: "Preparing EBU R128 loudness scan...",
-        } : prev);
+        updateProgress("loudness", 0, "Preparing EBU R128 loudness scan...");
 
         try {
           const signature = linkedMediaSignature || (await mediaSignature(file));
@@ -1526,23 +1700,57 @@ export default function App() {
 
           const loudnessResult = await scanLoudnessAudio(file, signature, (job) => {
             const progress = Number.isFinite(job.progress) ? Math.round((job.progress ?? 0) * 100) : 0;
-            setAnalysisProgress((prev) => prev ? {
-              ...prev,
-              overallPercent: calcOverallProgress("loudness", progress),
-              statusText: `Measuring EBU R128 loudness · ${progress}%`,
-            } : prev);
+            updateProgress("loudness", progress, `Measuring EBU R128 loudness · ${progress}%`);
           }, abort.signal);
 
-          if (!abort.signal.aborted && projectRef.current?.id === owner) {
+          if (!abort.signal.aborted) {
             revision.current++;
-            setProject((curr) => curr?.id === owner ? { ...curr, loudnessAnalysis: loudnessResult, updatedAt: new Date().toISOString() } : curr);
+            setProject((curr) => {
+              if (!curr) return curr;
+              if (projectRef.current) {
+                projectRef.current.loudnessAnalysis = loudnessResult;
+              }
+              return { ...curr, loudnessAnalysis: loudnessResult, updatedAt: new Date().toISOString() };
+            });
           }
         } catch (err) {
           if (!abort.signal.aborted) console.warn("Loudness scan skipped or failed:", err);
         }
       }
 
-      // Complete foreground modal overlay
+      // -------------------------------------------------------------
+      // AUTOMATIC EYE-TRACE & CUT SACCADE DYNAMICS SCAN
+      // -------------------------------------------------------------
+      if (videoUrl && workingShots.length >= 2 && !abort.signal.aborted) {
+        try {
+          const eyeAnnotations = await scanProjectEyeTrace(
+            workingShots,
+            projectRef.current?.cutAnnotations,
+            videoUrl,
+            project.frameRate || 24,
+            undefined,
+            abort.signal
+          );
+          if (!abort.signal.aborted && eyeAnnotations.length > 0) {
+            revision.current++;
+            if (projectRef.current) {
+              projectRef.current.cutAnnotations = eyeAnnotations;
+            }
+            setProject((curr) => {
+              if (!curr) return curr;
+              return {
+                ...curr,
+                cutAnnotations: eyeAnnotations,
+                updatedAt: new Date().toISOString(),
+              };
+            });
+          }
+        } catch (err) {
+          if (!abort.signal.aborted) console.warn("Eye-trace batch scan skipped or failed:", err);
+        }
+      }
+
+      // Complete foreground modal overlay if active
       setAnalysisProgress(null);
 
       // -------------------------------------------------------------
@@ -1550,71 +1758,96 @@ export default function App() {
       // -------------------------------------------------------------
       if ((options.motion || options.stems) && !abort.signal.aborted) {
         setBgScanStatus({
+          active: true,
+          stage: "motion",
+          stageLabel: "Motion & Stems",
+          progress: 0,
+          stageProgress: 0,
+          statusText: "Analyzing motion energy & DME stems...",
           motionActive: options.motion,
           motionProgress: 0,
           stemsActive: options.stems,
           stemsStatusText: options.stems ? "Preparing DME stem separation..." : "",
         });
 
-        void (async () => {
-          // Stage 6: Motion energy scanning in background
-          if (options.motion && !abort.signal.aborted) {
-            try {
-              const shotsToScan = projectRef.current?.shots || workingShots;
-              let currentShots = [...shotsToScan];
-              for (let i = 0; i < currentShots.length; i++) {
-                if (abort.signal.aborted) break;
-                const shot = currentShots[i];
-                if (!shot.motionProfile) {
-                  try {
-                    const profile = await analyzeShotMotion(videoUrl, shot, abort.signal);
-                    if (abort.signal.aborted) break;
-                    currentShots[i] = {
-                      ...shot,
-                      motionProfile: profile,
-                      cameraMovement: shot.cameraMovement ?? profile.cameraMovement,
-                    };
-                    applyShotPatch(owner, shot.id, {
-                      motionProfile: profile,
-                      cameraMovement: shot.cameraMovement ?? profile.cameraMovement,
-                    });
-                  } catch {
-                    // Continue to next shot
+        await Promise.allSettled([
+          // Stage 6: Motion energy scanning
+          (async () => {
+            if (options.motion && !abort.signal.aborted) {
+              try {
+                const shotsToScan = projectRef.current?.shots || workingShots;
+                let currentShots = [...shotsToScan];
+                for (let i = 0; i < currentShots.length; i++) {
+                  if (abort.signal.aborted) break;
+                  const shot = currentShots[i];
+                  if (!shot.motionProfile) {
+                    try {
+                      const profile = await analyzeShotMotion(videoUrl, shot, abort.signal);
+                      if (abort.signal.aborted) break;
+                      currentShots[i] = {
+                        ...shot,
+                        motionProfile: profile,
+                        cameraMovement: shot.cameraMovement ?? profile.cameraMovement,
+                      };
+                      applyShotPatch(owner, shot.id, {
+                        motionProfile: profile,
+                        cameraMovement: shot.cameraMovement ?? profile.cameraMovement,
+                      });
+                    } catch {
+                      // Continue to next shot
+                    }
                   }
+                  const p = Math.round(((i + 1) / currentShots.length) * 100);
+                  setBgScanStatus((prev) => prev ? {
+                    ...prev,
+                    motionProgress: p,
+                    stageProgress: p,
+                    progress: p,
+                    statusText: `Analyzing motion energy (${p}%)`,
+                  } : null);
                 }
-                const p = Math.round(((i + 1) / currentShots.length) * 100);
-                setBgScanStatus((prev) => prev ? { ...prev, motionProgress: p } : null);
+              } catch (e) {
+                console.warn("Background motion scan error:", e);
               }
-            } catch (e) {
-              console.warn("Background motion scan error:", e);
+              setBgScanStatus((prev) => prev ? { ...prev, motionActive: false } : null);
             }
-            setBgScanStatus((prev) => prev ? { ...prev, motionActive: false } : null);
-          }
+          })(),
 
-          // Stage 7: DME Stems separation in background
-          if (options.stems && file && !abort.signal.aborted) {
-            try {
-              const dme = await separateDmeAudio(
-                file,
-                1400,
-                (statusStr) => setBgScanStatus((prev) => prev ? { ...prev, stemsStatusText: statusStr } : null),
-                abort.signal
-              );
-              if (!abort.signal.aborted && projectRef.current?.id === owner) {
-                revision.current++;
-                setProject((p) => p?.id === owner ? { ...p, dmeWaveforms: dme, updatedAt: new Date().toISOString() } : p);
-                setDirty(true);
+          // Stage 7: DME Stems separation
+          (async () => {
+            if (options.stems && file && !abort.signal.aborted) {
+              try {
+                const dme = await separateDmeAudio(
+                  file,
+                  1400,
+                  (statusStr) => setBgScanStatus((prev) => prev ? {
+                    ...prev,
+                    stemsStatusText: statusStr,
+                    statusText: statusStr,
+                  } : null),
+                  abort.signal
+                );
+                if (!abort.signal.aborted) {
+                  revision.current++;
+                  if (projectRef.current) {
+                    projectRef.current.dmeWaveforms = dme;
+                  }
+                  setProject((p) => {
+                    if (!p) return p;
+                    return { ...p, dmeWaveforms: dme, updatedAt: new Date().toISOString() };
+                  });
+                  setDirty(true);
+                }
+              } catch (e) {
+                console.warn("Background DME separation error:", e);
               }
-            } catch (e) {
-              console.warn("Background DME separation error:", e);
+              setBgScanStatus((prev) => prev ? { ...prev, stemsActive: false } : null);
             }
-            setBgScanStatus((prev) => prev ? { ...prev, stemsActive: false } : null);
-          }
-
-          setBgScanStatus(null);
-        })();
+          })(),
+        ]);
       }
 
+      setBgScanStatus(null);
       setEdlRevision((rev) => rev + 1);
       setDirty(true);
       if (options.cast) setDeckTab("cast");
@@ -1630,6 +1863,7 @@ export default function App() {
       sampler?.dispose();
       if (detectAbortRef.current === abort) {
         setAnalysisProgress(null);
+        setBgScanStatus(null);
         detectAbortRef.current = null;
       }
     }
@@ -1637,12 +1871,248 @@ export default function App() {
 
   const startSceneDetection = (videoUrl = url) =>
     startUnifiedAnalysis(videoUrl, { ...QUICK_ANALYSIS_PRESET, framing: false, cast: false, dialogue: false, loudness: false });
+
+  const handleEnterScreeningRoom = (customUrl?: string, customFile?: File) => {
+    setIsScreeningRoomEntered(true);
+    const file = customFile ?? pendingFile.current ?? (typeof window !== "undefined" ? (window as any).selectedFile : undefined);
+    if (file && !pendingFile.current) {
+      pendingFile.current = file;
+    }
+    const targetUrl = customUrl ?? url ?? (file ? URL.createObjectURL(file) : "");
+    if (!targetUrl && !file) return;
+
+    if (!url && targetUrl) {
+      setUrl(targetUrl);
+    }
+
+    if (detectAbortRef.current) return;
+
+    // Run full scan with all scanners in background!
+    // Cuts will automatically detect shots if no shots exist yet; if shots already exist, preserve cuts.
+    const effectiveOptions: ScanOptions = {
+      ...FULL_ANALYSIS_PRESET,
+      cuts: (projectRef.current?.shots.length ?? 0) === 0,
+    };
+
+    void startUnifiedAnalysis(targetUrl, effectiveOptions, true);
+  };
+
+  const handleChangeFilm = useCallback(() => {
+    if (video.current && !video.current.paused) {
+      video.current.pause();
+    }
+    const iframe = document.querySelector(".duet-console-iframe") as HTMLIFrameElement | null;
+    iframe?.contentWindow?.postMessage({ type: "PAUSE" }, "*");
+    setIsScreeningRoomEntered(false);
+    setWorkspaceMode("screening");
+    iframe?.contentWindow?.postMessage({ type: "SHOW_ONBOARDING", canCancel: true }, "*");
+  }, []);
+
+  const handleExportEdlMarkers = useCallback(() => {
+    const iframe = document.querySelector(".duet-console-iframe") as HTMLIFrameElement | null;
+    iframe?.contentWindow?.postMessage({ type: "EXPORT_EDL" }, "*");
+  }, []);
+
+  const executeNewProjectFromVideo = useCallback(async (file: File | string, name: string) => {
+    const fileName = typeof file === "string" ? file.split("/").pop() || file : file.name;
+    const baseName = fileName.replace(/\.[^/.]+$/, "");
+    const currentP = projectRef.current;
+
+    // 1. If current project in memory already matches, preserve it!
+    if (
+      currentP &&
+      (currentP.videoMetadata?.filename === fileName || currentP.name === baseName || currentP.name === fileName)
+    ) {
+      if (currentP.name === "Untitled film") {
+        currentP.name = baseName;
+        setProject((p) => (p ? { ...p, name: baseName, updatedAt: new Date().toISOString() } : p));
+      }
+      if (typeof file !== "string") {
+        pendingFile.current = file;
+        setUrl(URL.createObjectURL(file));
+      } else if (file) {
+        setUrl(file);
+      }
+      setIsScreeningRoomEntered(true);
+      return;
+    }
+
+    // 2. Check if this film was already scanned and saved in IndexedDB!
+    try {
+      const savedProjects = await listProjects();
+      const matched = savedProjects.find(
+        (sp) =>
+          sp.shots &&
+          sp.shots.length > 0 &&
+          (sp.videoMetadata?.filename === fileName || sp.name === baseName || sp.name === fileName)
+      );
+      if (matched) {
+        if (matched.name === "Untitled film") {
+          matched.name = baseName;
+        }
+        replace(matched);
+        if (typeof file !== "string") {
+          pendingFile.current = file;
+          setUrl(URL.createObjectURL(file));
+        } else {
+          setUrl(file);
+        }
+        setIsInitialScanDismissed(true);
+        setIsScreeningRoomEntered(true);
+        return;
+      }
+    } catch (e) {
+      console.warn("Could not query saved projects:", e);
+    }
+
+    // 3. Brand new unscanned film
+    const p = newProject();
+    p.name = baseName || name || "Film Cut";
+    if (typeof file !== "string") {
+      p.videoMetadata = {
+        filename: file.name,
+        duration: p.duration || 0,
+        width: 1920,
+        height: 1080,
+        size: file.size,
+      };
+    }
+    projectRef.current = p;
+    replace(p);
+    projectRef.current = p;
+    const targetUrl = typeof file === "string" ? file : URL.createObjectURL(file);
+    if (typeof file !== "string") {
+      pendingFile.current = file;
+    }
+    setUrl(targetUrl);
+    setWorkspaceMode("screening");
+    setIsScreeningRoomEntered(true);
+
+    // Auto-start background scan while screening if not already running
+    if (!detectAbortRef.current && targetUrl) {
+      void startUnifiedAnalysis(targetUrl, FULL_ANALYSIS_PRESET, true, p.id);
+    }
+  }, [replace, startUnifiedAnalysis]);
+
+  const syncDuetMarkersToProject = useCallback((duetMarkers: any[]) => {
+    if (!Array.isArray(duetMarkers)) return;
+    setProject((curr) => {
+      if (!curr) return curr;
+      const existing = curr.screeningMarks ?? [];
+      const updatedMarks: ScreeningMark[] = duetMarkers.map((dm, idx) => {
+        const id = String(dm.id || `duet-mark-${idx}-${dm.seconds ?? dm.time}`);
+        const mTime = typeof dm.seconds === "number" ? dm.seconds : typeof dm.time === "number" ? dm.time : 0;
+        const prev = existing.find((e) => e.id === id);
+        return {
+          id,
+          passId: prev?.passId || "screening-pass-1",
+          time: mTime,
+          anchorTime: prev?.anchorTime ?? mTime,
+          createdAt: prev?.createdAt || new Date().toISOString(),
+          mirror: false,
+          darken: false,
+          muted: false,
+          notes: dm.note || dm.notes || prev?.notes || "",
+          resolved: Boolean(dm.solved || dm.resolved || prev?.resolved),
+          colorHex: dm.colorHex || dm.hex || (dm.colorKey === "1" ? "#f43f5e" : dm.colorKey === "2" ? "#fbbf24" : dm.colorKey === "3" ? "#34d399" : dm.colorKey === "4" ? "#38bdf8" : "#e5a93c"),
+          colorKey: dm.colorKey || dm.key,
+          authorName: dm.authorName || prev?.authorName || "Reviewer",
+          authorAvatar: dm.authorAvatar || prev?.authorAvatar || "🎬",
+          smpte: dm.smpte || prev?.smpte || formatTimecode(mTime, curr.frameRate, curr.dropFrame),
+          thumbnail: dm.thumbnail || prev?.thumbnail,
+        };
+      });
+      return {
+        ...curr,
+        screeningMarks: updatedMarks,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    setDirty(true);
+  }, []);
+
+  const ensureStudioVideoReady = useCallback(() => {
+    try {
+      const iframe = document.querySelector(".duet-console-iframe") as HTMLIFrameElement | null;
+      const win = iframe?.contentWindow as any;
+      if (win) {
+        const duetTime = typeof win.video?.currentTime === "number" ? win.video.currentTime : time;
+        if (win.selectedFile) {
+          const selectedFile = win.selectedFile;
+          pendingFile.current = selectedFile;
+          const targetUrl = url && url.startsWith("blob:") ? url : URL.createObjectURL(selectedFile);
+          setUrl(targetUrl);
+          if (video.current) {
+            if (video.current.src !== targetUrl) {
+              video.current.src = targetUrl;
+            }
+            video.current.currentTime = duetTime;
+          }
+          if (projectRef.current && projectRef.current.shots.length === 0 && selectedFile.name) {
+            const fileName = selectedFile.name;
+            const baseName = fileName.replace(/\.[^/.]+$/, "");
+            void listProjects().then((savedProjects) => {
+              const matched = savedProjects.find(
+                (sp) =>
+                  sp.shots &&
+                  sp.shots.length > 0 &&
+                  (sp.videoMetadata?.filename === fileName || sp.name === baseName || sp.name === fileName)
+              );
+              if (matched) {
+                replace(matched);
+                pendingFile.current = selectedFile;
+                setUrl(targetUrl);
+                if (video.current) {
+                  video.current.src = targetUrl;
+                  video.current.currentTime = duetTime;
+                }
+                setIsInitialScanDismissed(true);
+                if (Array.isArray(win.markers) && win.markers.length > 0) {
+                  syncDuetMarkersToProject(win.markers);
+                }
+              }
+            }).catch(() => {});
+          }
+          if (projectRef.current) {
+            setIsInitialScanDismissed(true);
+            if (!projectRef.current.videoMetadata || !projectRef.current.videoMetadata.filename) {
+              setProject((p) => p ? {
+                ...p,
+                videoMetadata: {
+                  filename: selectedFile.name,
+                  duration: p.duration,
+                  width: win.video?.videoWidth || 1920,
+                  height: win.video?.videoHeight || 1080,
+                  size: selectedFile.size,
+                },
+                updatedAt: new Date().toISOString(),
+              } : p);
+            }
+          }
+        } else if (win.video?.src && !url) {
+          setUrl(win.video.src);
+          if (video.current) {
+            video.current.src = win.video.src;
+            video.current.currentTime = duetTime;
+          }
+        }
+        if (Array.isArray(win.markers) && win.markers.length > 0) {
+          syncDuetMarkersToProject(win.markers);
+        }
+        setIsInitialScanDismissed(true);
+      }
+    } catch (e) {
+      console.warn("Could not sync video/markers from Duet console:", e);
+    }
+  }, [url, time, syncDuetMarkersToProject]);
   const applyShotPatch = (projectId: string, shotId: string, patch: Partial<Shot>, human = false) => {
     if (human) recordHistory(project);
     revision.current++;
     setProject((currentProject) => {
-      if (!currentProject || currentProject.id !== projectId) return currentProject;
-      return {
+      if (!currentProject) return currentProject;
+      const hasShot = currentProject.shots.some((s) => s.id === shotId);
+      if (currentProject.id !== projectId && !hasShot) return currentProject;
+      const updatedProject = {
         ...currentProject,
         updatedAt: new Date().toISOString(),
         shots: currentProject.shots.map((item) => {
@@ -1664,6 +2134,10 @@ export default function App() {
           return updateShotTags(item, { ...safePatch, protectedFields });
         }),
       };
+      if (projectRef.current) {
+        projectRef.current = updatedProject;
+      }
+      return updatedProject;
     });
     setDirty(true);
     setSaveState("");
@@ -1780,55 +2254,94 @@ export default function App() {
   };
   return (
     <div className="app">
-      {project && (
-        <ProjectHeader
-          project={project}
-          dirty={dirty}
-          saveState={saveState}
-          historyState={historyState}
-          workspaceMode={workspaceMode}
-          onModeChange={(mode) => {
-            if (mode !== workspaceMode) {
-              video.current?.pause();
-              setPlaying(false);
-              stopAt.current = null;
-              playbackRange.current = null;
-            }
-            setWorkspaceMode(mode);
-          }}
-          onHome={() => {
-            if (!dirty || confirm("Return to home screen? Unsaved changes will be lost.")) {
-              setProject(null);
-            }
-          }}
-          onNew={() => {
-            if (
-              !dirty ||
-              confirm("Discard unsaved changes and create a project?")
-            )
-              replace(newProject());
-          }}
-          onOpen={() => void open()}
-          onSave={() => void save()}
-          onUndo={() => restoreHistory("undo")}
-          onRedo={() => restoreHistory("redo")}
-          onImportVideo={openVideoPicker}
-          onImportEdl={() => { setWorkspaceMode("studio"); edlInput.current?.click(); }}
-          onImportProject={() => backupInput.current?.click()}
-          onExportProject={exportProject}
-          onExportPDF={() => setReportModalOpen(true)}
-          onAnalyze={() => {
-            if (!project || !url) return;
-            if (project.shots.length > 0) {
-              setScanOptions(prev => ({ ...prev, cuts: false }));
-            }
-            setShowScanConfigModal(true);
-          }}
-          isAnalyzing={Boolean(analysisProgress)}
-          hasVideo={Boolean(url)}
-          onProjectNameChange={(name) => update({ name })}
-        />
-      )}
+      <ProjectHeader
+        project={project}
+        dirty={dirty}
+        saveState={saveState}
+        historyState={historyState}
+        workspaceMode={workspaceMode}
+        isScreeningSetup={isScreeningSetup}
+        onModeChange={(mode) => {
+          if (mode !== workspaceMode) {
+            video.current?.pause();
+            setPlaying(false);
+            stopAt.current = null;
+            playbackRange.current = null;
+          }
+          if (mode === "studio") {
+            ensureStudioVideoReady();
+            setIsInitialScanDismissed(true);
+            setTimeout(() => {
+              const iframe = document.querySelector(".duet-console-iframe") as HTMLIFrameElement | null;
+              const win = iframe?.contentWindow as any;
+              const curTime = typeof win?.video?.currentTime === "number" ? win.video.currentTime : time;
+              if (video.current) {
+                if (win?.selectedFile && (!video.current.src || !video.current.src.startsWith("blob:"))) {
+                  video.current.src = URL.createObjectURL(win.selectedFile);
+                }
+                video.current.currentTime = curTime;
+              }
+            }, 60);
+          }
+          setWorkspaceMode(mode);
+          if (mode === "screening" && (url || pendingFile.current) && !detectAbortRef.current && project.shots.length === 0) {
+            handleEnterScreeningRoom();
+          }
+        }}
+        onHome={() => {
+          if (!dirty || confirm("Return to home screen? Unsaved changes will be lost.")) {
+            replace(newProject());
+            setUrl("");
+            setIsScreeningRoomEntered(false);
+            setWorkspaceMode("screening");
+            const iframe = document.querySelector(".duet-console-iframe") as HTMLIFrameElement | null;
+            iframe?.contentWindow?.postMessage({ type: "SHOW_ONBOARDING" }, "*");
+          }
+        }}
+        onNew={() => {
+          if (
+            !dirty ||
+            confirm("Discard unsaved changes and create a project?")
+          ) {
+            replace(newProject());
+            setUrl("");
+            setIsScreeningRoomEntered(false);
+            const iframe = document.querySelector(".duet-console-iframe") as HTMLIFrameElement | null;
+            iframe?.contentWindow?.postMessage({ type: "SHOW_ONBOARDING" }, "*");
+          }
+        }}
+        onOpen={() => void open()}
+        onSave={() => void save()}
+        onUndo={() => restoreHistory("undo")}
+        onRedo={() => restoreHistory("redo")}
+        onImportVideo={openVideoPicker}
+        onImportEdl={() => { setWorkspaceMode("studio"); edlInput.current?.click(); }}
+        onImportProject={() => backupInput.current?.click()}
+        onExportProject={exportProject}
+        onExportPDF={() => setReportModalOpen(true)}
+        onAnalyze={() => {
+          if (!project || !url) return;
+          if (project.shots.length === 0) {
+            setIsInitialScanDismissed(false);
+            return;
+          }
+          if (project.shots.length > 0) {
+            setScanOptions(prev => ({ ...prev, cuts: false }));
+          }
+          setShowScanConfigModal(true);
+        }}
+        isAnalyzing={Boolean(analysisProgress || bgScanStatus)}
+        hasVideo={Boolean(url)}
+        onProjectNameChange={(name) => update({ name })}
+        onOpenSettings={() => setScannerSettingsOpen(true)}
+        onOpenProjector={() => {
+          const iframe = document.querySelector(".duet-console-iframe") as HTMLIFrameElement | null;
+          iframe?.contentWindow?.postMessage({ type: "OPEN_PROJECTOR" }, "*");
+        }}
+        showChangeFilm={isScreeningRoomEntered && (workspaceMode === "screening" || workspaceMode === "review")}
+        onChangeFilm={handleChangeFilm}
+        onExportEdlMarkers={handleExportEdlMarkers}
+      />
       <input
         hidden
         ref={videoInput}
@@ -1918,24 +2431,96 @@ export default function App() {
           <button onClick={() => setError("")}>Dismiss</button>
         </div>
       )}
-      {!project ? (
-        <WelcomeScreen
-          onNewProject={() => {
-            if (!dirty || confirm("Discard unsaved changes and create a project?")) {
-              replace(newProject());
-            }
-          }}
-          onOpenProject={() => {
-            backupInput.current?.click();
-          }}
-          onSelectProject={(p) => {
-            if (!dirty || confirm("Discard unsaved changes and open this project?")) {
+      <>
+        <div
+          style={workspaceMode === "screening" || workspaceMode === "review" ? { display: "contents" } : { display: "none" }}
+          aria-hidden={workspaceMode !== "screening" && workspaceMode !== "review"}
+        >
+          <DuetConsole
+            project={project}
+            videoUrl={url}
+            currentTime={time}
+            workspaceMode={workspaceMode}
+            onModeChange={(m) => {
+              if (m === "studio") {
+                ensureStudioVideoReady();
+                setIsInitialScanDismissed(true);
+                setTimeout(() => {
+                  const iframe = document.querySelector(".duet-console-iframe") as HTMLIFrameElement | null;
+                  const win = iframe?.contentWindow as any;
+                  const curTime = typeof win?.video?.currentTime === "number" ? win.video.currentTime : time;
+                  if (video.current) {
+                    if (win?.selectedFile && (!video.current.src || !video.current.src.startsWith("blob:"))) {
+                      video.current.src = URL.createObjectURL(win.selectedFile);
+                    }
+                    video.current.currentTime = curTime;
+                  }
+                }, 60);
+              }
+              setWorkspaceMode(m);
+            }}
+            onSelectProject={(p) => {
+              if (project?.id === p.id) return;
+              if (dirty) {
+                setFilmReplacementPending({ type: "project", project: p });
+                return;
+              }
               replace(p);
-            }
-          }}
-        />
-      ) : (
-        <>
+            }}
+            onSelectProjectId={async (id, projectName) => {
+              try {
+                let p = await getProject(id);
+                if (!p) {
+                  p = { ...newProject(), id, name: projectName || "New Film Cut" };
+                }
+                if (project?.id === p.id) return;
+                if (dirty) {
+                  setFilmReplacementPending({ type: "project", project: p });
+                  return;
+                }
+                replace(p);
+              } catch (e) {
+                if (dirty) {
+                  setFilmReplacementPending({
+                    type: "project",
+                    project: { ...newProject(), id, name: projectName || "New Film Cut" },
+                  });
+                }
+              }
+            }}
+            onNewProjectFromVideo={async (file, name) => {
+              const fileName = typeof file === "string" ? file.split("/").pop() || file : file.name;
+              const baseName = fileName.replace(/\.[^/.]+$/, "");
+              const currentP = projectRef.current;
+
+              // Check if same film
+              const isSameFilm = Boolean(
+                currentP && (
+                  currentP.videoMetadata?.filename === fileName ||
+                  currentP.name === baseName ||
+                  currentP.name === fileName ||
+                  (pendingFile.current && pendingFile.current.name === fileName)
+                )
+              );
+
+              if (isSameFilm) {
+                await executeNewProjectFromVideo(file, name);
+                return;
+              }
+
+              if (dirty) {
+                setFilmReplacementPending({ type: "file", file, name });
+                return;
+              }
+
+              await executeNewProjectFromVideo(file, name);
+            }}
+            onTimeSync={(t) => setTime(t)}
+            onEnterScreeningRoom={handleEnterScreeningRoom}
+            bgScanStatus={bgScanStatus}
+            onMarkersUpdate={syncDuetMarkersToProject}
+          />
+        </div>
           <div
             style={workspaceMode === "explore" ? { display: "contents" } : { display: "none" }}
             aria-hidden={workspaceMode !== "explore"}
@@ -1947,7 +2532,7 @@ export default function App() {
               mediaSignature={linkedMediaSignature}
               thumbnails={thumbnails}
               colorProfiles={colorProfiles}
-              activeWorkspace={workspaceMode}
+              activeWorkspace={workspaceMode === "explore" ? "explore" : "studio"}
               onUpdateProject={update}
               onLocateInStudio={(shotId, sourceTime, sequenceId) => {
                 setTime(sourceTime);
@@ -1971,10 +2556,37 @@ export default function App() {
             } as React.CSSProperties}
             aria-hidden={workspaceMode !== "studio"}
           >
-          {project.shots.length === 0 && url && !analysisProgress && (
-            <div className="scene-detect-modal unified-analysis-modal">
-              <section className="modal panel scene-detect-prompt unified-scan-panel" style={{ width: 660, maxWidth: "94vw" }}>
-                <div className="unified-scan-header">
+          {project.shots.length === 0 && url && !analysisProgress && !bgScanStatus && !isInitialScanDismissed && (
+            <div
+              className="scene-detect-modal unified-analysis-modal"
+              onClick={(e) => {
+                if (e.target === e.currentTarget) setIsInitialScanDismissed(true);
+              }}
+            >
+              <section className="modal panel scene-detect-prompt unified-scan-panel" style={{ width: 660, maxWidth: "94vw", position: "relative" }}>
+                <button
+                  type="button"
+                  className="modal-close-btn"
+                  onClick={() => setIsInitialScanDismissed(true)}
+                  title="Close (Esc)"
+                  style={{
+                    position: "absolute",
+                    top: 14,
+                    right: 14,
+                    background: "transparent",
+                    border: "none",
+                    color: "#94a3b8",
+                    fontSize: 20,
+                    cursor: "pointer",
+                    padding: "4px 8px",
+                    lineHeight: 1,
+                    borderRadius: 6,
+                  }}
+                >
+                  ✕
+                </button>
+
+                <div className="unified-scan-header" style={{ paddingRight: 40 }}>
                   <b>Film connected: {project.videoMetadata?.filename || "Video ready"}</b>
                   <small>Select an analysis preset or customize individual scan steps for this film.</small>
                 </div>
@@ -2099,6 +2711,19 @@ export default function App() {
                   <button onClick={() => edlInput.current?.click()}>
                     Import EDL
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setWorkspaceMode("screening")}
+                    title="Return to Duet Cinema Screening"
+                  >
+                    🎬 Screening
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsInitialScanDismissed(true)}
+                  >
+                    Dismiss
+                  </button>
                 </div>
               </section>
             </div>
@@ -2152,7 +2777,7 @@ export default function App() {
 
           {/* Persistent Studio tools and monitor; expanded layout uses the same mounted elements. */}
           <div
-            className={`top-stage ${leftCollapsed ? "left-is-collapsed" : ""} ${rightCollapsed || focusMode ? "right-is-collapsed" : ""}`}
+            className={`top-stage ${leftCollapsed ? "left-is-collapsed" : ""} ${rightCollapsed ? "right-is-collapsed" : ""}`}
             style={{
               height: `calc(${topHeightRatio * 100}% - 6px)`,
             }}
@@ -2348,6 +2973,7 @@ export default function App() {
                       onInspect={selectShot}
                       onConfirmShot={confirmCharacterShot}
                       onRemoveAppearance={removeCharacterAppearance}
+                      onReviewCharacters={reviewCharactersInShot}
                       onRangeChange={setSelectedRange}
                       onPlayRange={(range) => playRange(range, false)}
                       onSeek={seek}
@@ -2399,15 +3025,27 @@ export default function App() {
             <section
               className={`monitor panel ${mapExpanded ? "expanded-map-monitor" : ""}`}
             >
-              <div className="section-head">
-                <span className="eyebrow">
-                  PROGRAM FILM PREVIEW
+              <div className="section-head monitor-section-head">
+                <div className="monitor-head-left">
+                  <span className="eyebrow">
+                    PROGRAM FILM PREVIEW
+                  </span>
+                  {project.videoMetadata && (
+                    <span
+                      className="monitor-media-meta video-meta"
+                      title={`${project.videoMetadata.filename} · ${project.videoMetadata.width} × ${project.videoMetadata.height}${project.videoMetadata.duration != null ? ` · ${project.videoMetadata.duration.toFixed(2)}s` : ""}`}
+                    >
+                      <span className="monitor-meta-sep" aria-hidden="true">•</span>
+                      <span className="monitor-filename">{project.videoMetadata.filename}</span>
+                      <span className="monitor-res mono">{project.videoMetadata.width} × {project.videoMetadata.height}</span>
+                    </span>
+                  )}
                   {squintMode && (
                     <span className="monitor-squint-indicator" title={`Squint Mode Active (Depth Level ${squintLevel})`}>
                       😑 SQUINT L{squintLevel}
                     </span>
                   )}
-                </span>
+                </div>
                 <span className="muted">
                   {playing ? "PLAYING" : "PAUSED"} ·{" "}
                   {current
@@ -2418,14 +3056,36 @@ export default function App() {
               <div className="screen">
                 <video
                   ref={video}
-                  src={url || undefined}
+                  id="studioVideoPlayer"
+                  src={url || (pendingFile.current ? URL.createObjectURL(pendingFile.current) : undefined)}
+                  muted={workspaceMode !== "studio"}
                   playsInline
                   style={squintMode ? { filter: getSquintFilter(squintLevel) } : undefined}
                   onLoadedMetadata={() => {
                     const v = video.current!,
                       f = pendingFile.current;
+                    if (v.src && !url) {
+                      setUrl(v.src);
+                    }
                     v.currentTime = Math.min(time, Math.max(0, v.duration - 1 / project.frameRate));
-                    if (!f) return;
+                    if (!f) {
+                      if (!project.videoMetadata && v.duration) {
+                        update({
+                          duration: Math.max(
+                            v.duration,
+                            ...project.shots.map((s) => s.endSeconds),
+                          ),
+                          videoMetadata: {
+                            filename: project.name || "Video",
+                            duration: v.duration,
+                            width: v.videoWidth,
+                            height: v.videoHeight,
+                            size: 0,
+                          },
+                        });
+                      }
+                      return;
+                    }
                     update({
                       videoMetadata: {
                         filename: f.name,
@@ -2444,7 +3104,7 @@ export default function App() {
                     );
                   }}
                   onTimeUpdate={() => {
-                    if (scrubTarget.current === null)
+                    if (!playing && scrubTarget.current === null)
                       setTime(video.current?.currentTime || 0);
                   }}
                   onSeeked={() => {
@@ -2461,9 +3121,6 @@ export default function App() {
                   }}
                   onPause={() => {
                     setPlaying(false);
-                    if (video.current && scrubTarget.current === null) {
-                      setTime(video.current.currentTime);
-                    }
                   }}
                   onEnded={() => {
                     setPlaying(false);
@@ -2536,6 +3193,7 @@ export default function App() {
                       disabled={!url}
                       className={`play studio-play-btn ${playing ? "playing" : ""}`}
                       aria-label={playing ? "Pause" : "Play"}
+                      title={playing ? "Pause (Space)" : "Play (Space)"}
                       onClick={toggle}
                     >
                       {playing ? (
@@ -2581,28 +3239,6 @@ export default function App() {
                   <div className="studio-transport-actions">
                     <button
                       type="button"
-                      className={`studio-focus-btn ${focusMode ? "active" : ""}`}
-                      onClick={() => setFocusMode(!focusMode)}
-                      aria-pressed={focusMode}
-                      aria-label={focusMode ? "Exit Focus Mode" : "Enter Focus Mode"}
-                      title="Toggle Focus Mode (hides inspector for full width viewing)"
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>
-                      <span>Focus</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="studio-fullscreen-btn"
-                      onClick={() => {
-                        setIsFullscreenGraph(true);
-                      }}
-                      title="Fullscreen Graph Visualization (Score)"
-                      aria-label="Fullscreen Graph Visualization"
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
-                    </button>
-                    <button
-                      type="button"
                       className="studio-fullscreen-btn studio-video-fullscreen-btn"
                       onClick={() => {
                         video.current?.requestFullscreen?.().catch(() => {});
@@ -2612,29 +3248,6 @@ export default function App() {
                       aria-label="Fullscreen Video Playback"
                     >
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="2"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor"/></svg>
-                    </button>
-                    <button
-                      type="button"
-                      className={`monitor-squint-toggle ${squintMode ? "active" : ""}`}
-                      aria-pressed={squintMode}
-                      aria-label={squintMode ? `Squint Mode Active (Level ${squintLevel}) - Click to disable` : "Toggle Squint Mode"}
-                      title={squintMode ? `Squint Mode Active (Level ${squintLevel}) - Click to disable` : "Toggle Squint Mode"}
-                      onClick={() => setSquintMode(!squintMode)}
-                    >
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <path d="M2 12s3.5-5 10-5 10 5 10 5-3.5 5-10 5-10-5-10-5z" />
-                        <line x1="2" y1="12" x2="22" y2="12" />
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      className="studio-expand-map-toggle-btn"
-                      onClick={toggleExpandedMap}
-                      title={mapExpanded ? "Restore Studio workspace" : "Expand map (hide upper workspace)"}
-                      aria-label="Expand map"
-                    >
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
-                      <span>Expand map</span>
                     </button>
                   </div>
                 </div>
@@ -2654,6 +3267,7 @@ export default function App() {
                     disabled={!url}
                     className="play"
                     aria-label={playing ? "Pause" : "Play"}
+                    title={playing ? "Pause (Space)" : "Play (Space)"}
                     onClick={toggle}
                   >
                     {playing ? "Ⅱ" : "▶"}
@@ -2709,35 +3323,27 @@ export default function App() {
                     value={volume}
                     onChange={(e) => setVolume(Number(e.target.value))}
                   />
-                </div>
-              )}
-              <div className="video-meta">
-                <span>
-                  {project.videoMetadata
-                    ? `${project.videoMetadata.filename} · ${project.videoMetadata.width} × ${project.videoMetadata.height}${project.videoMetadata.duration != null ? ` · ${project.videoMetadata.duration.toFixed(2)}s` : ""}`
-                    : "No video connected"}
-                </span>
-                <span className="keyboard-hint">SPACE TO PLAY / PAUSE</span>
-                {workspaceMode === "studio" && (
                   <button
                     type="button"
-                    className="studio-inspect-trigger-btn"
-                    onClick={() => setInspectorDrawerOpen(true)}
-                    title="Open Shot Inspector drawer"
+                    className="btn-transport-nav"
+                    aria-label="Fullscreen Video Playback"
+                    title="Fullscreen Video Playback"
+                    disabled={!url}
+                    onClick={() => {
+                      video.current?.requestFullscreen?.().catch(() => {});
+                    }}
                   >
-                    <span>Inspect Shot</span>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                      <polyline points="15 3 21 3 21 9" />
-                      <line x1="10" y1="14" x2="21" y2="3" />
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <rect x="2" y="2" width="20" height="20" rx="2" />
+                      <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" />
                     </svg>
                   </button>
-                )}
-              </div>
+                </div>
+              )}
             </section>
 
-            {/* COLUMN SPLITTER 2: Center Panel ↔ Right Panel (review/map modes only) */}
-            {workspaceMode !== "studio" && (
+            {/* COLUMN SPLITTER 2: Center Panel ↔ Right Panel */}
+            {!mapExpanded && (
               <ResizeHandle
                 direction="col"
                 className="resize-handle-right"
@@ -2750,8 +3356,8 @@ export default function App() {
               />
             )}
 
-            {/* Studio inspector — now only in non-studio modes; studio uses the overlay drawer */}
-            {!mapExpanded && !rightCollapsed && !focusMode && workspaceMode !== "studio" && (
+            {/* Right Panel: Shot Inspector in Studio, Review, etc. */}
+            {!mapExpanded && !rightCollapsed && (
               <ShotInspector
                 shot={shot}
                 project={project}
@@ -2768,8 +3374,9 @@ export default function App() {
                 onConfirmAndNext={confirmAndNext}
                 onMarkUncertain={markUncertainAndNext}
                 onReviewCharacters={reviewCharactersInShot}
+                onToggleCollapse={toggleRightCollapse}
                 autoAdvance={autoAdvance}
-                isStudio={true}
+                isStudio={workspaceMode === "studio"}
               />
             )}
 
@@ -2797,6 +3404,9 @@ export default function App() {
           <ResizeHandle
             direction="row"
             className="resize-handle-middle"
+            collapseIcon="up"
+            isCollapsed={mapExpanded}
+            onToggleCollapse={toggleExpandedMap}
             onDrag={(delta) => {
               const workspaceHeight = workspaceRef.current?.clientHeight || 800;
               resizeTopPixels(delta, workspaceHeight);
@@ -2842,7 +3452,7 @@ export default function App() {
               range={selectedRange}
               onRangeChange={(r) => {
                 setSelectedRange(r);
-                if (r && deckTab !== "rhythm") {
+                if (r && r.start !== undefined && r.end !== undefined && r.end > r.start && deckTab !== "rhythm") {
                   setDeckTab("sequence");
                   if (workspaceMode === "studio") {
                     setStudioDrawerOpen(true);
@@ -2873,6 +3483,8 @@ export default function App() {
               isDmeSeparating={isDmeSeparating}
               dmeSeparationStatus={dmeSeparationStatus}
               hasVideo={Boolean(pendingFile.current || project.videoMetadata)}
+              url={url}
+              onUpdateCutAnnotations={handleUpdateCutAnnotations}
               workspaceMode={workspaceMode}
               layers={mapLayers}
               onLayersChange={setMapLayers}
@@ -3035,7 +3647,6 @@ export default function App() {
           </footer>
         </main>
         </>
-      )}
 
       {project && reportModalOpen && (
         <>
@@ -3201,35 +3812,70 @@ export default function App() {
         </div>
       )}
 
-      {bgScanStatus && (
-        <div className="bg-scan-bar">
-          <div className="bg-scan-info">
-            <span className="spinner-dot" />
-            <b>Background Analysis Active</b>
-            {bgScanStatus.motionActive && (
-              <span className="bg-scan-chip">
-                Motion: {bgScanStatus.motionProgress}%
-              </span>
-            )}
-            {bgScanStatus.stemsActive && (
-              <span className="bg-scan-chip">
-                Stems: {bgScanStatus.stemsStatusText || "Processing..."}
-              </span>
-            )}
-            <small className="muted" style={{ marginLeft: 8 }}>Timeline and editing remain interactive.</small>
+      <ScannerSettingsModal
+        isOpen={scannerSettingsOpen}
+        onClose={() => setScannerSettingsOpen(false)}
+      />
+
+      {filmReplacementPending && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="unsaved-modal-title">
+          <div className="modal-dialog-panel unsaved-decision-modal" style={{ padding: "24px", maxWidth: "460px" }}>
+            <h3 id="unsaved-modal-title" className="modal-title" style={{ fontSize: "16px", marginBottom: "12px", color: "#f3f4f6" }}>
+              Save changes before replacing film?
+            </h3>
+            <p style={{ color: "#9ca3af", fontSize: "13px", lineHeight: "1.5", margin: "0 0 20px 0" }}>
+              You have unsaved changes in <strong style={{ color: "#e5e7eb" }}>{project?.name || "current cut"}</strong>. Would you like to save your work before switching to another film?
+            </p>
+            <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                className="header-action-btn btn-cancel-replacement"
+                style={{ padding: "8px 14px", borderRadius: "6px", background: "#21262d", border: "1px solid #363c46", color: "#c9d1d9", cursor: "pointer", fontSize: "13px" }}
+                onClick={() => {
+                  setFilmReplacementPending(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="header-action-btn btn-discard-replacement"
+                style={{ padding: "8px 14px", borderRadius: "6px", background: "#3b1e22", border: "1px solid #7c2d36", color: "#fca5a5", cursor: "pointer", fontSize: "13px" }}
+                onClick={async () => {
+                  const pending = filmReplacementPending;
+                  setFilmReplacementPending(null);
+                  if (pending.type === "file") {
+                    await executeNewProjectFromVideo(pending.file, pending.name);
+                  } else if (pending.type === "project") {
+                    replace(pending.project);
+                  }
+                }}
+              >
+                Discard &amp; Continue
+              </button>
+              <button
+                type="button"
+                className="header-action-btn btn-save-replacement"
+                style={{ padding: "8px 14px", borderRadius: "6px", background: "#d97706", border: "1px solid #b45309", color: "#fff", fontWeight: "600", cursor: "pointer", fontSize: "13px" }}
+                onClick={async () => {
+                  const pending = filmReplacementPending;
+                  await save();
+                  setFilmReplacementPending(null);
+                  if (pending.type === "file") {
+                    await executeNewProjectFromVideo(pending.file, pending.name);
+                  } else if (pending.type === "project") {
+                    replace(pending.project);
+                  }
+                }}
+              >
+                Save &amp; Continue
+              </button>
+            </div>
           </div>
-          <button
-            type="button"
-            className="bg-scan-cancel-btn"
-            onClick={() => {
-              detectAbortRef.current?.abort();
-              setBgScanStatus(null);
-            }}
-          >
-            Cancel
-          </button>
         </div>
       )}
+
+
 
       {project && analysisProgress && (
         <div className="scene-detect-modal unified-analysis-modal">
@@ -3368,8 +4014,36 @@ export default function App() {
               </div>
             )}
 
-            <div className="modal-actions">
+            <div className="modal-actions" style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
               <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  if (analysisProgress) {
+                    setBgScanStatus({
+                      active: true,
+                      stage: analysisProgress.stage,
+                      stageLabel: analysisProgress.stage === "cuts" ? "Cuts" :
+                                 analysisProgress.stage === "framing" ? "Framing" :
+                                 analysisProgress.stage === "characters" ? "Cast" :
+                                 analysisProgress.stage === "dialogue" ? "Dialogue" :
+                                 analysisProgress.stage === "loudness" ? "Loudness" : "Scan",
+                      progress: analysisProgress.overallPercent,
+                      stageProgress: Math.min(100, Math.round(analysisProgress.overallPercent)),
+                      statusText: analysisProgress.statusText,
+                      motionActive: analysisProgress.options.motion,
+                      motionProgress: 0,
+                      stemsActive: analysisProgress.options.stems,
+                      stemsStatusText: "",
+                    });
+                    setAnalysisProgress(null);
+                  }
+                }}
+              >
+                Minimize to Background
+              </button>
+              <button
+                type="button"
                 onClick={() => {
                   detectAbortRef.current?.abort();
                 }}
@@ -3399,6 +4073,7 @@ export default function App() {
           waveform={waveform}
           speechAnalysis={showSpeechOverlay && isSpeechAnalysisValid(project.speechAnalysis, linkedMediaSignature) ? project.speechAnalysis : undefined}
           loudnessAnalysis={isLoudnessAnalysisValid(project.loudnessAnalysis, linkedMediaSignature) ? project.loudnessAnalysis : undefined}
+          url={url}
           onClose={() => setIsFullscreenGraph(false)}
         />
       )}

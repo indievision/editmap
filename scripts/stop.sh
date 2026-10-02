@@ -11,8 +11,10 @@ if [ -f logs/editmap.pid ]; then
   rm -f logs/editmap.pid
 fi
 
-# Kill any lingering processes on ports 5173 (Vite) and 8000 (Python CV)
+# Kill any lingering processes on ports 5173/5174 (Vite), 8000 (Python CV), and 3000 (DUET)
 lsof -ti :5173 | xargs kill -9 2>/dev/null || true
+lsof -ti :5174 | xargs kill -9 2>/dev/null || true
 lsof -ti :8000 | xargs kill -9 2>/dev/null || true
+lsof -ti :3000 | xargs kill -9 2>/dev/null || true
 
 echo "EditMap has stopped."

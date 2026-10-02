@@ -22,6 +22,7 @@ export const FramingDrawer = memo(function FramingDrawer({
   time,
   selected,
   onSelect,
+  onSeek,
   onClose,
   variant = "drawer",
   initialSubsection = "distribution",
@@ -68,55 +69,49 @@ export const FramingDrawer = memo(function FramingDrawer({
   return (
     <section className={`framing-panel panel ${variant === "drawer" ? "framing-drawer" : ""}`}>
       {variant === "drawer" ? (
-        <>
-          <div className="framing-drawer-head">
-            <h2 className="framing-drawer-title">Framing</h2>
-            {onClose && (
-              <button
-                type="button"
-                className="studio-drawer-close-btn framing-drawer-close-btn"
-                onClick={onClose}
-                title="Close framing drawer (Esc)"
-                aria-label="Close framing drawer"
-              >
-                ✕
-              </button>
-            )}
+        <div className="rhythm-tabs drawer-subtabs framing-tabs" role="tablist" aria-label="Framing views">
+          <div className="rhythm-subtabs-wrap">
+            <button
+              type="button"
+              role="tab"
+              id="framing-subtab-distribution"
+              aria-controls="framing-panel-distribution"
+              aria-selected={tab === "distribution"}
+              aria-pressed={tab === "distribution"}
+              className={`rhythm-subtab-btn framing-subtab-btn ${tab === "distribution" ? "active" : ""}`}
+              onClick={(e) => handleSelectTab("distribution", e)}
+              onKeyDown={(e) => handleKeyDown(e, "distribution")}
+            >
+              Distribution
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="framing-subtab-progression"
+              aria-controls="framing-panel-progression"
+              aria-selected={tab === "progression"}
+              aria-pressed={tab === "progression"}
+              className={`rhythm-subtab-btn framing-subtab-btn ${tab === "progression" ? "active" : ""}`}
+              onClick={(e) => handleSelectTab("progression", e)}
+              onKeyDown={(e) => handleKeyDown(e, "progression")}
+            >
+              Progression
+            </button>
           </div>
-          <div className="rhythm-tabs drawer-subtabs framing-tabs" role="tablist" aria-label="Framing views">
-            <div className="rhythm-subtabs-wrap">
-              <button
-                type="button"
-                role="tab"
-                id="framing-subtab-distribution"
-                aria-controls="framing-panel-distribution"
-                aria-selected={tab === "distribution"}
-                aria-pressed={tab === "distribution"}
-                className={`rhythm-subtab-btn framing-subtab-btn ${tab === "distribution" ? "active" : ""}`}
-                onClick={(e) => handleSelectTab("distribution", e)}
-                onKeyDown={(e) => handleKeyDown(e, "distribution")}
-              >
-                Distribution
-              </button>
-              <button
-                type="button"
-                role="tab"
-                id="framing-subtab-progression"
-                aria-controls="framing-panel-progression"
-                aria-selected={tab === "progression"}
-                aria-pressed={tab === "progression"}
-                className={`rhythm-subtab-btn framing-subtab-btn ${tab === "progression" ? "active" : ""}`}
-                onClick={(e) => handleSelectTab("progression", e)}
-                onKeyDown={(e) => handleKeyDown(e, "progression")}
-              >
-                Progression
-              </button>
-            </div>
-          </div>
-        </>
+          {onClose && (
+            <button
+              type="button"
+              className="studio-drawer-close-btn framing-drawer-close-btn"
+              onClick={onClose}
+              title="Close framing drawer (Esc)"
+              aria-label="Close framing drawer"
+            >
+              ✕
+            </button>
+          )}
+        </div>
       ) : (
         <div className="rhythm-tabs framing-tabs" aria-label="Framing views">
-          <h2>Framing</h2>
           <div className="rhythm-tabs-nav">
             <div
               ref={scrollRef}
@@ -175,6 +170,7 @@ export const FramingDrawer = memo(function FramingDrawer({
           time={time}
           selected={selected}
           onSelect={onSelect}
+          onSeek={onSeek}
         />
       </div>
     </section>

@@ -129,6 +129,35 @@ export default function EChart({
     const candidate = Number.isFinite(chartTime) && chartTime >= 0 ? chartTime : fallback;
     if (Number.isFinite(candidate)) onSeek(Math.max(0, Math.min(duration ?? candidate, candidate)));
   };
+
+  const isDraggingRef = useRef(false);
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || !onSeek) return;
+    isDraggingRef.current = true;
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // ignore
+    }
+    seekFromPointer(event.clientX, event.clientY, event.currentTarget);
+  };
+
+  const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingRef.current || !onSeek) return;
+    seekFromPointer(event.clientX, event.clientY, event.currentTarget);
+  };
+
+  const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingRef.current) return;
+    isDraggingRef.current = false;
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      // ignore
+    }
+  };
+
   return (
     <div
       ref={host}
@@ -139,7 +168,11 @@ export default function EChart({
       aria-valuemin={onSeek ? 0 : undefined}
       aria-valuemax={onSeek ? duration : undefined}
       aria-valuenow={onSeek ? currentTime : undefined}
-      onClickCapture={(event) => seekFromPointer(event.clientX, event.clientY, event.currentTarget)}
+      style={{ touchAction: onSeek ? "none" : undefined, userSelect: onSeek ? "none" : undefined }}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
       onKeyDown={(event) => {
         if (!onSeek || currentTime === undefined) return;
         let next = currentTime;

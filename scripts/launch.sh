@@ -11,29 +11,32 @@ export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/
 # Ensure log directory
 mkdir -p logs
 
-# Check if Vite is already running on port 5173
-if lsof -i :5173 >/dev/null 2>&1 || curl -s http://127.0.0.1:5173 >/dev/null 2>&1; then
-  echo "EditMap is already running. Opening browser..."
-  open "http://127.0.0.1:5173"
+# Check if EditMap process is already running via PID file
+if [ -f logs/editmap.pid ] && kill -0 $(cat logs/editmap.pid) 2>/dev/null; then
+  echo "EditMap is already running (PID $(cat logs/editmap.pid))."
+  # Find port from log or default to 5174/5173
+  PORT=$(grep -oE 'http://127\.0\.0\.1:[0-9]+' logs/editmap.log | tail -n 1)
+  if [ -n "$PORT" ]; then
+    open "$PORT"
+  else
+    open "http://127.0.0.1:5173"
+  fi
   exit 0
 fi
 
-echo "Starting EditMap and local AI services..."
+echo "Starting EditMap and local AI / screening services..."
 
-# Start EditMap via npm in the background with nohup
-nohup npm run dev > logs/editmap.log 2>&1 &
-APP_PID=$!
-echo $APP_PID > logs/editmap.pid
+# Start EditMap via python subprocess with a completely detached new session
+python3 -c "import subprocess; p = subprocess.Popen(['npm', 'run', 'dev'], stdout=open('logs/editmap.log', 'w'), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True); open('logs/editmap.pid', 'w').write(str(p.pid))"
 
-# Wait up to 15 seconds for Vite to come online
+# Wait up to 15 seconds for Vite to output its Local URL
 for i in {1..15}; do
-  if curl -s http://127.0.0.1:5173 >/dev/null 2>&1; then
-    echo "EditMap is ready! Opening in browser..."
-    open "http://127.0.0.1:5173"
+  PORT=$(grep -oE 'http://127\.0\.0\.1:[0-9]+' logs/editmap.log | tail -n 1)
+  if [ -n "$PORT" ]; then
+    echo "EditMap is ready at $PORT!"
     exit 0
   fi
   sleep 1
 done
 
-# Fallback open
-open "http://127.0.0.1:5173"
+echo "EditMap launched in background. Check logs/editmap.log for details."

@@ -17,6 +17,13 @@ from shot_engine import ShotBoundaryDetector
 from audio_engine import DmeSeparator
 from speech_engine import SpeechEngine
 from loudness_engine import LoudnessEngine
+from scanner_manager import (
+    ScannersStatusResponse,
+    ScannerUpdateRequest,
+    ScannerUpdateResponse,
+    collect_scanner_engines,
+    perform_scanner_update,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -251,11 +258,32 @@ class FocalPointResponse(BaseModel):
     y: float
     type: str
     confidence: float
+    gazeDirection: Optional[str] = None
+    sharpness: Optional[float] = None
+    areaPercent: Optional[float] = None
+
+
+class GazeMomentumResponse(BaseModel):
+    vx: float
+    vy: float
+    velocity: int
+    alignment: str
+    cosineScore: Optional[float] = None
+    trajectoryAngle: Optional[int] = None
+
+
+class DepthShiftResponse(BaseModel):
+    outgoingSharpness: float
+    incomingSharpness: float
+    shift: str
+    magnitude: str
 
 
 class AnalyzeEyeTraceRequest(BaseModel):
     outgoingImage: str = Field(..., max_length=8 * 1024 * 1024, description="Base64 encoded outgoing video frame")
     incomingImage: str = Field(..., max_length=8 * 1024 * 1024, description="Base64 encoded incoming video frame")
+    prevOutgoingImage: Optional[str] = Field(None, max_length=8 * 1024 * 1024, description="Optional previous frame of outgoing shot for optical flow momentum")
+    outgoingFrames: Optional[List[str]] = Field(default_factory=list, description="Optional trailing frames of outgoing shot for multi-frame temporal trajectory")
 
 
 class AnalyzeEyeTraceResponse(BaseModel):
@@ -265,6 +293,12 @@ class AnalyzeEyeTraceResponse(BaseModel):
     jumpDistancePercent: int
     rating: str
     screenDirection: str
+    momentum: Optional[GazeMomentumResponse] = None
+    axisClash: Optional[bool] = False
+    axisClashDetail: Optional[str] = None
+    characterReplacement: Optional[bool] = False
+    characterReplacementDetail: Optional[str] = None
+    depthShift: Optional[DepthShiftResponse] = None
 
 
 class AnalyzeMotionRequest(BaseModel):
@@ -330,6 +364,41 @@ def health_check():
             "shots": {"status": "ready", "model": "transnetv2", "backend": shot_boundary_detector.model.backend or "heuristic"},
         }
     }
+
+
+@app.get("/api/scanners/status", response_model=ScannersStatusResponse)
+def get_scanners_status():
+    engines = collect_scanner_engines(
+        shot_classifier,
+        character_recognizer,
+        dme_separator,
+        speech_engine,
+        loudness_engine,
+        shot_boundary_detector,
+    )
+    import datetime
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    return ScannersStatusResponse(
+        service="editmap-cv-engine",
+        version="1.1.0",
+        updateAvailable=False,
+        latestVersion="1.1.0",
+        lastChecked=now_iso,
+        engines=engines,
+    )
+
+
+@app.post("/api/scanners/update", response_model=ScannerUpdateResponse)
+async def update_scanners(req: Optional[ScannerUpdateRequest] = None):
+    return await run_in_threadpool(
+        perform_scanner_update,
+        shot_classifier=shot_classifier,
+        character_recognizer=character_recognizer,
+        dme_separator=dme_separator,
+        speech_engine=speech_engine,
+        loudness_engine=loudness_engine,
+        shot_boundary_detector=shot_boundary_detector,
+    )
 
 
 @app.post("/api/detect-shots", response_model=DetectShotsResponse)
@@ -556,6 +625,14 @@ def analyze_eye_trace(req: AnalyzeEyeTraceRequest):
     try:
         outgoing_img = decode_base64_image(req.outgoingImage)
         incoming_img = decode_base64_image(req.incomingImage)
+        prev_outgoing_img = decode_base64_image(req.prevOutgoingImage) if req.prevOutgoingImage else None
+        outgoing_frames = []
+        if req.outgoingFrames:
+            for f in req.outgoingFrames[:4]:
+                try:
+                    outgoing_frames.append(decode_base64_image(f))
+                except Exception:
+                    pass
     except Exception as e:
         logger.error("Failed to decode images for eye-trace analysis: %s", e)
         raise HTTPException(
@@ -564,7 +641,12 @@ def analyze_eye_trace(req: AnalyzeEyeTraceRequest):
         )
 
     try:
-        result = eye_trace_analyzer.analyze_cut(outgoing_img, incoming_img)
+        result = eye_trace_analyzer.analyze_cut(
+            outgoing_img,
+            incoming_img,
+            prev_outgoing_img=prev_outgoing_img,
+            outgoing_frames=outgoing_frames if outgoing_frames else None,
+        )
         return AnalyzeEyeTraceResponse(**result)
     except ModelUnavailableError:
         raise

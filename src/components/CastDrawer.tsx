@@ -43,6 +43,7 @@ export interface CastDrawerProps {
   onInspect: (shot: Shot) => void;
   onConfirmShot: (shotId: string) => void;
   onRemoveAppearance: (shotId: string, memberId: string) => void;
+  onReviewCharacters?: (shotId: string, memberIds: string[]) => void;
   onRangeChange: (range?: PresenceRange) => void;
   onPlayRange: (range: PresenceRange) => void;
   onSeek: (time: number) => void;
@@ -66,6 +67,7 @@ export default function CastDrawer({
   onInspect,
   onConfirmShot,
   onRemoveAppearance,
+  onReviewCharacters,
   onRangeChange,
   onPlayRange,
   onSeek,
@@ -106,6 +108,81 @@ export default function CastDrawer({
   }, [shot?.id]);
 
   const timelineDuration = Math.max(1, project.duration || 1);
+
+  // Pointer-capture drag seeking for cast distribution chart
+  const isDraggingChartRef = useRef(false);
+  const dragStartPosRef = useRef<{ x: number; y: number } | null>(null);
+  const hasDraggedChartRef = useRef(false);
+
+  const seekFromChartClientX = useCallback(
+    (clientX: number, chartEl: HTMLElement) => {
+      const rect = chartEl.getBoundingClientRect();
+      const clickX = clientX - rect.left - 70; // 70px left gutter for names
+      const trackWidth = rect.width - 70;
+      if (trackWidth > 0 && timelineDuration > 0) {
+        const seekRatio = Math.max(0, Math.min(1, clickX / trackWidth));
+        onSeek(seekRatio * timelineDuration);
+      }
+    },
+    [onSeek, timelineDuration],
+  );
+
+  const handleChartPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest(".distribution-row-name")) return;
+
+    isDraggingChartRef.current = true;
+    hasDraggedChartRef.current = false;
+    dragStartPosRef.current = { x: e.clientX, y: e.clientY };
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+    seekFromChartClientX(e.clientX, e.currentTarget);
+  };
+
+  const handleChartPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingChartRef.current) return;
+    if (dragStartPosRef.current) {
+      const dist = Math.hypot(e.clientX - dragStartPosRef.current.x, e.clientY - dragStartPosRef.current.y);
+      if (dist > 3) hasDraggedChartRef.current = true;
+    }
+    seekFromChartClientX(e.clientX, e.currentTarget);
+  };
+
+  const handleChartPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingChartRef.current) return;
+    isDraggingChartRef.current = false;
+    dragStartPosRef.current = null;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+  };
+
+  // Check if active selected character is present in currently selected shot
+  const isMemberInCurrentShot = useMemo(() => {
+    if (!shot || !selectedMemberObj) return false;
+    const manual = shot.characterAnalysis?.manualMemberIds;
+    if (manual) return manual.includes(selectedMemberObj.id);
+    const intervals = shot.characterAnalysis?.intervals ?? [];
+    return intervals.some((i) => i.memberId === selectedMemberObj.id);
+  }, [shot, selectedMemberObj]);
+
+  const handleToggleCurrentShotAssignment = () => {
+    if (!shot || !selectedMemberObj || !onReviewCharacters) return;
+    const currentManual = shot.characterAnalysis?.manualMemberIds;
+    const currentIds = currentManual ?? [
+      ...new Set(shot.characterAnalysis?.intervals.map((i) => i.memberId) ?? []),
+    ];
+    const nextIds = isMemberInCurrentShot
+      ? currentIds.filter((id) => id !== selectedMemberObj.id)
+      : [...currentIds, selectedMemberObj.id];
+    onReviewCharacters(shot.id, nextIds);
+  };
 
   // Map of shotId -> set of cast memberIds present in that shot
   const shotsCastMap = useMemo(() => {
@@ -465,15 +542,11 @@ export default function CastDrawer({
                 {/* Interactive Multi-Row Timeline Chart */}
                 <div
                   className="cast-distribution-chart"
-                  onClick={(e) => {
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    const clickX = e.clientX - rect.left - 70; // 70px left gutter for names
-                    const trackWidth = rect.width - 70;
-                    if (clickX >= 0 && trackWidth > 0) {
-                      const seekRatio = Math.max(0, Math.min(1, clickX / trackWidth));
-                      onSeek(seekRatio * timelineDuration);
-                    }
-                  }}
+                  onPointerDown={handleChartPointerDown}
+                  onPointerMove={handleChartPointerMove}
+                  onPointerUp={handleChartPointerUp}
+                  onPointerCancel={handleChartPointerUp}
+                  style={{ userSelect: "none", touchAction: "none" }}
                 >
                   {/* Time Ruler Ticks */}
                   <div className="distribution-ruler">
@@ -544,6 +617,7 @@ export default function CastDrawer({
                                   width: `${spanWidth}%`,
                                 }}
                                 onClick={(e) => {
+                                  if (hasDraggedChartRef.current) return;
                                   e.stopPropagation();
                                   setSelectedShotId(oShot.id);
                                   onInspect(oShot);
@@ -632,6 +706,7 @@ export default function CastDrawer({
                                     color: memberColor,
                                   }}
                                   onClick={(e) => {
+                                    if (hasDraggedChartRef.current) return;
                                     e.stopPropagation();
                                     onSelect(member.id);
                                     setSelectedShotId(seg.shot.id);
@@ -738,6 +813,21 @@ export default function CastDrawer({
                   >
                     Reference +
                   </button>
+
+                  {shot && selectedMemberObj && onReviewCharacters && (
+                    <button
+                      type="button"
+                      className={`cast-link-btn ${isMemberInCurrentShot ? "active-in-shot" : ""}`}
+                      onClick={handleToggleCurrentShotAssignment}
+                      title={
+                        isMemberInCurrentShot
+                          ? `Remove ${selectedMemberObj.name} from Shot ${shot.index}`
+                          : `Assign ${selectedMemberObj.name} to Shot ${shot.index}`
+                      }
+                    >
+                      {isMemberInCurrentShot ? `In Shot ${shot.index} ✓` : `+ Add to Shot ${shot.index}`}
+                    </button>
+                  )}
 
                   <button
                     type="button"

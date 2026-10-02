@@ -8,16 +8,20 @@ export interface StudioToolbarProps {
   onToggleDrawer?: () => void;
   expanded?: boolean;
   onSplit: () => void;
-  onMark: () => void;
+  onMerge?: () => void;
   snapToCuts: boolean;
   onToggleSnap: () => void;
+  onMarkIn?: () => void;
+  onMarkOut?: () => void;
+  onClearInOut?: () => void;
+  onMark: () => void;
   squintMode: boolean;
   onToggleSquint: (active?: boolean) => void;
+  onFit: () => void;
   zoom: number;
   onZoomChange: (zoom: number) => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
-  onFit: () => void;
   onFullscreen?: () => void;
 }
 
@@ -57,7 +61,7 @@ const ToolbarButton = memo(function ToolbarButton({
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
       setShowTooltip(true);
-    }, 800);
+    }, 500);
   }, []);
 
   const handlePointerLeave = useCallback(() => {
@@ -79,6 +83,19 @@ const ToolbarButton = memo(function ToolbarButton({
     }
     setShowTooltip(false);
   }, []);
+
+  useEffect(() => {
+    if (!showTooltip) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setShowTooltip(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [showTooltip]);
 
   useEffect(() => {
     return () => {
@@ -120,159 +137,24 @@ const ToolbarButton = memo(function ToolbarButton({
   );
 });
 
-const ANALYTICAL_TOOLS: Array<{
-  id: StudioToolTab;
-  label: string;
-  icon: React.ReactNode;
-}> = [
-  {
-    id: "rhythm",
-    label: "Rhythm",
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-        <rect x="3" y="11" width="2.8" height="10" rx="1.4" />
-        <rect x="7.3" y="6" width="2.8" height="15" rx="1.4" />
-        <rect x="11.6" y="2" width="2.8" height="19" rx="1.4" />
-        <rect x="15.9" y="8" width="2.8" height="13" rx="1.4" />
-        <rect x="20.2" y="13" width="2.8" height="8" rx="1.4" />
-      </svg>
-    ),
-  },
-  {
-    id: "framing",
-    label: "Framing",
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <path d="M4 8V4h4" />
-        <path d="M20 8V4h-4" />
-        <path d="M4 16v4h4" />
-        <path d="M20 16v4h-4" />
-      </svg>
-    ),
-  },
-  {
-    id: "sequence",
-    label: "Structure",
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-        <line x1="3" y1="6" x2="21" y2="6" strokeOpacity="0.4" />
-        <rect x="7" y="4" width="10" height="4" rx="2" fill="currentColor" stroke="none" />
-        <line x1="3" y1="12" x2="21" y2="12" strokeOpacity="0.4" />
-        <rect x="5" y="10" width="10" height="4" rx="2" fill="currentColor" stroke="none" />
-        <line x1="3" y1="18" x2="21" y2="18" strokeOpacity="0.4" />
-        <rect x="9" y="16" width="10" height="4" rx="2" fill="currentColor" stroke="none" />
-      </svg>
-    ),
-  },
-  {
-    id: "sound",
-    label: "Sound",
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-        <rect x="3" y="10" width="2" height="4" rx="1" />
-        <rect x="6.5" y="7" width="2" height="10" rx="1" />
-        <rect x="10" y="4" width="2" height="16" rx="1" />
-        <rect x="12" y="3" width="2" height="18" rx="1" />
-        <rect x="15.5" y="7" width="2" height="10" rx="1" />
-        <rect x="19" y="10" width="2" height="4" rx="1" />
-      </svg>
-    ),
-  },
-  {
-    id: "cuts",
-    label: "Cuts",
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <rect x="3" y="3" width="18" height="18" rx="2" />
-        <line x1="3" y1="8" x2="21" y2="8" />
-        <line x1="3" y1="16" x2="21" y2="16" />
-        <line x1="8" y1="3" x2="8" y2="8" />
-        <line x1="16" y1="3" x2="16" y2="8" />
-        <line x1="8" y1="16" x2="8" y2="21" />
-        <line x1="16" y1="16" x2="16" y2="21" />
-        <line x1="2" y1="22" x2="22" y2="2" stroke="currentColor" strokeWidth="2" strokeDasharray="3 2" />
-      </svg>
-    ),
-  },
-  {
-    id: "cast",
-    label: "Cast",
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-        <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
-        <path d="M4.5 10c1.38 0 2.5-1.12 2.5-2.5S5.88 5 4.5 5 2 6.12 2 7.5 3.12 10 4.5 10zm0 1.5C2.83 11.5 0 12.34 0 14v1.5h4.15A5.94 5.94 0 0 1 4 14c0-.88.18-1.71.5-2.5z" opacity="0.75" />
-        <path d="M19.5 10c1.38 0 2.5-1.12 2.5-2.5S20.88 5 19.5 5 17 6.12 17 7.5s1.12 2.5 2.5 2.5zm0 1.5c.32.79.5 1.62.5 2.5 0 .52-.06 1.02-.15 1.5H24V14c0-1.66-2.83-2.5-4.5-2.5z" opacity="0.75" />
-      </svg>
-    ),
-  },
-  {
-    id: "color",
-    label: "Colour",
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-        <circle cx="12" cy="8" r="4.5" />
-        <circle cx="8" cy="15" r="4.5" />
-        <circle cx="16" cy="15" r="4.5" />
-      </svg>
-    ),
-  },
-];
-
 export const StudioToolbar = memo(function StudioToolbar({
-  activeTab = "rhythm",
-  drawerOpen = true,
-  onSelectTab,
-  onToggleDrawer,
-  expanded = false,
   onSplit,
-  onMark,
+  onMerge,
   snapToCuts,
   onToggleSnap,
+  onMarkIn,
+  onMarkOut,
+  onClearInOut,
+  onMark,
   squintMode,
   onToggleSquint,
+  onFit,
   zoom,
   onZoomChange,
   onZoomIn,
   onZoomOut,
-  onFit,
   onFullscreen,
 }: StudioToolbarProps) {
-  // Tools menu state for expanded Studio
-  const [toolsOpen, setToolsOpen] = useState(false);
-  const toolsMenuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!toolsOpen) return;
-    const handlePointerDown = (e: PointerEvent) => {
-      if (toolsMenuRef.current && !toolsMenuRef.current.contains(e.target as Node)) {
-        setToolsOpen(false);
-      }
-    };
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setToolsOpen(false);
-      }
-    };
-    window.addEventListener("pointerdown", handlePointerDown);
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("pointerdown", handlePointerDown);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [toolsOpen]);
-
-  const handleSelectTool = (id: StudioToolTab) => {
-    if (activeTab === id && drawerOpen) {
-      onToggleDrawer?.();
-    } else {
-      onSelectTab?.(id);
-      if (!drawerOpen) {
-        onToggleDrawer?.();
-      }
-    }
-    setToolsOpen(false);
-  };
-
   // Zoom slider tooltip state
   const [sliderTooltip, setSliderTooltip] = useState(false);
   const sliderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -281,7 +163,7 @@ export const StudioToolbar = memo(function StudioToolbar({
     if (sliderTimerRef.current) clearTimeout(sliderTimerRef.current);
     sliderTimerRef.current = setTimeout(() => {
       setSliderTooltip(true);
-    }, 800);
+    }, 500);
   };
 
   const handleSliderLeave = () => {
@@ -304,48 +186,13 @@ export const StudioToolbar = memo(function StudioToolbar({
       role="toolbar"
       aria-label="Studio timeline toolbar"
     >
-      {/* Left group: [Tools (expanded Studio only)] Split, Mark, Snap, Squint */}
-      <div className="studio-toolbar-group studio-toolbar-editorial" role="group" aria-label="Editorial actions">
-        {expanded && (
-          <div ref={toolsMenuRef} className="studio-toolbar-tools-menu-wrap">
-            <button
-              id="studio-tools-menu-btn"
-              type="button"
-              className={`studio-toolbar-btn studio-toolbar-tools-btn ${toolsOpen || (drawerOpen && activeTab) ? "active" : ""}`}
-              onClick={() => setToolsOpen((prev) => !prev)}
-              aria-label="Analytical tools"
-              aria-haspopup="menu"
-              aria-expanded={toolsOpen}
-            >
-              <span>Tools</span>
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <polyline points={toolsOpen ? "18 15 12 9 6 15" : "6 9 12 15 18 9"} />
-              </svg>
-            </button>
-            {toolsOpen && (
-              <div className="studio-toolbar-tools-popover" role="menu" aria-label="Analytical tools">
-                {ANALYTICAL_TOOLS.map((tool) => {
-                  const isActive = drawerOpen && activeTab === tool.id;
-                  return (
-                    <button
-                      key={tool.id}
-                      type="button"
-                      role="menuitem"
-                      className={`studio-tools-menu-item ${isActive ? "active" : ""}`}
-                      onClick={() => handleSelectTool(tool.id)}
-                      aria-label={tool.label}
-                    >
-                      <span className="studio-tools-menu-icon">{tool.icon}</span>
-                      <span className="studio-tools-menu-label">{tool.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Split */}
+      {/* Centered toolbar items: Split, Merge, In, Out, Clear In/Out, Snap, Mark, Squint, Fit, - [slider] +, Fullscreen */}
+      <div
+        className="studio-toolbar-center-group"
+        role="group"
+        aria-label="Timeline editing and navigation controls"
+      >
+        {/* 1. Split */}
         <ToolbarButton
           id="studio-action-split"
           label="Split"
@@ -362,10 +209,87 @@ export const StudioToolbar = memo(function StudioToolbar({
           onClick={onSplit}
         />
 
-        {/* Mark */}
+        {/* 2. Merge (after split) */}
+        <ToolbarButton
+          id="studio-action-merge"
+          label="Merge"
+          ariaLabel="Merge adjacent shots at cut boundary (Del)"
+          icon={
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <line x1="12" y1="4" x2="12" y2="20" strokeDasharray="1 1" strokeWidth="1.8" />
+              <polyline points="6 8 10 12 6 16" />
+              <polyline points="18 8 14 12 18 16" />
+              <line x1="2" y1="12" x2="10" y2="12" />
+              <line x1="22" y1="12" x2="14" y2="12" />
+            </svg>
+          }
+          onClick={() => onMerge?.()}
+        />
+
+        {/* 3. In */}
+        <ToolbarButton
+          id="studio-action-in"
+          label="In"
+          ariaLabel="Mark In point (I)"
+          icon={
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M16 4H8v16h8" />
+            </svg>
+          }
+          onClick={() => onMarkIn?.()}
+        />
+
+        {/* 4. Out */}
+        <ToolbarButton
+          id="studio-action-out"
+          label="Out"
+          ariaLabel="Mark Out point (O)"
+          icon={
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M8 4h8v16H8" />
+            </svg>
+          }
+          onClick={() => onMarkOut?.()}
+        />
+
+        {/* 5. Clear In Out */}
+        <ToolbarButton
+          id="studio-action-clear-in-out"
+          label="Clear"
+          ariaLabel="Clear In and Out points (Alt+X)"
+          icon={
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M6 5H3v14h3" />
+              <path d="M18 5h3v14h-3" />
+              <line x1="9" y1="9" x2="15" y2="15" />
+              <line x1="15" y1="9" x2="9" y2="15" />
+            </svg>
+          }
+          onClick={() => onClearInOut?.()}
+        />
+
+        {/* 6. Snap (before marker) */}
+        <ToolbarButton
+          id="studio-action-snap"
+          label="Snap"
+          ariaLabel={`Snap to cut boundaries: ${snapToCuts ? "ON" : "OFF"} (S)`}
+          icon={
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M4 4v7a8 8 0 0 0 16 0V4h-4.5v7a3.5 3.5 0 0 1-7 0V4H4z" />
+              <line x1="4" y1="8" x2="8.5" y2="8" />
+              <line x1="15.5" y1="8" x2="20" y2="8" />
+            </svg>
+          }
+          isActive={snapToCuts}
+          activeVariant="snap"
+          onClick={onToggleSnap}
+          ariaPressed={snapToCuts}
+        />
+
+        {/* 7. Marker */}
         <ToolbarButton
           id="studio-action-mark"
-          label="Mark"
+          label="Marker"
           ariaLabel="Add marker at current frame (M)"
           icon={
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -376,24 +300,7 @@ export const StudioToolbar = memo(function StudioToolbar({
           onClick={onMark}
         />
 
-        {/* Snap */}
-        <ToolbarButton
-          id="studio-action-snap"
-          label="Snap"
-          ariaLabel={`Snap to cut boundaries: ${snapToCuts ? "ON" : "OFF"} (S)`}
-          icon={
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" aria-hidden="true">
-              <path d="M8 5C5.8 7 4.5 9.8 4.5 12s1.3 5 3.5 7" />
-              <path d="M16 5c2.2 2 3.5 4.8 3.5 7s-1.3 5-3.5 7" />
-            </svg>
-          }
-          isActive={snapToCuts}
-          activeVariant="snap"
-          onClick={onToggleSnap}
-          ariaPressed={snapToCuts}
-        />
-
-        {/* Squint */}
+        {/* 7. Squint */}
         <ToolbarButton
           id="studio-action-squint"
           label="Squint"
@@ -408,26 +315,39 @@ export const StudioToolbar = memo(function StudioToolbar({
           onClick={() => onToggleSquint(!squintMode)}
           ariaPressed={squintMode}
         />
-      </div>
 
-      {/* Navigation group (right-aligned) */}
-      <div className="studio-toolbar-group studio-toolbar-nav" role="group" aria-label="Timeline navigation">
-        {/* Zoom out */}
+        {/* 8. Fit */}
         <ToolbarButton
-          id="studio-nav-zoom-out"
-          label="Zoom out"
-          ariaLabel="Zoom out (Q)"
+          id="studio-nav-fit"
+          label="Fit"
+          ariaLabel="Fit timeline overview (F)"
           icon={
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <circle cx="11" cy="11" r="7" />
-              <line x1="21" y1="21" x2="16" y2="16" />
-              <line x1="8" y1="11" x2="14" y2="11" strokeWidth="2.5" />
+              <line x1="3" y1="5" x2="3" y2="19" strokeWidth="2.5" />
+              <line x1="21" y1="5" x2="21" y2="19" strokeWidth="2.5" />
+              <polyline points="7 9 4 12 7 15" />
+              <polyline points="17 9 20 12 17 15" />
+              <line x1="4" y1="12" x2="20" y2="12" />
+            </svg>
+          }
+          onClick={onFit}
+        />
+
+        {/* 9. Zoom - (simple unboxed minus glyph) */}
+        <ToolbarButton
+          id="studio-nav-zoom-out"
+          label="Zoom-"
+          ariaLabel="Zoom out (Q)"
+          className="studio-toolbar-zoom-glyph"
+          icon={
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <line x1="5" y1="12" x2="19" y2="12" />
             </svg>
           }
           onClick={onZoomOut}
         />
 
-        {/* Zoom slider */}
+        {/* 10. Zoom slider */}
         <div
           className="studio-toolbar-slider-wrap"
           onPointerEnter={handleSliderEnter}
@@ -454,44 +374,26 @@ export const StudioToolbar = memo(function StudioToolbar({
           )}
         </div>
 
-        {/* Zoom in */}
+        {/* 11. Zoom + (simple unboxed plus glyph) */}
         <ToolbarButton
           id="studio-nav-zoom-in"
-          label="Zoom in"
+          label="Zoom+"
           ariaLabel="Zoom in (W)"
+          className="studio-toolbar-zoom-glyph"
           icon={
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <circle cx="11" cy="11" r="7" />
-              <line x1="21" y1="21" x2="16" y2="16" />
-              <line x1="11" y1="8" x2="11" y2="14" strokeWidth="2.5" />
-              <line x1="8" y1="11" x2="14" y2="11" strokeWidth="2.5" />
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
             </svg>
           }
           onClick={onZoomIn}
         />
 
-        {/* Fit */}
-        <ToolbarButton
-          id="studio-nav-fit"
-          label="Fit"
-          ariaLabel="Fit timeline overview (F)"
-          icon={
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <line x1="3" y1="5" x2="3" y2="19" strokeWidth="2.5" />
-              <line x1="21" y1="5" x2="21" y2="19" strokeWidth="2.5" />
-              <polyline points="7 9 4 12 7 15" />
-              <polyline points="17 9 20 12 17 15" />
-              <line x1="4" y1="12" x2="20" y2="12" />
-            </svg>
-          }
-          onClick={onFit}
-        />
-
-        {/* Full screen */}
+        {/* 12. Fullscreen for graphs visualization */}
         <ToolbarButton
           id="studio-nav-fullscreen"
-          label="Full screen"
-          ariaLabel="Full screen visualization"
+          label="Fullscreen"
+          ariaLabel="Full screen graph visualization"
           icon={
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M3 8V4a1 1 0 0 1 1-1h4" />

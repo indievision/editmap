@@ -10,13 +10,14 @@ import {
 import type {
   Project,
   Shot,
+  CutAnnotation,
   SpeechAnalysis,
   LoudnessAnalysis,
   CastMember,
 } from "../models/project";
-import { cutTimes, pacingCurve } from "../analysis/pacing";
+import { cutTimes, pacingCurve, pacingAt } from "../analysis/pacing";
 import { framingRank } from "../analysis/framing";
-import { actualRate } from "../utils/timecode";
+import { actualRate, formatTimecode } from "../utils/timecode";
 import type { MapLayerState } from "./EditingMap";
 
 export interface FullscreenMapVisualizationProps {
@@ -36,6 +37,7 @@ export interface FullscreenMapVisualizationProps {
   waveform?: number[];
   speechAnalysis?: SpeechAnalysis;
   loudnessAnalysis?: LoudnessAnalysis;
+  url?: string;
   onClose: () => void;
 }
 
@@ -134,36 +136,127 @@ export function generateSteppedFramingPath(
 /**
  * Generate smooth gold pacing path and gradient area
  */
+/**
+ * Generate smooth gold pacing path and gradient area
+ */
 export function generatePacingPathAndArea(
   shots: Shot[],
   duration: number,
   scale: number,
   height: number,
-): { path: string; area: string } {
-  if (!shots.length || duration <= 0 || scale <= 0) {
-    return { path: "", area: "" };
+): {
+  path: string;
+  area: string;
+  getYAtTime: (time: number) => number;
+  maxRate: number;
+} {
+  const fallback = {
+    path: "",
+    area: "",
+    getYAtTime: () => Math.max(0, height - 4),
+    maxRate: 12,
+  };
+  if (!shots.length || duration <= 0 || scale <= 0 || height <= 8) {
+    return fallback;
   }
   const cuts = cutTimes(shots);
-  const points = pacingCurve(cuts, duration, 30);
-  if (!points.length) return { path: "", area: "" };
-
-  const maxRate = Math.max(
-    12,
-    Math.ceil(Math.max(...points.map((p) => p.rate), 0) / 5) * 5,
-  );
   const baselineY = height - 4;
   const amplitude = height - 10;
 
-  const path = points
-    .map((p, i) => {
-      const x = p.time * scale;
-      const y = baselineY - (p.rate / maxRate) * amplitude;
-      return `${i === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
-    })
-    .join(" ");
+  if (cuts.length === 0) {
+    const finalX = (duration * scale).toFixed(1);
+    const path = `M 0.0 ${baselineY.toFixed(1)} L ${finalX} ${baselineY.toFixed(1)}`;
+    const area = `${path} L ${finalX} ${baselineY.toFixed(1)} L 0 ${baselineY.toFixed(1)} Z`;
+    return {
+      path,
+      area,
+      getYAtTime: () => baselineY,
+      maxRate: 12,
+    };
+  }
 
-  const area = `${path} L ${(duration * scale).toFixed(1)} ${baselineY.toFixed(1)} L 0 ${baselineY.toFixed(1)} Z`;
-  return { path, area };
+  // Sample points across duration (adaptive resolution based on duration)
+  const sampleCount = Math.max(60, Math.min(600, Math.ceil(duration * 4)));
+  const step = duration / sampleCount;
+
+  // Sample raw boxcar pacing rate at each time step
+  const times: number[] = [];
+  const rawRates: number[] = [];
+  for (let i = 0; i <= sampleCount; i++) {
+    const t = Math.min(duration, i * step);
+    times.push(t);
+    rawRates.push(pacingAt(cuts, duration, 30, t).rate);
+  }
+
+  // Adaptive Gaussian kernel smoothing across time to eliminate integer boxcar staircases
+  // sigma: ~3.0s for scenes, scaled gracefully for very short sequences
+  const sigma = Math.min(3.5, Math.max(0.6, duration / 15));
+  const twoSigmaSq = 2 * sigma * sigma;
+
+  const smoothRates: number[] = [];
+  for (let i = 0; i <= sampleCount; i++) {
+    const t = times[i];
+    let weightSum = 0;
+    let rateSum = 0;
+
+    for (let j = 0; j <= sampleCount; j++) {
+      const tj = times[j];
+      const diff = t - tj;
+      if (Math.abs(diff) <= 3 * sigma) {
+        const w = Math.exp(-(diff * diff) / twoSigmaSq);
+        weightSum += w;
+        rateSum += rawRates[j] * w;
+      }
+    }
+    smoothRates.push(weightSum > 0 ? rateSum / weightSum : rawRates[i]);
+  }
+
+  const maxRate = Math.max(
+    12,
+    Math.ceil(Math.max(...smoothRates, 0) / 5) * 5,
+  );
+
+  // Map to SVG coordinates
+  const points: [number, number][] = times.map((t, i) => {
+    const x = t * scale;
+    const y = baselineY - (smoothRates[i] / maxRate) * amplitude;
+    return [x, y];
+  });
+
+  if (points.length < 2) {
+    return fallback;
+  }
+
+  // Smooth cubic Bézier spline curve (Catmull-Rom tangents)
+  let path = `M ${points[0][0].toFixed(1)} ${points[0][1].toFixed(1)}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[Math.max(0, i - 1)];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[Math.min(points.length - 1, i + 2)];
+
+    const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
+    const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
+    const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
+
+    path += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+  }
+
+  const finalX = (duration * scale).toFixed(1);
+  const area = `${path} L ${finalX} ${baselineY.toFixed(1)} L 0 ${baselineY.toFixed(1)} Z`;
+
+  const getYAtTime = (t: number): number => {
+    const clampedT = Math.max(0, Math.min(duration, t));
+    const idx = (clampedT / duration) * sampleCount;
+    const i0 = Math.floor(idx);
+    const i1 = Math.min(sampleCount, i0 + 1);
+    const frac = idx - i0;
+    const rate = (smoothRates[i0] ?? 0) * (1 - frac) + (smoothRates[i1] ?? 0) * frac;
+    return Math.max(4, Math.min(height - 4, baselineY - (rate / maxRate) * amplitude));
+  };
+
+  return { path, area, getYAtTime, maxRate };
 }
 
 /**
@@ -237,6 +330,110 @@ export function generateMotionFlowPathAndArea(
   return { path, area, hasData: true };
 }
 
+/**
+ * Generate smooth continuous kinetic cut density & transition energy wave and gradient area
+ */
+export function generateCutDensityPathAndArea(
+  shots: Shot[],
+  duration: number,
+  scale: number,
+  height: number,
+  cutAnnotations?: CutAnnotation[],
+): { path: string; area: string; hasData: boolean } {
+  if (!shots || shots.length < 2 || duration <= 0 || scale <= 0 || height <= 8) {
+    return { path: "", area: "", hasData: false };
+  }
+
+  const cuts = cutTimes(shots);
+  if (cuts.length === 0) {
+    return { path: "", area: "", hasData: false };
+  }
+
+  // Pre-index eyeTrace jump distances or cut shocks
+  const cutWeights = new Map<number, number>();
+  if (cutAnnotations && cutAnnotations.length > 0) {
+    const annotationMap = new Map<string, CutAnnotation>();
+    for (const ann of cutAnnotations) {
+      annotationMap.set(`${ann.outgoingId}->${ann.incomingId}`, ann);
+    }
+    for (let i = 0; i < shots.length - 1; i++) {
+      const outgoing = shots[i];
+      const incoming = shots[i + 1];
+      const key = `${outgoing.id}->${incoming.id}`;
+      const ann = annotationMap.get(key);
+      const jump = ann?.eyeTrace?.jumpDistancePercent ?? 25;
+      // Normalized transition intensity multiplier (0.8 to 2.2)
+      const weight = 0.8 + (jump / 100) * 1.4;
+      cutWeights.set(incoming.startSeconds, weight);
+    }
+  }
+
+  // Sample points across duration (adaptive resolution based on duration)
+  const sampleCount = Math.max(40, Math.min(600, Math.ceil(duration * 2)));
+  const step = duration / sampleCount;
+
+  // Gaussian kernel density estimation of cuts with cutWeights
+  // Sigma: ~2.5s window
+  const sigma = 2.5;
+  const twoSigmaSq = 2 * sigma * sigma;
+
+  const rawEnergies: number[] = [];
+  const times: number[] = [];
+
+  for (let i = 0; i <= sampleCount; i++) {
+    const t = Math.min(duration, i * step);
+    times.push(t);
+    let energy = 0;
+
+    for (let c = 0; c < cuts.length; c++) {
+      const cutT = cuts[c];
+      const diff = t - cutT;
+      if (Math.abs(diff) <= 3 * sigma) {
+        const w = cutWeights.get(cutT) ?? 1;
+        energy += w * Math.exp(-(diff * diff) / twoSigmaSq);
+      }
+    }
+    rawEnergies.push(energy);
+  }
+
+  const maxEnergy = Math.max(1.0, ...rawEnergies);
+  const baselineY = height - 2;
+  const amplitude = height - 8;
+
+  // Build SVG points
+  const points: [number, number][] = times.map((t, i) => {
+    const x = t * scale;
+    const norm = Math.min(1, rawEnergies[i] / maxEnergy);
+    const y = baselineY - norm * amplitude;
+    return [x, y];
+  });
+
+  if (points.length < 2) {
+    return { path: "", area: "", hasData: false };
+  }
+
+  // Smooth spline curve
+  let path = `M ${points[0][0].toFixed(1)} ${points[0][1].toFixed(1)}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[Math.max(0, i - 1)];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[Math.min(points.length - 1, i + 2)];
+
+    const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
+    const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
+    const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
+
+    path += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+  }
+
+  const finalX = (duration * scale).toFixed(1);
+  const area = `${path} L ${finalX} ${baselineY.toFixed(1)} L 0 ${baselineY.toFixed(1)} Z`;
+
+  return { path, area, hasData: true };
+}
+
 export default memo(function FullscreenMapVisualization({
   project,
   time,
@@ -262,13 +459,61 @@ export default memo(function FullscreenMapVisualization({
   waveform = [],
   speechAnalysis,
   loudnessAnalysis,
+  url,
   onClose,
 }: FullscreenMapVisualizationProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollViewportRef = useRef<HTMLDivElement>(null);
   const minimapRef = useRef<HTMLDivElement>(null);
+  const underlayVideoRef = useRef<HTMLVideoElement>(null);
   const isDragging = useRef(false);
   const isMinimapDragging = useRef(false);
+
+  // Video underlay opacity (persisted to localStorage, default 0.20 = 20%)
+  const [videoOpacity, setVideoOpacity] = useState<number>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("editmap_fs_video_opacity");
+      if (saved !== null) {
+        const val = parseFloat(saved);
+        if (!isNaN(val) && val >= 0 && val <= 1) return val;
+      }
+    }
+    return 0.2;
+  });
+
+  const prevOpacityRef = useRef(0.2);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("editmap_fs_video_opacity", String(videoOpacity));
+    } catch {}
+  }, [videoOpacity]);
+
+  // Sync underlay video with playback state
+  useEffect(() => {
+    const uv = underlayVideoRef.current;
+    if (!uv || !url) return;
+    if (playing) {
+      if (Math.abs(uv.currentTime - time) > 0.04) {
+        uv.currentTime = time;
+      }
+      uv.play().catch(() => {});
+    } else {
+      uv.pause();
+      if (Math.abs(uv.currentTime - time) > 0.02) {
+        uv.currentTime = time;
+      }
+    }
+  }, [playing, url]);
+
+  // Sync underlay video ONLY when paused (scrubbing or stepping frames)
+  useEffect(() => {
+    if (playing) return; // NEVER seek underlay video during active playback
+    const uv = underlayVideoRef.current;
+    if (uv && !uv.seeking && Math.abs(uv.currentTime - time) > 0.02) {
+      uv.currentTime = time;
+    }
+  }, [time, playing]);
 
   // Minimal exit affordance: fades in on pointer move, then fades out
   const [showExit, setShowExit] = useState(false);
@@ -279,7 +524,7 @@ export default memo(function FullscreenMapVisualization({
     if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
     exitTimerRef.current = setTimeout(() => {
       setShowExit(false);
-    }, 2500);
+    }, 2800);
   }, []);
 
   // Request browser fullscreen when opening, fallback to fixed overlay
@@ -359,40 +604,48 @@ export default memo(function FullscreenMapVisualization({
   // Keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat) return; // Prevent key-repeat glitch when space is held or pressed rapidly
       if (e.key === "Escape") {
         e.preventDefault();
+        e.stopImmediatePropagation();
         handleExit();
         return;
       }
       if (e.code === "Space") {
         e.preventDefault();
+        e.stopImmediatePropagation();
         onTogglePlay();
         return;
       }
       if (e.key === "ArrowLeft") {
         e.preventDefault();
+        e.stopImmediatePropagation();
         const delta = 1 / actualRate(project.frameRate);
         onSeek(Math.max(0, time - delta));
         return;
       }
       if (e.key === "ArrowRight") {
         e.preventDefault();
+        e.stopImmediatePropagation();
         const delta = 1 / actualRate(project.frameRate);
         onSeek(Math.min(duration, time + delta));
         return;
       }
       if (e.key === "q" || e.key === "Q") {
         e.preventDefault();
+        e.stopImmediatePropagation();
         onZoomChange(Math.max(1, Math.min(128, zoom / 1.25)));
         return;
       }
       if (e.key === "w" || e.key === "W") {
         e.preventDefault();
+        e.stopImmediatePropagation();
         onZoomChange(Math.max(1, Math.min(128, zoom * 1.25)));
         return;
       }
       if (e.key === "f" || e.key === "F") {
         e.preventDefault();
+        e.stopImmediatePropagation();
         onZoomChange(1);
         if (scrollViewportRef.current) scrollViewportRef.current.scrollLeft = 0;
         onScrollChange(0);
@@ -592,19 +845,149 @@ export default memo(function FullscreenMapVisualization({
       onPointerMove={resetExitTimer}
       onClick={resetExitTimer}
     >
-      {/* Minimal hover-only exit affordance */}
-      <button
-        type="button"
-        className={`fullscreen-exit-btn ${showExit ? "visible" : ""}`}
-        onClick={handleExit}
-        aria-label="Exit Fullscreen"
-        title="Exit Fullscreen (Esc)"
-      >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <line x1="18" y1="6" x2="6" y2="18" />
-          <line x1="6" y1="6" x2="18" y2="18" />
-        </svg>
-      </button>
+      {/* Layer 0: Cinema Ghost Video Underlay */}
+      {url && (
+        <div
+          className="fullscreen-video-underlay"
+          style={{ opacity: videoOpacity }}
+          aria-hidden="true"
+        >
+          <video
+            ref={underlayVideoRef}
+            src={url}
+            playsInline
+            muted
+            className="fullscreen-underlay-video-element"
+          />
+        </div>
+      )}
+
+      {/* Top Floating Glass HUD Controls */}
+      <div className={`fullscreen-hud-bar ${showExit ? "visible" : ""}`}>
+        {/* Play/Pause Button */}
+        <button
+          type="button"
+          className="fullscreen-hud-btn fullscreen-play-btn"
+          onClick={onTogglePlay}
+          title={playing ? "Pause (Space)" : "Play (Space)"}
+          aria-label={playing ? "Pause" : "Play"}
+        >
+          {playing ? (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="6" y="4" width="4" height="16" rx="1" />
+              <rect x="14" y="4" width="4" height="16" rx="1" />
+            </svg>
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="6 4 19 12 6 20 6 4" />
+            </svg>
+          )}
+        </button>
+
+        {/* Timecode Readout */}
+        <div className="fullscreen-hud-timecode">
+          <span className="hud-tc-mono">{formatTimecode(time, project.frameRate)}</span>
+        </div>
+
+        <div className="fullscreen-hud-divider" />
+
+        {/* Video Underlay Opacity Slider */}
+        {url ? (
+          <div className="fullscreen-hud-slider-group" title="Video Underlay Opacity">
+            <button
+              type="button"
+              className={`fullscreen-hud-icon-btn ${videoOpacity > 0 ? "active" : ""}`}
+              onClick={() => {
+                if (videoOpacity > 0) {
+                  prevOpacityRef.current = videoOpacity;
+                  setVideoOpacity(0);
+                } else {
+                  setVideoOpacity(prevOpacityRef.current > 0 ? prevOpacityRef.current : 0.2);
+                }
+              }}
+              title={videoOpacity > 0 ? "Hide video ghost" : "Restore video ghost"}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18" />
+                <line x1="7" y1="2" x2="7" y2="22" />
+                <line x1="17" y1="2" x2="17" y2="22" />
+                <line x1="2" y1="12" x2="22" y2="12" />
+                <line x1="2" y1="7" x2="7" y2="7" />
+                <line x1="2" y1="17" x2="7" y2="17" />
+                <line x1="17" y1="17" x2="22" y2="17" />
+                <line x1="17" y1="7" x2="22" y2="7" />
+              </svg>
+            </button>
+            <span className="fullscreen-hud-label">Ghost:</span>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={videoOpacity}
+              onChange={(e) => setVideoOpacity(parseFloat(e.target.value))}
+              className="fullscreen-hud-range"
+              aria-label="Video Underlay Opacity"
+            />
+            <span className="fullscreen-hud-val">{Math.round(videoOpacity * 100)}%</span>
+          </div>
+        ) : (
+          <div className="fullscreen-hud-no-video">
+            No video linked
+          </div>
+        )}
+
+        <div className="fullscreen-hud-divider" />
+
+        {/* Zoom Controls */}
+        <div className="fullscreen-hud-zoom-group">
+          <button
+            type="button"
+            className="fullscreen-hud-btn"
+            onClick={() => onZoomChange(Math.max(1, Math.min(128, zoom / 1.25)))}
+            title="Zoom Out (Q)"
+          >
+            −
+          </button>
+          <span className="fullscreen-hud-zoom-val">{zoom.toFixed(1)}x</span>
+          <button
+            type="button"
+            className="fullscreen-hud-btn"
+            onClick={() => onZoomChange(Math.max(1, Math.min(128, zoom * 1.25)))}
+            title="Zoom In (W)"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            className="fullscreen-hud-btn fullscreen-fit-btn"
+            onClick={() => {
+              onZoomChange(1);
+              if (scrollViewportRef.current) scrollViewportRef.current.scrollLeft = 0;
+              onScrollChange(0);
+            }}
+            title="Fit Timeline (F)"
+          >
+            Fit
+          </button>
+        </div>
+
+        <div className="fullscreen-hud-divider" />
+
+        {/* Exit Button */}
+        <button
+          type="button"
+          className="fullscreen-hud-btn fullscreen-hud-exit"
+          onClick={handleExit}
+          title="Exit Fullscreen (Esc)"
+          aria-label="Exit Fullscreen"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
 
       {/* Main Scrollable Canvas */}
       <div

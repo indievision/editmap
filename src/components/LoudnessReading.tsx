@@ -1,4 +1,4 @@
-import { memo, useMemo } from "react";
+import { memo, useMemo, useRef, useCallback } from "react";
 import type { Project, Shot, LoudnessAnalysis } from "../models/project";
 import { classifyDynamicContrast, getShotLoudness, lufsToNormalized } from "../analysis/loudness";
 import { formatTimecode } from "../utils/timecode";
@@ -216,10 +216,31 @@ export default memo(function LoudnessReading({
             {svgPaths && (
               <div
                 className="loudness-svg-surface"
-                onClick={(e) => {
+                style={{ cursor: "ew-resize", touchAction: "none", userSelect: "none" }}
+                onPointerDown={(e) => {
+                  if (e.button !== 0) return;
+                  try {
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                  } catch {
+                    // ignore
+                  }
                   const rect = e.currentTarget.getBoundingClientRect();
                   const targetTime = ((e.clientX - rect.left) / rect.width) * duration;
                   onSeek(Math.max(0, Math.min(duration, targetTime)));
+                }}
+                onPointerMove={(e) => {
+                  if (e.buttons === 1) {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const targetTime = ((e.clientX - rect.left) / rect.width) * duration;
+                    onSeek(Math.max(0, Math.min(duration, targetTime)));
+                  }
+                }}
+                onPointerUp={(e) => {
+                  try {
+                    e.currentTarget.releasePointerCapture(e.pointerId);
+                  } catch {
+                    // ignore
+                  }
                 }}
               >
                 <svg viewBox="0 0 1000 140" preserveAspectRatio="none" className="loudness-svg">
