@@ -2,6 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { WebSocketServer, WebSocket } = require('ws');
 
 const PORT = process.env.PORT || 3000;
@@ -11,6 +12,39 @@ const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const LAN_ENABLED = process.env.EDITMAP_DUET_LAN === '1';
 const HOST = LAN_ENABLED ? '0.0.0.0' : '127.0.0.1';
 const MAX_UPLOAD_BYTES = 8 * 1024 ** 3;
+
+// Access control.
+// The host's own browser (a loopback connection addressed as localhost) needs no
+// secret. Anything else, i.e. Wi-Fi devices, must present this per-launch token,
+// delivered once through the join link (?t=...) and then kept in an HttpOnly
+// cookie so pages, video, uploads and the WebSocket all authenticate without
+// client changes. The Host check also stops DNS rebinding from posing as loopback.
+const JOIN_TOKEN = crypto.randomBytes(18).toString('hex');
+const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+function tokenMatches(candidate) {
+  if (typeof candidate !== 'string' || candidate.length !== JOIN_TOKEN.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(candidate), Buffer.from(JOIN_TOKEN));
+}
+
+function cookieToken(req) {
+  const match = /(?:^|;\s*)duet_token=([0-9a-f]+)/.exec(req.headers.cookie || '');
+  return match ? match[1] : '';
+}
+
+function isLocalHost(req) {
+  const hostname = String(req.headers.host || '').replace(/:\d+$/, '').toLowerCase();
+  return LOOPBACK_ADDRESSES.has(req.socket.remoteAddress) && LOOPBACK_HOSTS.has(hostname);
+}
+
+function isAuthorized(req) {
+  return isLocalHost(req) || tokenMatches(cookieToken(req));
+}
+
+function joinUrls() {
+  return getLocalIpAddresses().map((ip) => `http://${ip}:${PORT}/?t=${JOIN_TOKEN}`);
+}
 
 // A browser page from another site must not drive this server: when an Origin
 // header is present its host must be the host the request was addressed to.
@@ -47,6 +81,31 @@ const MIME_TYPES = {
 const server = http.createServer((req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const reqPath = parsedUrl.pathname;
+
+  // Join link: validate the token, remember it in a cookie, then drop it from the URL.
+  if (req.method === 'GET' && parsedUrl.searchParams.has('t')) {
+    if (tokenMatches(parsedUrl.searchParams.get('t'))) {
+      res.writeHead(302, {
+        'Set-Cookie': `duet_token=${JOIN_TOKEN}; HttpOnly; SameSite=Strict; Path=/`,
+        'Location': reqPath,
+      });
+    } else {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+    }
+    return res.end();
+  }
+
+  // Only the host machine can read the join links.
+  if (reqPath === '/api/join-info') {
+    if (!isLocalHost(req)) { res.writeHead(403); return res.end(); }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify({ lan: LAN_ENABLED, urls: LAN_ENABLED ? joinUrls() : [] }));
+  }
+
+  if (!isAuthorized(req)) {
+    res.writeHead(401, { 'Content-Type': 'text/plain' });
+    return res.end('Open the join link shown on the host to connect.');
+  }
 
   // 1. In-App Video Upload: POST /api/upload
   if (req.method === 'POST' && reqPath === '/api/upload') {
@@ -186,7 +245,7 @@ const wss = new WebSocketServer({
   server,
   maxPayload: 1024 * 1024,
   // Reject cross-site WebSocket hijacking from pages on other origins.
-  verifyClient: ({ req }) => sameOrigin(req),
+  verifyClient: ({ req }) => sameOrigin(req) && isAuthorized(req),
 });
 
 // Rooms map: roomCode -> { clients: Set, clientMeta: Map, state: { isPlaying, currentTime, markers, activeMarkerId, videoUrl, videoName, mode } }
@@ -416,8 +475,9 @@ server.listen(PORT, HOST, () => {
   console.log(`💻 Local access (This Mac):   http://localhost:${PORT}`);
   if (LAN_ENABLED) {
     localIps.forEach(ip => {
-      console.log(`📱 Connect PC/iPad on Wi-Fi: http://${ip}:${PORT}`);
+      console.log(`📱 Connect PC/iPad on Wi-Fi: http://${ip}:${PORT}/?t=${JOIN_TOKEN}`);
     });
+    console.log('   (the link contains this launch\'s join secret: share it only with your audience)');
   } else {
     console.log('🔒 Loopback only. Set EDITMAP_DUET_LAN=1 to allow Wi-Fi devices.');
   }

@@ -875,6 +875,13 @@
                 <span id="roleNotice">Host controls playback for the room.</span>
                 <button type="button" id="btnProjectorLaunch" class="projector" onclick="openProjectorWindow()">Open projector display ↗</button>
               </div>
+              <div id="joinLinkRow" hidden style="margin-top:10px;font-size:12px;opacity:.85">
+                <label for="joinLink">Wi‑Fi join link (secret for this launch)</label>
+                <div style="display:flex;gap:6px;margin-top:4px">
+                  <input id="joinLink" readonly style="flex:1;min-width:0" aria-label="Wi-Fi join link">
+                  <button type="button" id="btnCopyJoinLink">Copy</button>
+                </div>
+              </div>
             </div>
           </section>
         </div>
@@ -1831,6 +1838,22 @@
         }, '*');
       }
     }
+
+    // Wi-Fi devices need the join link (it carries this launch's secret). Only the
+    // host machine can read it; other devices get a 403 here and show nothing.
+    (async function showJoinLink() {
+      try {
+        const response = await fetch('/api/join-info', { cache: 'no-store' });
+        if (!response.ok) return;
+        const info = await response.json();
+        if (!info.lan || !info.urls.length) return;
+        const row = document.getElementById('joinLinkRow');
+        const field = document.getElementById('joinLink');
+        field.value = info.urls[0];
+        row.hidden = false;
+        document.getElementById('btnCopyJoinLink').onclick = () => navigator.clipboard?.writeText(field.value);
+      } catch (_) { /* loopback-only mode, or the server is not DUET */ }
+    })();
 
     function escapeHtml(value) {
       return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
