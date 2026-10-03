@@ -2373,6 +2373,11 @@
         if (rightPanel) rightPanel.style.display = 'flex';
         resizeCanvas();
         renderReviewTimelineAndCues();
+        // Safari does not paint a paused frame in a video element that was hidden when the film loaded;
+        // seeking to the current time once it is visible makes it draw.
+        requestAnimationFrame(() => {
+          if (video.paused && video.readyState >= 1) video.currentTime = video.currentTime;
+        });
         if (markers.length > 0 && activeCueIndex === -1 && !isGuest) {
           jumpToCue(0);
         }
