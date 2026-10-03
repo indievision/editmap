@@ -107,3 +107,16 @@ test("WebSocket upgrades need the host, or the cookie, and a same-site origin", 
   assert.equal(await connect({ Host: `192.168.0.9:${PORT}`, Cookie: `duet_token=${token}` }), "open", "remote with secret");
   assert.equal(await connect({ Origin: "https://evil.example", Cookie: `duet_token=${token}` }), 401, "cross-site page, even with a cookie");
 });
+
+test("the EditMap app's own origin (the embedded hub, served by Vite) may connect from this machine", async () => {
+  assert.equal(await connect({ Origin: "http://127.0.0.1:5173" }), "open");
+  assert.equal(await connect({ Origin: "http://localhost:5174" }), "open");
+  assert.equal(await connect({ Origin: "http://127.0.0.1:9999" }), 401, "other localhost pages stay out");
+  // A remote device cannot borrow the app origin: it is not a loopback connection.
+  assert.equal(await connect({ Origin: "http://127.0.0.1:5173", Host: `192.168.0.9:${PORT}` }), 401);
+
+  const info = await request({ path: "/api/join-info", headers: { Origin: "http://127.0.0.1:5173" } });
+  assert.equal(info.headers["access-control-allow-origin"], "http://127.0.0.1:5173");
+  const other = await request({ path: "/api/join-info", headers: { Origin: "http://127.0.0.1:9999" } });
+  assert.equal(other.headers["access-control-allow-origin"], undefined, "other origins cannot read the join link");
+});
