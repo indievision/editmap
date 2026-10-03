@@ -579,6 +579,16 @@ wss.on('connection', (ws, req) => {
             }, false);
           }
         }
+        // Delete a marker: its author or the host, like editing its note.
+        else if (type === 'DELETE_MARKER') {
+          const index = room.state.markers.findIndex(m => m.id === data.id);
+          if (index === -1) return;
+          const target = room.state.markers[index];
+          if (clientInfo.role !== 'host' && target.authorId !== clientInfo.id) return;
+          room.state.markers.splice(index, 1);
+          if (room.state.activeMarkerId === data.id) room.state.activeMarkerId = null;
+          broadcastToRoom(currentRoomCode, ws, { type: 'DELETE_MARKER', id: data.id }, false);
+        }
         // Select Cue in Review Mode
         else if (type === 'SELECT_MARKER') {
           room.state.activeMarkerId = data.id;

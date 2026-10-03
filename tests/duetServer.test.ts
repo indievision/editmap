@@ -397,3 +397,34 @@ test("the host's saved markers join the room, once, keeping their original autho
   late.close();
   host.close();
 });
+
+test("a marker is deleted by its author or the host, for everyone, for good", async () => {
+  const room = "roles-delete";
+  const host = await joinRoom(room, "host", "Teacher", false);
+  const anna = await joinRoom(room, "student", "Anna", true);
+  const ben = await joinRoom(room, "student", "Ben", true);
+
+  anna.send({ type: "ADD_MARKER", marker: { id: "a1", seconds: 1 } });
+  ben.send({ type: "ADD_MARKER", marker: { id: "b1", seconds: 2 } });
+  await until(() => received(host, "ADD_MARKER").length === 2);
+
+  ben.send({ type: "DELETE_MARKER", id: "a1" });
+  await settle();
+  assert.equal(received(host, "DELETE_MARKER").length, 0, "another guest cannot delete it");
+
+  anna.send({ type: "DELETE_MARKER", id: "a1" });
+  await until(() => received(host, "DELETE_MARKER").length === 1 && received(ben, "DELETE_MARKER").length === 1);
+  assert.equal(received(host, "DELETE_MARKER")[0].id, "a1", "the author can, and everyone is told");
+  assert.equal(received(anna, "DELETE_MARKER").length, 0, "the sender already removed it");
+
+  host.send({ type: "DELETE_MARKER", id: "b1" });
+  await until(() => received(anna, "DELETE_MARKER").length === 1);
+  assert.equal(received(anna, "DELETE_MARKER")[0].id, "b1", "the host can delete anyone's");
+
+  const late = await joinRoom(room, "student", "Cara", true);
+  assert.equal(late.messages.find((m) => m.type === "INIT_STATE").state.markers.length, 0, "a late joiner never sees them");
+  anna.close();
+  ben.close();
+  late.close();
+  host.close();
+});
