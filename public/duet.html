@@ -1338,7 +1338,7 @@
     // Where the host is now: its last reported time plus the time since, while it plays.
     function hostNow() { return hostState.time + (hostState.playing ? (performance.now() - hostState.at) / 1000 : 0); }
     let hostWorkspace = null;
-    const PAGE_BUILD = '2026-10-03-steady9';   // shown in the diagnostic, to tell a stale cached page from a current one
+    const PAGE_BUILD = '2026-10-04-cues10';   // shown in the diagnostic, to tell a stale cached page from a current one
     const roomLog = [];                      // the last room messages, for the diagnostic (Shift+D)
     let pendingCueRender = false;
     document.addEventListener('focusout', (e) => {
@@ -2966,11 +2966,20 @@
       renderReviewTimelineAndCues();
     }
 
+    // Previous / next cue are found from where the playhead is, not from the last cue clicked.
     function prevCue() {
-      if (activeCueIndex > 0) jumpToCue(activeCueIndex - 1, true);
+      const clusters = getConsensusClusters();
+      const now = video.currentTime;
+      for (let i = clusters.length - 1; i >= 0; i--) {
+        if (clusters[i].seconds < now - 0.05) { jumpToCue(i, true); return; }
+      }
     }
     function nextCue() {
-      jumpToCue(activeCueIndex + 1, true);
+      const clusters = getConsensusClusters();
+      const now = video.currentTime;
+      for (let i = 0; i < clusters.length; i++) {
+        if (clusters[i].seconds > now + 0.05) { jumpToCue(i, true); return; }
+      }
     }
 
     function stepFrame(delta) {
