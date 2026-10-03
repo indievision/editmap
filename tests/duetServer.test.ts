@@ -321,3 +321,19 @@ test("guests in the room are told when the analysis data changes", async () => {
   assert.equal(received(guest, "ROOM_DATA_UPDATED")[0].part, "thumbnails");
   guest.close();
 });
+
+test("the embedded hub can upload the film from the app's origin, and no other site can", async () => {
+  const app = { Origin: "http://127.0.0.1:5173" };
+  const preflight = await request({ path: "/api/upload", method: "OPTIONS", headers: app });
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers["access-control-allow-origin"], "http://127.0.0.1:5173");
+  assert.match(String(preflight.headers["access-control-allow-headers"]), /x-file-name/);
+
+  const sent = await request({ path: "/api/upload", method: "POST", headers: { ...app, "x-file-name": "hub.mp4" }, body: "data" });
+  assert.equal(sent.status, 200);
+  assert.equal(sent.headers["access-control-allow-origin"], "http://127.0.0.1:5173", "the page can read the answer");
+
+  const evil = await request({ path: "/api/upload", method: "OPTIONS", headers: { Origin: "https://evil.example" } });
+  assert.equal(evil.headers["access-control-allow-origin"], undefined);
+  assert.equal((await request({ path: "/api/upload", method: "POST", headers: { Origin: "https://evil.example", "x-file-name": "a.mp4" }, body: "x" })).status, 403);
+});

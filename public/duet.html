@@ -1674,7 +1674,10 @@
       container.classList.remove('hidden');
 
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/upload', true);
+      // Inside the app this page is served by Vite, which sends /api/* to the analysis backend.
+      // The upload belongs to the room server, so address it directly (as the join link does).
+      const roomBase = window.location.port === '3000' ? '' : `${window.location.protocol}//${window.location.hostname}:3000`;
+      xhr.open('POST', `${roomBase}/api/upload`, true);
       xhr.setRequestHeader('x-file-name', encodeURIComponent(file.name));
 
       xhr.upload.onprogress = (evt) => {
@@ -1693,9 +1696,10 @@
           document.getElementById('wifiFileLabel').textContent = `✓ ${file.name} (Shared across Wi-Fi)`;
           document.getElementById('headerCutName').textContent = `Cut: ${file.name}`;
           
-          video.src = resp.url;
+          // The room server's address, in full, so it also resolves when this page is the one served by Vite.
+          video.src = `${roomBase}${resp.url}`;
           video.load();
-          loadAudioWaveform(file || resp.url);
+          loadAudioWaveform(file || video.src);
           clearMarkersState(true);
 
           if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1707,6 +1711,14 @@
           }
         }
       };
+      const failTransfer = (why) => {
+        statusText.textContent = `Transfer failed: ${why}. Check that the room server is running, then try again.`;
+        fill.style.width = '0%';
+        percentText.textContent = '';
+      };
+      xhr.onerror = () => failTransfer('could not reach the room server');
+      xhr.onabort = () => failTransfer('stopped');
+      xhr.onloadend = () => { if (xhr.status && xhr.status !== 200) failTransfer(`the server answered ${xhr.status}`); };
       xhr.send(file);
     }
 

@@ -96,12 +96,13 @@ const ROOM_DATA_PARTS = new Set(['project', 'thumbnails', 'colorProfiles']);
 const roomData = new Map(); // part -> { version, body }
 let roomDataVersion = 0;
 
-function roomDataCors(req) {
+// The app (served by Vite) talks to this server from its own origin, on this machine only.
+function roomDataCors(req, allowHeaders = 'content-type') {
   const headers = {};
   if (req.headers.origin && APP_ORIGINS.has(req.headers.origin) && isLocalHost(req)) {
     headers['Access-Control-Allow-Origin'] = req.headers.origin;
     headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS';
-    headers['Access-Control-Allow-Headers'] = 'content-type';
+    headers['Access-Control-Allow-Headers'] = allowHeaders;
     headers['Vary'] = 'Origin';
   }
   return headers;
@@ -192,10 +193,16 @@ const server = http.createServer((req, res) => {
   }
 
   // 1. In-App Video Upload: POST /api/upload
+  if (reqPath === '/api/upload' && req.method === 'OPTIONS') {
+    res.writeHead(204, roomDataCors(req, 'x-file-name, content-type'));
+    return res.end();
+  }
   if (req.method === 'POST' && reqPath === '/api/upload') {
+    // The embedded hub uploads from the app's origin, so its answer must carry the CORS headers too.
+    const cors = roomDataCors(req, 'x-file-name, content-type');
     if (!sameOrigin(req)) { res.writeHead(403); return res.end(); }
     const declared = Number(req.headers['content-length'] || 0);
-    if (declared > MAX_UPLOAD_BYTES) { res.writeHead(413); return res.end(); }
+    if (declared > MAX_UPLOAD_BYTES) { res.writeHead(413, cors); return res.end(); }
     let rawFileName = String(req.headers['x-file-name'] || `video_${Date.now()}.mp4`);
     try { rawFileName = decodeURIComponent(rawFileName); } catch { /* keep raw */ }
     const cleanFileName = path.basename(rawFileName).replace(/[^a-zA-Z0-9._-]/g, '_').replace(/^\.+/, '_') || `video_${Date.now()}.mp4`;
@@ -210,7 +217,7 @@ const server = http.createServer((req, res) => {
       req.unpipe(writeStream);
       writeStream.destroy();
       fs.unlink(targetFilePath, () => {});
-      if (!res.headersSent) res.writeHead(code, { 'Content-Type': 'application/json' });
+      if (!res.headersSent) res.writeHead(code, { ...cors, 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: false, error: message }));
     };
     req.on('data', (chunk) => {
@@ -222,7 +229,7 @@ const server = http.createServer((req, res) => {
 
     writeStream.on('finish', () => {
       if (failed) return;
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         success: true,
         fileName: cleanFileName,
