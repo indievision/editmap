@@ -3,11 +3,12 @@ import path from "node:path";
 import fs from "node:fs";
 import { startNewProject } from "./helpers";
 
-const ARTIFACT_DIR = "/Users/indievision/.gemini/antigravity/brain/d1fb208b-f675-4e6a-9a53-962bd40d05e6";
+// Generated output (git-ignored); relative so it works on any machine and in CI.
+const ARTIFACT_DIR = path.resolve("test-results/screenshots");
 
 test("Capture Studio Munari Layout Screenshots: Compact & Enlarged Cast", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("http://127.0.0.1:5173/");
+  await page.goto("/");
 
   // Setup project
   await startNewProject(page);

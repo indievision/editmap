@@ -128,7 +128,7 @@ test.fixme("Local Pacing redesign: PACING AT A GLANCE, lanes, window buttons, se
 
   // Take screenshot of the redesigned chart
   await page.screenshot({
-    path: "/Users/indievision/.gemini/antigravity/brain/d654b8ac-a961-4f1c-b33d-b37e63aa60bd/pacing-redesign-screenshot.png",
+    path: "test-results/screenshots/pacing-redesign.png",
   });
 
   expect(errors).toEqual([]);
@@ -172,6 +172,6 @@ test("Local Pacing chart with active framing data renders teal stepped line and 
 
   // Take screenshot with active framing data
   await page.screenshot({
-    path: "/Users/indievision/.gemini/antigravity/brain/d654b8ac-a961-4f1c-b33d-b37e63aa60bd/pacing-with-framing-screenshot.png",
+    path: "test-results/screenshots/pacing-with-framing.png",
   });
 });
