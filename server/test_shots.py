@@ -16,19 +16,11 @@ class TestShotEngine(unittest.TestCase):
     def setUp(self):
         self.detector = ShotBoundaryDetector()
         self.client = TestClient(main.app)
-        self.headers = {"X-Editmap-Token": main.SESSION_TOKEN, "Origin": "http://127.0.0.1:5179"}
+        self.headers = {"X-Editmap-Token": main.SESSION_TOKEN, "Origin": "http://127.0.0.1:5173"}
 
     def test_nonexistent_video_file_raises(self):
         with self.assertRaises(FileNotFoundError):
             ShotBoundaryDetector.get_video_info("/nonexistent/video/path.mp4")
-
-        response = self.client.post(
-            "/api/detect-shots",
-            headers=self.headers,
-            json={"video_path": "/nonexistent/video/path.mp4", "threshold": 0.5}
-        )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("not found", response.json()["detail"].lower())
 
     def test_predictions_to_shots_hard_cut(self):
         # 100 frames, 25 fps => 4 seconds
@@ -123,19 +115,6 @@ class TestShotEngine(unittest.TestCase):
             self.assertIsInstance(res["shots"], list)
             self.assertIn("start_seconds", res["shots"][0])
 
-            # Test FastAPI API endpoint
-            api_res = self.client.post(
-                "/api/detect-shots",
-                headers=self.headers,
-                json={"video_path": tmp_path, "threshold": 0.3, "min_shot_len_frames": 5}
-            )
-            self.assertEqual(api_res.status_code, 200)
-            body = api_res.json()
-            self.assertEqual(body["status"], "success")
-            self.assertEqual(body["video_path"], tmp_path)
-            self.assertGreaterEqual(body["total_shots"], 2)
-            self.assertIsInstance(body["shots"], list)
-
             # Browser-selected files use the upload endpoint; the service must
             # never require a browser to disclose a local filesystem path.
             with open(tmp_path, "rb") as video_file:
@@ -164,21 +143,61 @@ class TestShotEngine(unittest.TestCase):
                 os.unlink(tmp_path)
 
     def test_api_validation(self):
-        # Invalid threshold > 1.0
+        # Invalid threshold > 1.0 on the upload endpoint
         res = self.client.post(
-            "/api/detect-shots",
+            "/api/detect-shots-upload",
             headers=self.headers,
-            json={"video_path": "/tmp/test.mp4", "threshold": 1.5}
+            data={"threshold": "1.5"},
+            files={"file": ("x.mp4", b"x", "video/mp4")},
         )
         self.assertEqual(res.status_code, 422)
 
-        # Invalid min_shot_len_frames < 1
-        res = self.client.post(
-            "/api/detect-shots",
-            headers=self.headers,
-            json={"video_path": "/tmp/test.mp4", "min_shot_len_frames": 0}
-        )
-        self.assertEqual(res.status_code, 422)
+    def test_path_based_detection_endpoint_is_removed(self):
+        res = self.client.post("/api/detect-shots", headers=self.headers, json={"video_path": "/etc/hosts"})
+        self.assertIn(res.status_code, (404, 405))
+
+    def test_streaming_windows_match_whole_array_reference(self):
+        """Streaming must reproduce the original pad-then-window protocol exactly."""
+        class Probe:  # deterministic per-window "model": depends on every frame in the window
+            def predict_batch(self, frames):
+                return frames.astype(np.float32).mean(axis=(1, 2, 3)) / 255.0 + frames[:, 0, 0, 0] * 0
+
+        rng = np.random.default_rng(7)
+        for total in (1, 49, 50, 51, 100, 137, 300):
+            frames = rng.integers(0, 256, size=(total, 27, 48, 3), dtype=np.uint8)
+            detector = ShotBoundaryDetector()
+            detector.model = Probe()
+            detector.get_video_info = lambda path: (24.0, total, total / 24.0)
+            detector._frame_source = lambda path, cancel, f=frames: iter(f)
+            streamed, _, count = detector.predict_video("ignored")
+            self.assertEqual(count, total)
+
+            pad_end = 25 + 50 - (total % 50 if total % 50 != 0 else 50)
+            padded = np.concatenate([frames[:1]] * 25 + [frames] + [frames[-1:]] * pad_end)
+            expected, ptr = [], 0
+            while ptr + 100 <= len(padded):
+                expected.append(Probe().predict_batch(padded[ptr:ptr + 100])[25:75])
+                ptr += 50
+            np.testing.assert_allclose(streamed, np.concatenate(expected)[:total], err_msg=f"T={total}")
+
+    def test_cancel_stops_streaming_decode(self):
+        from threading import Event
+        from shot_engine import ScanCancelled
+        cancel = Event()
+        detector = ShotBoundaryDetector()
+        detector.get_video_info = lambda path: (24.0, 1000, 41.0)
+
+        def frames(path, c):
+            for i in range(1000):
+                if i == 120:
+                    cancel.set()
+                if c.is_set():
+                    raise ScanCancelled("cancelled")
+                yield np.zeros((27, 48, 3), dtype=np.uint8)
+
+        detector._frame_source = frames
+        with self.assertRaises(ScanCancelled):
+            detector.predict_video("ignored", cancel)
 
     def test_min_shot_len_merging_opening_shot(self):
         # Very short first shot (4 frames: 0..3) with min_shot_len_frames=10

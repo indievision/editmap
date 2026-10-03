@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { usePlayhead } from "../playback/playhead";
 import type { CastMember, CharacterInterval, Project, Shot } from "../models/project";
 import {
   alternations,
@@ -29,7 +30,6 @@ const formatClock = (seconds: number) => {
 export interface CastDrawerProps {
   project: Project;
   shot?: Shot;
-  time: number;
   thumbnails?: Record<string, string>;
   range?: { start: number; end: number };
   selectedMember?: string;
@@ -46,6 +46,8 @@ export interface CastDrawerProps {
   onReviewCharacters?: (shotId: string, memberIds: string[]) => void;
   onRangeChange: (range?: PresenceRange) => void;
   onPlayRange: (range: PresenceRange) => void;
+  /** False while the component is hidden, so it stops following the playback clock. */
+  active?: boolean;
   onSeek: (time: number) => void;
   onClose: () => void;
 }
@@ -53,7 +55,6 @@ export interface CastDrawerProps {
 export default function CastDrawer({
   project,
   shot,
-  time,
   thumbnails = {},
   range,
   selectedMember,
@@ -71,8 +72,10 @@ export default function CastDrawer({
   onRangeChange,
   onPlayRange,
   onSeek,
+  active = true,
   onClose,
 }: CastDrawerProps) {
+  const time = usePlayhead(active);
   const containerRef = useRef<HTMLElement>(null);
   const [isEnlarged, setIsEnlarged] = useState(false);
 

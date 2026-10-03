@@ -875,6 +875,13 @@
                 <span id="roleNotice">Host controls playback for the room.</span>
                 <button type="button" id="btnProjectorLaunch" class="projector" onclick="openProjectorWindow()">Open projector display ↗</button>
               </div>
+              <div id="joinLinkRow" hidden style="margin-top:10px;font-size:12px;opacity:.85">
+                <label for="joinLink">Wi‑Fi join link (secret for this launch)</label>
+                <div style="display:flex;gap:6px;margin-top:4px">
+                  <input id="joinLink" readonly style="flex:1;min-width:0" aria-label="Wi-Fi join link">
+                  <button type="button" id="btnCopyJoinLink">Copy</button>
+                </div>
+              </div>
             </div>
           </section>
         </div>
@@ -1832,6 +1839,26 @@
       }
     }
 
+    // Wi-Fi devices need the join link (it carries this launch's secret). Only the
+    // host machine can read it; other devices get a 403 here and show nothing.
+    (async function showJoinLink() {
+      try {
+        const response = await fetch('/api/join-info', { cache: 'no-store' });
+        if (!response.ok) return;
+        const info = await response.json();
+        if (!info.lan || !info.urls.length) return;
+        const row = document.getElementById('joinLinkRow');
+        const field = document.getElementById('joinLink');
+        field.value = info.urls[0];
+        row.hidden = false;
+        document.getElementById('btnCopyJoinLink').onclick = () => navigator.clipboard?.writeText(field.value);
+      } catch (_) { /* loopback-only mode, or the server is not DUET */ }
+    })();
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
     function setupWebSocket() {
       if (ws && ws.readyState === WebSocket.OPEN) return;
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -2211,11 +2238,11 @@
           <!-- Precise Indicator Stem to Scrubber Bar -->
           <div class="flex flex-col items-center pointer-events-none mt-0.5">
             <div class="w-[2px] h-3.5 mx-auto" style="background-color: ${cluster.primaryColorHex}; box-shadow: 0 0 6px ${cluster.primaryColorHex};"></div>
-            <div class="w-2 h-2 rounded-full -mt-0.5 border border-black shadow" style="background-color: ${cluster.primaryColorHex};"></div>
+            <div class="w-2 h-2 rounded-full -mt-0.5 border border-black shadow" style="background-color: ${escapeHtml(cluster.primaryColorHex)};"></div>
           </div>
           <!-- Hover Tooltip -->
           <div class="token-tooltip items-center gap-2 absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 rounded-lg bg-black/95 text-[11px] font-mono text-slate-100 border border-slate-700 whitespace-nowrap shadow-2xl z-50 pointer-events-none">
-            <span class="w-2 h-2 rounded-full" style="background-color: ${cluster.primaryColorHex};"></span>
+            <span class="w-2 h-2 rounded-full" style="background-color: ${escapeHtml(cluster.primaryColorHex)};"></span>
             <span class="font-bold text-amber-400">${cluster.smpte}</span>
             <span class="text-slate-500">&bull;</span>
             <span class="text-slate-300">${cluster.markers.map(m => `${m.authorAvatar || '🎬'} ${m.authorName || 'Host'}`).join(', ')}</span>
@@ -2246,8 +2273,8 @@
 
           card.innerHTML = `
             <div class="cue-head flex items-center gap-2">
-              <span class="cue-dot w-2.5 h-2.5 rounded-full flex-shrink-0 ${isSelected ? 'ring-2 ring-[#70523c]' : ''}" style="background-color: ${cluster.primaryColorHex};"></span>
-              <strong class="font-mono font-bold text-slate-100 text-xs">${cluster.smpte}</strong>
+              <span class="cue-dot w-2.5 h-2.5 rounded-full flex-shrink-0 ${isSelected ? 'ring-2 ring-[#70523c]' : ''}" style="background-color: ${escapeHtml(cluster.primaryColorHex)};"></span>
+              <strong class="font-mono font-bold text-slate-100 text-xs">${escapeHtml(cluster.smpte)}</strong>
               ${count > 1 ? `<span class="text-[9px] font-mono px-1.5 py-0.2 rounded-full bg-purple-900/80 border border-purple-500/60 text-purple-200 font-bold ml-1">${count}&times;</span>` : ''}
               <small class="text-slate-400 ml-auto font-mono text-[10px] ${isSelected ? 'text-[#f5c759] font-semibold' : ''}">
                 ${isSelected ? 'Current · ' : ''}Cue ${String(idx + 1).padStart(2, '0')}
@@ -2259,12 +2286,12 @@
                       onclick="event.stopPropagation()"
                       placeholder="No discussion note yet"
                       rows="2"
-                      class="cue-note-area w-full bg-transparent text-xs text-slate-300 resize-none focus:outline-none focus:bg-black/40 rounded px-1.5 py-1 border border-transparent focus:border-slate-700 leading-relaxed font-sans placeholder:italic placeholder:text-slate-600 pl-4">${firstM.note || ''}</textarea>
+                      class="cue-note-area w-full bg-transparent text-xs text-slate-300 resize-none focus:outline-none focus:bg-black/40 rounded px-1.5 py-1 border border-transparent focus:border-slate-700 leading-relaxed font-sans placeholder:italic placeholder:text-slate-600 pl-4">${escapeHtml(firstM.note)}</textarea>
 
             <div class="cue-meta flex items-center justify-between text-[10px] font-mono text-slate-400 border-t border-slate-900/80 pt-1.5 mt-0.5 pl-4">
-              <span class="author flex items-center gap-1.5 truncate max-w-[170px]" title="${authorsLabel}">
-                <span class="tiny-avatar text-xs">${firstM.authorAvatar || '🎬'}</span>
-                <span class="truncate">${authorsLabel}</span>
+              <span class="author flex items-center gap-1.5 truncate max-w-[170px]" title="${escapeHtml(authorsLabel)}">
+                <span class="tiny-avatar text-xs">${escapeHtml(firstM.authorAvatar || '🎬')}</span>
+                <span class="truncate">${escapeHtml(authorsLabel)}</span>
               </span>
               <b class="${isSelected ? 'text-[#ed9eae]' : 'text-[#d7b664]'} font-semibold">Resolve · ${resolveColorName}</b>
             </div>
@@ -2382,10 +2409,10 @@
 
       container.innerHTML = markers.map(m => {
         const pct = Math.max(0, Math.min(100, (m.seconds / dur) * 100));
-        const color = m.colorHex || '#f59e0b';
+        const color = /^#[0-9a-fA-F]{3,8}$/.test(m.colorHex || '') ? m.colorHex : '#f59e0b';
         return `<div class="absolute top-1/2 -translate-y-1/2 w-1.5 h-3 rounded-sm pointer-events-none transition" 
                      style="left: calc(${pct}% - 3px); background-color: ${color}; box-shadow: 0 0 6px ${color}aa;" 
-                     title="${m.smpte || ''}"></div>`;
+                     title="${escapeHtml(m.smpte)}"></div>`;
       }).join('');
     }
 

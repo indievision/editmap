@@ -11,7 +11,8 @@ import os
 import subprocess
 import tempfile
 import threading
-from typing import Any, Dict, List, Optional, Tuple
+from threading import Event, Timer
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 
@@ -20,6 +21,10 @@ logger = logging.getLogger("editmap.shot_engine")
 class ModelUnavailableError(RuntimeError):
     """Raised when shot boundary detection model cannot be loaded or executed."""
     pass
+
+
+class ScanCancelled(RuntimeError):
+    """Raised when a scan is cancelled by its caller."""
 
 
 class TransNetV2Model:
@@ -207,6 +212,7 @@ class ShotBoundaryDetector:
         try:
             cmd = [
                 "ffprobe", "-v", "error",
+                "-protocol_whitelist", "file,pipe",
                 "-select_streams", "v:0",
                 "-show_entries", "stream=r_frame_rate,nb_frames,duration",
                 "-show_entries", "format=duration",
@@ -263,13 +269,19 @@ class ShotBoundaryDetector:
 
         raise ValueError(f"Could not read video metadata or video is corrupted: {video_path}")
 
-    def read_frames_ffmpeg(self, video_path: str) -> np.ndarray:
+    # Upper bound for one decode pass; a stalled or pathological file is killed.
+    DECODE_DEADLINE_SECONDS = 3600
+
+    def iter_frames_ffmpeg(self, video_path: str, cancel_event: Optional[Event] = None) -> Iterator[np.ndarray]:
         """
-        Stream all frames resized directly to 48x27 RGB uint8 using fast FFmpeg pipe.
-        Returns shape (T, 27, 48, 3).
+        Stream frames resized to 48x27 RGB uint8 from an FFmpeg pipe, one (27, 48, 3)
+        array at a time, so memory stays flat regardless of film length.
+        A watchdog kills FFmpeg at the deadline or on cancellation, which also
+        unblocks a read stalled on a hung decoder.
         """
         cmd = [
             "ffmpeg", "-v", "error",
+            "-protocol_whitelist", "file,pipe",
             "-nostats",
             "-i", video_path,
             "-vf", "scale=48:27",
@@ -279,100 +291,122 @@ class ShotBoundaryDetector:
         ]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         frame_size = 48 * 27 * 3
-        frames_list = []
+        timed_out = Event()
 
+        def kill() -> None:
+            timed_out.set()
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+        watchdog = Timer(self.DECODE_DEADLINE_SECONDS, kill)
+        watchdog.daemon = True
+        watchdog.start()
         try:
             while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    kill()
+                    raise ScanCancelled("Shot detection was cancelled.")
                 raw_bytes = proc.stdout.read(frame_size)
                 if len(raw_bytes) < frame_size:
                     break
-                frame = np.frombuffer(raw_bytes, dtype=np.uint8).reshape((27, 48, 3))
-                frames_list.append(frame)
+                yield np.frombuffer(raw_bytes, dtype=np.uint8).reshape((27, 48, 3))
         finally:
+            watchdog.cancel()
+            if proc.poll() is None:
+                proc.kill()
             proc.stdout.close()
             proc.wait()
+        if timed_out.is_set() and not (cancel_event is not None and cancel_event.is_set()):
+            raise TimeoutError("Video decoding exceeded the local time limit.")
 
-        if not frames_list:
-            return np.zeros((0, 27, 48, 3), dtype=np.uint8)
-
-        return np.array(frames_list, dtype=np.uint8)
-
-    def read_frames_opencv(self, video_path: str) -> np.ndarray:
-        """
-        Fallback frame reader using OpenCV VideoCapture.
-        Returns shape (T, 27, 48, 3).
-        """
+    def iter_frames_opencv(self, video_path: str, cancel_event: Optional[Event] = None) -> Iterator[np.ndarray]:
+        """Fallback streaming frame reader using OpenCV VideoCapture."""
         import cv2
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
-            return np.zeros((0, 27, 48, 3), dtype=np.uint8)
-
-        frames_list = []
+            return
         try:
             while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise ScanCancelled("Shot detection was cancelled.")
                 ret, frame = cap.read()
                 if not ret or frame is None:
                     break
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                resized = cv2.resize(rgb, (48, 27), interpolation=cv2.INTER_AREA)
-                frames_list.append(resized)
+                yield cv2.resize(rgb, (48, 27), interpolation=cv2.INTER_AREA)
         finally:
             cap.release()
 
-        if not frames_list:
-            return np.zeros((0, 27, 48, 3), dtype=np.uint8)
+    def read_frames_ffmpeg(self, video_path: str) -> np.ndarray:
+        """Materialize all frames, shape (T, 27, 48, 3). Prefer iter_frames_ffmpeg for long media."""
+        frames = list(self.iter_frames_ffmpeg(video_path))
+        return np.stack(frames) if frames else np.zeros((0, 27, 48, 3), dtype=np.uint8)
 
-        return np.array(frames_list, dtype=np.uint8)
+    def read_frames_opencv(self, video_path: str) -> np.ndarray:
+        frames = list(self.iter_frames_opencv(video_path))
+        return np.stack(frames) if frames else np.zeros((0, 27, 48, 3), dtype=np.uint8)
 
-    def predict_video(self, video_path: str) -> Tuple[np.ndarray, float, int]:
-        """
-        Reads video and runs official TransNet V2 sliding window inference.
-        Returns (predictions_array, fps, total_frames).
-        """
-        fps, total_frames, duration = self.get_video_info(video_path)
-        
-        # Read frames using FFmpeg raw pipe, with OpenCV fallback
+    def _frame_source(self, video_path: str, cancel_event: Optional[Event]) -> Iterator[np.ndarray]:
+        """FFmpeg stream, falling back to OpenCV when FFmpeg yields nothing."""
+        produced = False
         try:
-            frames = self.read_frames_ffmpeg(video_path)
+            for frame in self.iter_frames_ffmpeg(video_path, cancel_event):
+                produced = True
+                yield frame
+        except (ScanCancelled, TimeoutError):
+            raise
         except Exception as e:
+            if produced:
+                raise
             logger.warning("FFmpeg frame decoding failed, falling back to OpenCV: %s", e)
-            frames = np.zeros((0, 27, 48, 3), dtype=np.uint8)
+        if not produced:
+            yield from self.iter_frames_opencv(video_path, cancel_event)
 
-        if len(frames) == 0:
-            frames = self.read_frames_opencv(video_path)
+    def predict_video(
+        self, video_path: str, cancel_event: Optional[Event] = None
+    ) -> Tuple[np.ndarray, float, int]:
+        """
+        Streams the video through the official TransNet V2 sliding-window protocol.
+        Returns (predictions_array, fps, total_frames).
 
-        if len(frames) == 0:
+        Protocol: 25 frames of padding (copies of frame 0) before the film, enough
+        copies of the last frame after it to fill whole 50-frame steps, 100-frame
+        windows advancing by 50, keeping only each window's centre 50 predictions.
+        Windows are processed as frames arrive, so only ~150 frames are ever held.
+        """
+        fps, _declared_frames, _duration = self.get_video_info(video_path)
+
+        buffer: List[np.ndarray] = []
+        predictions_list: List[np.ndarray] = []
+        total = 0
+        last_frame: Optional[np.ndarray] = None
+
+        def drain() -> None:
+            nonlocal buffer
+            while len(buffer) >= 100:
+                window_preds = self.model.predict_batch(np.stack(buffer[:100]))
+                predictions_list.append(window_preds[25:75])
+                buffer = buffer[50:]
+
+        for frame in self._frame_source(video_path, cancel_event):
+            if total == 0:
+                buffer.extend([frame] * 25)
+            buffer.append(frame)
+            last_frame = frame
+            total += 1
+            drain()
+
+        if total == 0 or last_frame is None:
             raise ValueError(f"No valid video frames decoded from {video_path}")
 
-        T = len(frames)
+        pad_end = 25 + 50 - (total % 50 if total % 50 != 0 else 50)
+        buffer.extend([last_frame] * pad_end)
+        drain()
 
-        # Official TransNet V2 sliding window protocol:
-        # Pad 25 frames at the start with frames[0] and pad at the end with frames[-1]
-        # such that total length is divisible into 100-frame windows advancing by 50.
-        # Only the center 50 frames [25:75] of each window are retained to eliminate edge artifacts.
-        pad_start = 25
-        pad_end = 25 + 50 - (T % 50 if T % 50 != 0 else 50)
-
-        start_frame = np.expand_dims(frames[0], 0)
-        end_frame = np.expand_dims(frames[-1], 0)
-        padded_frames = np.concatenate(
-            [start_frame] * pad_start + [frames] + [end_frame] * pad_end, axis=0
-        )
-
-        predictions_list = []
-        ptr = 0
-        while ptr + 100 <= len(padded_frames):
-            window = padded_frames[ptr : ptr + 100]
-            window_preds = self.model.predict_batch(window)
-            predictions_list.append(window_preds[25:75])
-            ptr += 50
-
-        if predictions_list:
-            predictions = np.concatenate(predictions_list)[:T]
-        else:
-            predictions = np.zeros(T, dtype=np.float32)
-
-        return predictions, fps, T
+        predictions = np.concatenate(predictions_list)[:total] if predictions_list else np.zeros(total, dtype=np.float32)
+        return predictions, fps, total
 
     @staticmethod
     def predictions_to_shots(
@@ -479,13 +513,14 @@ class ShotBoundaryDetector:
         self,
         video_path: str,
         threshold: float = 0.5,
-        min_shot_len_frames: int = 10
+        min_shot_len_frames: int = 10,
+        cancel_event: Optional[Event] = None,
     ) -> Dict[str, Any]:
         """
         Main entry point for shot boundary detection.
         Returns dictionary matching API response schema.
         """
-        predictions, fps, total_frames = self.predict_video(video_path)
+        predictions, fps, total_frames = self.predict_video(video_path, cancel_event)
         shots = self.predictions_to_shots(
             predictions=predictions,
             fps=fps,

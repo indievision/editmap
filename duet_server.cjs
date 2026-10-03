@@ -2,11 +2,60 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { WebSocketServer, WebSocket } = require('ws');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
+// Loopback only unless the user explicitly opts in to Wi-Fi screening.
+const LAN_ENABLED = process.env.EDITMAP_DUET_LAN === '1';
+const HOST = LAN_ENABLED ? '0.0.0.0' : '127.0.0.1';
+const MAX_UPLOAD_BYTES = 8 * 1024 ** 3;
+
+// Access control.
+// The host's own browser (a loopback connection addressed as localhost) needs no
+// secret. Anything else, i.e. Wi-Fi devices, must present this per-launch token,
+// delivered once through the join link (?t=...) and then kept in an HttpOnly
+// cookie so pages, video, uploads and the WebSocket all authenticate without
+// client changes. The Host check also stops DNS rebinding from posing as loopback.
+const JOIN_TOKEN = crypto.randomBytes(18).toString('hex');
+const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+function tokenMatches(candidate) {
+  if (typeof candidate !== 'string' || candidate.length !== JOIN_TOKEN.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(candidate), Buffer.from(JOIN_TOKEN));
+}
+
+function cookieToken(req) {
+  const match = /(?:^|;\s*)duet_token=([0-9a-f]+)/.exec(req.headers.cookie || '');
+  return match ? match[1] : '';
+}
+
+function isLocalHost(req) {
+  const hostname = String(req.headers.host || '').replace(/:\d+$/, '').toLowerCase();
+  return LOOPBACK_ADDRESSES.has(req.socket.remoteAddress) && LOOPBACK_HOSTS.has(hostname);
+}
+
+function isAuthorized(req) {
+  return isLocalHost(req) || tokenMatches(cookieToken(req));
+}
+
+function joinUrls() {
+  return getLocalIpAddresses().map((ip) => `http://${ip}:${PORT}/?t=${JOIN_TOKEN}`);
+}
+
+// A browser page from another site must not drive this server: when an Origin
+// header is present its host must be the host the request was addressed to.
+function sameOrigin(req) {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try { return new URL(origin).host === req.headers.host; } catch { return false; }
+}
+
+// Last-resort guard: one bad request must never end a screening session.
+process.on('uncaughtException', (err) => console.error('Uncaught exception:', err));
 
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -33,71 +82,135 @@ const server = http.createServer((req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const reqPath = parsedUrl.pathname;
 
+  // Join link: validate the token, remember it in a cookie, then drop it from the URL.
+  if (req.method === 'GET' && parsedUrl.searchParams.has('t')) {
+    if (tokenMatches(parsedUrl.searchParams.get('t'))) {
+      res.writeHead(302, {
+        'Set-Cookie': `duet_token=${JOIN_TOKEN}; HttpOnly; SameSite=Strict; Path=/`,
+        'Location': reqPath,
+      });
+    } else {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+    }
+    return res.end();
+  }
+
+  // Only the host machine can read the join links.
+  if (reqPath === '/api/join-info') {
+    if (!isLocalHost(req)) { res.writeHead(403); return res.end(); }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify({ lan: LAN_ENABLED, urls: LAN_ENABLED ? joinUrls() : [] }));
+  }
+
+  if (!isAuthorized(req)) {
+    res.writeHead(401, { 'Content-Type': 'text/plain' });
+    return res.end('Open the join link shown on the host to connect.');
+  }
+
   // 1. In-App Video Upload: POST /api/upload
   if (req.method === 'POST' && reqPath === '/api/upload') {
-    const rawFileName = req.headers['x-file-name'] || `video_${Date.now()}.mp4`;
-    const cleanFileName = decodeURIComponent(rawFileName).replace(/[^a-zA-Z0-9._-]/g, '_');
+    if (!sameOrigin(req)) { res.writeHead(403); return res.end(); }
+    const declared = Number(req.headers['content-length'] || 0);
+    if (declared > MAX_UPLOAD_BYTES) { res.writeHead(413); return res.end(); }
+    let rawFileName = String(req.headers['x-file-name'] || `video_${Date.now()}.mp4`);
+    try { rawFileName = decodeURIComponent(rawFileName); } catch { /* keep raw */ }
+    const cleanFileName = path.basename(rawFileName).replace(/[^a-zA-Z0-9._-]/g, '_').replace(/^\.+/, '_') || `video_${Date.now()}.mp4`;
     const targetFilePath = path.join(UPLOADS_DIR, cleanFileName);
 
     const writeStream = fs.createWriteStream(targetFilePath);
+    let received = 0;
+    let failed = false;
+    const fail = (code, message) => {
+      if (failed) return;
+      failed = true;
+      req.unpipe(writeStream);
+      writeStream.destroy();
+      fs.unlink(targetFilePath, () => {});
+      if (!res.headersSent) res.writeHead(code, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: message }));
+    };
+    req.on('data', (chunk) => {
+      received += chunk.length;
+      if (received > MAX_UPLOAD_BYTES) fail(413, 'Upload too large');
+    });
+    req.on('aborted', () => fail(400, 'Upload aborted'));
     req.pipe(writeStream);
 
     writeStream.on('finish', () => {
-      const stats = fs.statSync(targetFilePath);
+      if (failed) return;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         success: true,
         fileName: cleanFileName,
         url: `/uploads/${encodeURIComponent(cleanFileName)}`,
-        size: stats.size
+        size: received
       }));
     });
 
     writeStream.on('error', (err) => {
       console.error('File write error:', err);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ success: false, error: err.message }));
+      fail(500, 'Could not store upload');
     });
     return;
   }
 
   // 2. Video Streaming with HTTP Range Requests: GET /uploads/:filename
   if (reqPath.startsWith('/uploads/')) {
-    const fileName = decodeURIComponent(reqPath.replace('/uploads/', ''));
-    const filePath = path.join(UPLOADS_DIR, fileName);
+    let fileName;
+    try { fileName = decodeURIComponent(reqPath.slice('/uploads/'.length)); } catch { res.writeHead(400); return res.end(); }
+    // Only a bare file name inside uploads/ is addressable: no separators, no traversal.
+    const filePath = path.join(UPLOADS_DIR, path.basename(fileName));
+    if (fileName !== path.basename(fileName) || path.dirname(filePath) !== UPLOADS_DIR) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      return res.end('Access Denied');
+    }
 
-    if (!fs.existsSync(filePath)) {
+    let stat;
+    try { stat = fs.statSync(filePath); } catch { stat = null; }
+    if (!stat || !stat.isFile()) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       return res.end('Video not found');
     }
 
-    const stat = fs.statSync(filePath);
     const fileSize = stat.size;
-    const range = req.headers.range;
     const ext = path.extname(filePath).toLowerCase();
     const contentType = MIME_TYPES[ext] || 'video/mp4';
+    const sendStream = (options, headers, code) => {
+      const file = fs.createReadStream(filePath, options);
+      file.on('error', () => res.destroy());
+      res.on('close', () => file.destroy());
+      res.writeHead(code, headers);
+      file.pipe(res);
+    };
 
+    const range = req.headers.range;
     if (range) {
-      const parts = range.replace(/bytes=/, "").split("-");
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-      const chunksize = (end - start) + 1;
-      const file = fs.createReadStream(filePath, { start, end });
-
-      res.writeHead(206, {
+      const m = /^bytes=(\d*)-(\d*)$/.exec(range);
+      let start = 0;
+      let end = fileSize - 1;
+      let valid = !!m && (m[1] !== '' || m[2] !== '');
+      if (valid && m[1] === '') {            // suffix range: last N bytes
+        start = Math.max(0, fileSize - Number(m[2]));
+      } else if (valid) {
+        start = Number(m[1]);
+        if (m[2] !== '') end = Math.min(Number(m[2]), fileSize - 1);
+      }
+      if (!valid || !Number.isSafeInteger(start) || start > end || start >= fileSize) {
+        res.writeHead(416, { 'Content-Range': `bytes */${fileSize}` });
+        return res.end();
+      }
+      sendStream({ start, end }, {
         'Content-Range': `bytes ${start}-${end}/${fileSize}`,
         'Accept-Ranges': 'bytes',
-        'Content-Length': chunksize,
+        'Content-Length': end - start + 1,
         'Content-Type': contentType,
-      });
-      file.pipe(res);
+      }, 206);
     } else {
-      res.writeHead(200, {
+      sendStream({}, {
         'Content-Length': fileSize,
         'Content-Type': contentType,
         'Accept-Ranges': 'bytes'
-      });
-      fs.createReadStream(filePath).pipe(res);
+      }, 200);
     }
     return;
   }
@@ -105,7 +218,7 @@ const server = http.createServer((req, res) => {
   // 3. Static Files from public/
   let filePath = path.join(PUBLIC_DIR, reqPath === '/' ? '/duet.html' : reqPath);
 
-  if (!filePath.startsWith(PUBLIC_DIR)) {
+  if (filePath !== PUBLIC_DIR && !filePath.startsWith(PUBLIC_DIR + path.sep)) {
     res.writeHead(403);
     return res.end('Access Denied');
   }
@@ -128,7 +241,12 @@ const server = http.createServer((req, res) => {
 });
 
 // WebSocket Sync Server
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({
+  server,
+  maxPayload: 1024 * 1024,
+  // Reject cross-site WebSocket hijacking from pages on other origins.
+  verifyClient: ({ req }) => sameOrigin(req) && isAuthorized(req),
+});
 
 // Rooms map: roomCode -> { clients: Set, clientMeta: Map, state: { isPlaying, currentTime, markers, activeMarkerId, videoUrl, videoName, mode } }
 const rooms = new Map();
@@ -350,13 +468,18 @@ function getLocalIpAddresses() {
   return addresses;
 }
 
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, HOST, () => {
   const localIps = getLocalIpAddresses();
   console.log('====================================================');
   console.log(`🎬 DUET Cinema Screening & Review Console Running!`);
   console.log(`💻 Local access (This Mac):   http://localhost:${PORT}`);
-  localIps.forEach(ip => {
-    console.log(`📱 Connect PC/iPad on Wi-Fi: http://${ip}:${PORT}`);
-  });
+  if (LAN_ENABLED) {
+    localIps.forEach(ip => {
+      console.log(`📱 Connect PC/iPad on Wi-Fi: http://${ip}:${PORT}/?t=${JOIN_TOKEN}`);
+    });
+    console.log('   (the link contains this launch\'s join secret: share it only with your audience)');
+  } else {
+    console.log('🔒 Loopback only. Set EDITMAP_DUET_LAN=1 to allow Wi-Fi devices.');
+  }
   console.log('====================================================');
 });

@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
+import { startNewProject } from "./helpers";
 
 test("editing rhythm tabs scrolling, smaller font, and smooth resizing across all left tabs", async ({
   page,
@@ -10,7 +11,7 @@ test("editing rhythm tabs scrolling, smaller font, and smooth resizing across al
   await page.goto("/");
 
   // 1. Setup new project with fixture video and EDL
-  await page.getByRole("button", { name: "New project" }).first().click();
+  await startNewProject(page);
   await page.getByLabel("Project name").fill("Rhythm Tabs & Left Window Resize Test");
 
   await page
@@ -29,7 +30,7 @@ test("editing rhythm tabs scrolling, smaller font, and smooth resizing across al
   await page.locator('.studio-rail-btn[aria-label="Rhythm"]').click();
 
   // 2. Check Editing Rhythm subtabs and ensure title is omitted
-  await expect(page.locator(".rhythm-tabs.drawer-subtabs")).toBeVisible();
+  await expect(page.locator(".rhythm-tabs.drawer-subtabs:visible")).toBeVisible();
   await expect(page.locator(".rhythm-drawer-title, .rhythm-tabs h2")).toHaveCount(0);
 
   // 3. Drag left splitter narrower to test overflow

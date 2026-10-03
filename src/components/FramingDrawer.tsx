@@ -7,9 +7,10 @@ export type FramingSubsection = "distribution" | "progression";
 
 export interface FramingDrawerProps {
   project: Project;
-  time: number;
   selected?: string;
   onSelect: (shot: Shot) => void;
+  /** False while the component is hidden, so it stops following the playback clock. */
+  active?: boolean;
   onSeek?: (time: number) => void;
   onClose?: () => void;
   variant?: "deck" | "drawer";
@@ -19,10 +20,10 @@ export interface FramingDrawerProps {
 
 export const FramingDrawer = memo(function FramingDrawer({
   project,
-  time,
   selected,
   onSelect,
   onSeek,
+  active = true,
   onClose,
   variant = "drawer",
   initialSubsection = "distribution",
@@ -167,7 +168,7 @@ export const FramingDrawer = memo(function FramingDrawer({
       >
         <FramingArc
           project={project}
-          time={time}
+          active={active && tab === "progression"}
           selected={selected}
           onSelect={onSelect}
           onSeek={onSeek}

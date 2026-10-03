@@ -3,20 +3,23 @@ import type { Project, Shot } from "../models/project";
 import { framingRank, framingSizes } from "../analysis/framing";
 import { sizeColors } from "../analysis/colors";
 import { formatTimecode } from "../utils/timecode";
+import { usePlayhead } from "../playback/playhead";
 
 export default function FramingArc({
   project,
-  time,
+  active = true,
   selected,
   onSelect,
   onSeek,
 }: {
   project: Project;
-  time: number;
+  /** False while hidden, so it stops following the playback clock. */
+  active?: boolean;
   selected?: string;
   onSelect: (shot: Shot) => void;
   onSeek?: (time: number) => void;
 }) {
+  const time = usePlayhead(active);
   const duration = Math.max(1, project.duration);
   const isDraggingRef = useRef(false);
   const hasDraggedRef = useRef(false);

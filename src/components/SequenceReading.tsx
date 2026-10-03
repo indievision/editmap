@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { usePlayhead } from "../playback/playhead";
 import { sequenceReading } from "../analysis/pacing";
 import type { Project, SequenceMarker } from "../models/project";
 import {
@@ -16,8 +17,9 @@ export type DraftRange = { start?: number; end?: number };
 export interface SequenceReadingProps {
   project: Project;
   range?: DraftRange;
-  currentTime?: number;
   onRangeChange: (range?: DraftRange) => void;
+  /** False while the component is hidden, so it stops following the playback clock. */
+  active?: boolean;
   onSeek: (time: number) => void;
   onUpdate: (sequences: SequenceMarker[]) => void;
   onUpdateProject?: (patch: Partial<Project>) => void;
@@ -30,9 +32,9 @@ export interface SequenceReadingProps {
 export default function SequenceReading({
   project,
   range,
-  currentTime = 0,
   onRangeChange,
   onSeek,
+  active = true,
   onUpdate,
   onUpdateProject,
   selectedEntryId,
@@ -40,6 +42,7 @@ export default function SequenceReading({
   onClose,
   variant = "deck",
 }: SequenceReadingProps) {
+  const currentTime = usePlayhead(active);
   // Deck variant state
   const [deckName, setDeckName] = useState("");
 

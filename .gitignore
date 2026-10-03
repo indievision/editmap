@@ -23,3 +23,11 @@ tmp/
 logs/
 EditMap.app/
 .impeccable/
+
+# Generated test output and bytecode
+tests/browser/screenshots/
+__pycache__/
+*.pyc
+
+# Model weights are provisioned, not committed (see server/README.md)
+/*.pt

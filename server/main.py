@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, status, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator, model_validator
 from fastapi.responses import JSONResponse
-from local_access import LocalAccessMiddleware, SESSION_TOKEN
+from local_access import LocalAccessMiddleware, SESSION_TOKEN, ALLOWED_ORIGINS
 from threading import Lock
 from starlette.concurrency import run_in_threadpool
 
@@ -31,6 +31,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("editmap.server")
 
+SAFE_MEDIA_SUFFIXES = {".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".mxf", ".mpg", ".mpeg", ".ts", ".m2ts", ".mts", ".wmv", ".flv", ".ogv", ".3gp"}
+
 app = FastAPI(
     title="EDITMAP CV Analysis Engine",
     description="Local Computer Vision Microservice for Film Framing, Cast, and Color Analysis",
@@ -42,7 +44,7 @@ app.add_middleware(LocalAccessMiddleware)
 # Enable CORS for browser access from Vite dev server
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"https?://(127\.0\.0\.1|localhost)(:\d{1,5})?",
+    allow_origins=sorted(ALLOWED_ORIGINS),
     allow_credentials=False,
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Content-Type", "X-Editmap-Token"],
@@ -314,12 +316,6 @@ class AnalyzeMotionResponse(BaseModel):
     confidence: float
 
 
-class DetectShotsRequest(BaseModel):
-    video_path: str = Field(..., description="Absolute file path to the input video")
-    threshold: float = Field(default=0.5, ge=0.0, le=1.0)
-    min_shot_len_frames: int = Field(default=10, ge=1, le=10000)
-
-
 class ShotIntervalResponse(BaseModel):
     shot_index: int
     start_frame: int
@@ -401,31 +397,6 @@ async def update_scanners(req: Optional[ScannerUpdateRequest] = None):
     )
 
 
-@app.post("/api/detect-shots", response_model=DetectShotsResponse)
-async def detect_shots(req: DetectShotsRequest):
-    if not os.path.isfile(req.video_path):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Video file not found: {req.video_path}"
-        )
-
-    try:
-        result = await run_in_threadpool(
-            shot_boundary_detector.detect_shots,
-            video_path=req.video_path,
-            threshold=req.threshold,
-            min_shot_len_frames=req.min_shot_len_frames
-        )
-        return DetectShotsResponse(**result)
-    except (FileNotFoundError, ValueError) as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except ModelUnavailableError:
-        raise
-    except Exception as e:
-        logger.error("Error detecting shot boundaries: %s", e)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-
-
 @app.get("/api/detect-shots-status", response_model=DetectShotsStatusResponse)
 def detect_shots_status():
     """Let the browser select the detector before it uploads a whole video."""
@@ -443,7 +414,9 @@ async def detect_shots_upload(
 ):
     """Run TransNet V2 over a browser-selected local video without accepting a path."""
     suffix = os.path.splitext(file.filename or "")[1].lower()
-    if not suffix or len(suffix) > 12 or not suffix[1:].isalnum():
+    # Playlist/script-like extensions (.m3u8, .sdp, .txt, ...) can make ffmpeg open
+    # other files or URLs, so only known media containers keep their extension.
+    if suffix not in SAFE_MEDIA_SUFFIXES:
         suffix = ".mp4"
     temp_path = ""
     try:

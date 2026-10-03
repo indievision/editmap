@@ -1,6 +1,7 @@
 import type { SpeechAnalysis, SpeechRegion } from "../models/project";
 import { normalizeSpeechRegions } from "./speech";
 import { fetchLocalModel } from "./localModel";
+import { fetchJobStatus } from "./jobPolling";
 
 type SpeechJob = { status: string; progress?: number; elapsedSeconds?: number; etaSeconds?: number; phase?: string; error?: string; result?: { regions: SpeechRegion[]; duration: number; model: string; modelVersion: string; settingsVersion: string; threshold: number; minSpeechMs: number; minSilenceMs: number; processingSeconds: number } };
 const wait = (signal: AbortSignal) => new Promise<void>((resolve, reject) => {
@@ -18,9 +19,7 @@ export async function scanSpeechAudio(file: File, signature: string, onProgress:
     jobId = (await started.json()).jobId;
     while (jobId) {
       controller.signal.throwIfAborted();
-      const response = await fetchLocalModel(`/api/speech-jobs/${encodeURIComponent(jobId)}`, { signal: controller.signal });
-      if (!response.ok) throw new Error(`Speech status failed (HTTP ${response.status}).`);
-      const job = await response.json() as SpeechJob; onProgress(job);
+      const job = await fetchJobStatus<SpeechJob>(`/api/speech-jobs/${encodeURIComponent(jobId)}`, "Speech", controller.signal); onProgress(job);
       if (job.status === "complete" && job.result) {
         const result = job.result; jobId = undefined;
         return { ...result, model: "silero-vad", modelVersion: "6.2.0", settingsVersion: "vad-1", regions: normalizeSpeechRegions(result.regions, result.duration), mediaSignature: signature, scannedAt: new Date().toISOString() };

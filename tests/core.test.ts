@@ -167,3 +167,19 @@ FCM: NON-DROP FRAME
   assert.equal(result.shots[1].startSeconds, 5);
   assert.equal(result.shots[1].endSeconds, 8);
 });
+test("lenient EDL import keeps readable events and reports the rest", () => {
+  const text = [
+    "001 AX V C 00:00:00:00 00:00:02:00 01:00:00:00 01:00:02:00",
+    "002 AX V C 00:00:00:00 00:00:02:00 01:00:02:00 01:00:99:00", // bad timecode
+    "003 AX V C 00:00:00:00 00:00:01:00 01:00:01:00 01:00:02:00", // overlaps 001
+    "004 AX V C 00:00:00:00",                                     // incomplete
+    "005 AX V C 00:00:00:00 00:00:02:00 01:00:02:00 01:00:04:00",
+  ].join("\n");
+  assert.throws(() => parseEDL(text, 24), /Line 4/); // strict mode is unchanged: first bad line aborts
+  const result = parseEDL(text, 24, undefined, { lenient: true });
+  assert.deepEqual(result.shots.map((s) => s.index), [1, 5]);
+  assert.deepEqual(result.skipped.map((s) => s.line), [2, 3, 4]);
+  assert.equal(result.duration, 4);
+  assert.throws(() => parseEDL("001 AX V C bad bad bad bad", 24, undefined, { lenient: true }), /No readable/);
+  assert.deepEqual(parseEDL(fixture("cuts-24"), 24).skipped, []);
+});

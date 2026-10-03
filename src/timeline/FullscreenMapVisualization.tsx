@@ -7,6 +7,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
+import { usePlayhead } from "../playback/playhead";
 import type {
   Project,
   Shot,
@@ -22,7 +23,6 @@ import type { MapLayerState } from "./EditingMap";
 
 export interface FullscreenMapVisualizationProps {
   project: Project;
-  time: number;
   playing: boolean;
   onTogglePlay: () => void;
   onSeek: (time: number) => void;
@@ -436,7 +436,6 @@ export function generateCutDensityPathAndArea(
 
 export default memo(function FullscreenMapVisualization({
   project,
-  time,
   playing,
   onTogglePlay,
   onSeek,
@@ -462,6 +461,7 @@ export default memo(function FullscreenMapVisualization({
   url,
   onClose,
 }: FullscreenMapVisualizationProps) {
+  const time = usePlayhead();
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollViewportRef = useRef<HTMLDivElement>(null);
   const minimapRef = useRef<HTMLDivElement>(null);
