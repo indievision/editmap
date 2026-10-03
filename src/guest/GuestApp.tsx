@@ -71,6 +71,8 @@ function GuestWorkspace() {
       if (!data || typeof data !== "object") return;
       if (data.type === "GUEST_STATE" && data.workspace) {
         setState({ workspace: data.workspace, time: Number(data.time) || 0, playing: Boolean(data.playing), videoUrl: String(data.videoUrl ?? ""), at: performance.now() });
+      } else if (data.type === "GUEST_HIDE") {
+        setState(null); // the host left Studio / Explore: drop the picture so it stops decoding
       } else if (data.type === "ROOM_DATA_UPDATED") {
         void refresh(data.part);
       }
@@ -93,10 +95,22 @@ function GuestWorkspace() {
   }, [state, ready]);
 
   useEffect(() => {
-    if (!state?.playing) return;
+    if (!state?.playing) {
+      if (video.current) video.current.playbackRate = 1;
+      return;
+    }
     let frame = 0;
     const tick = () => {
-      if (video.current) setPlayhead(video.current.currentTime);
+      const v = video.current;
+      if (v) {
+        setPlayhead(v.currentTime);
+        // Phase-lock to the host: where the host is now, from its last update plus the time since.
+        const hostNow = state.time + (performance.now() - state.at) / 1000;
+        const drift = hostNow - v.currentTime; // positive: this picture is behind
+        if (Math.abs(drift) > 0.5) v.currentTime = hostNow;
+        else if (Math.abs(drift) > 0.04) v.playbackRate = Math.max(0.9, Math.min(1.1, 1 + drift * 0.8));
+        else v.playbackRate = 1;
+      }
       frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);

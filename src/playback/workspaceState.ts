@@ -49,13 +49,13 @@ export function sameView(a: WorkspaceView, b: WorkspaceView): boolean {
   return true;
 }
 
-/** Longest gap between two playhead updates sent while the film plays. */
-export const PLAYHEAD_RELAY_MS = 1000;
+/** Longest gap between two playhead updates sent while the film plays (guests phase-lock to them). */
+export const PLAYHEAD_RELAY_MS = 500;
 
 /**
  * Decides whether the playhead needs sending now. A jump (seek) or a play/pause
  * change is sent at once; steady playback is sent at most once per
- * `PLAYHEAD_RELAY_MS`, since guests keep time between updates.
+ * `PLAYHEAD_RELAY_MS`; guests keep time between updates and nudge their speed to stay locked.
  */
 export function shouldRelayPlayhead(
   last: { time: number; playing: boolean; at: number } | null,

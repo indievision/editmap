@@ -1296,7 +1296,7 @@
     let isFollowing = true;
     let hostState = { time: 0, playing: false };
     let hostWorkspace = null;
-    const PAGE_BUILD = '2026-10-03-diag1';   // shown in the diagnostic, to tell a stale cached page from a current one
+    const PAGE_BUILD = '2026-10-03-sync2';   // shown in the diagnostic, to tell a stale cached page from a current one
     const roomLog = [];                      // the last room messages, for the diagnostic (Shift+D)
     let pendingCueRender = false;
     document.addEventListener('focusout', (e) => {
@@ -1439,7 +1439,7 @@
 
         // Heartbeat for guests in the room, once a second, so they correct drift
         const roomNow = performance.now();
-        if (!isGuest && ws && ws.readyState === WebSocket.OPEN && roomNow - lastRoomPulse > 1000) {
+        if (!isGuest && ws && ws.readyState === WebSocket.OPEN && roomNow - lastRoomPulse > 500) {
           lastRoomPulse = roomNow;
           ws.send(JSON.stringify({ type: 'TIME_PULSE', currentTime: video.currentTime, isPlaying: true }));
         }
@@ -1481,6 +1481,7 @@
         `build ${PAGE_BUILD}  role ${isGuest ? 'guest' : 'host'}  mode ${currentMode}  following ${isFollowing}`,
         `host says: ${formatSMPTE(hostState.time)}  ${hostState.playing ? 'PLAYING' : 'paused'}  workspace ${hostWorkspace ? hostWorkspace.mode : '-'}`,
         `video: t=${v.currentTime.toFixed(2)} ${v.paused ? 'paused' : 'PLAYING'} ready=${v.readyState} net=${v.networkState} seeking=${v.seeking} ${v.videoWidth}x${v.videoHeight}${v.error ? ' ERROR ' + v.error.code : ''}`,
+        `frames: ${(() => { try { const q = v.getVideoPlaybackQuality(); return q.totalVideoFrames + ' decoded, ' + q.droppedVideoFrames + ' dropped'; } catch (e) { return 'n/a'; } })()}  picture brightness: ${(() => { try { const c = document.createElement('canvas'); c.width = c.height = 8; const x = c.getContext('2d'); x.drawImage(v, 0, 0, 8, 8); const d = x.getImageData(0, 0, 8, 8).data; let t = 0; for (let i = 0; i < d.length; i += 4) t += (d[i] + d[i + 1] + d[i + 2]) / 3; return Math.round(t / 64) + '/255'; } catch (e) { return 'n/a'; } })()}  rate ${v.playbackRate.toFixed(2)}`,
         `socket: ${ws ? ws.readyState : '-'}   last from room:`,
         ...roomLog.slice().reverse()
       ].join('\n');
@@ -1506,6 +1507,14 @@
     }
     ['error', 'loadstart', 'loadeddata', 'canplay', 'waiting', 'playing', 'seeked', 'emptied'].forEach(n => video.addEventListener(n, updateFilmStatus));
     setInterval(updateFilmStatus, 1000);
+    // The host's video can stop or start by more than one route (the button, a key, scrubbing, the app).
+    // Tell the room about the video itself, so guests never keep playing after the host has stopped.
+    video.addEventListener('pause', () => {
+      if (!isGuest && ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'PAUSE', currentTime: video.currentTime }));
+    });
+    video.addEventListener('play', () => {
+      if (!isGuest && ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'PLAY', currentTime: video.currentTime }));
+    });
     video.addEventListener('volumechange', () => { if (isGuest && !video.muted) video.muted = true; });
     video.addEventListener('play', startContinuousSync);
     video.addEventListener('pause', stopContinuousSync);
@@ -2112,6 +2121,7 @@
         }
         else if (msg.type === 'PLAY') {
           hostState = { time: msg.currentTime, playing: true };
+          lastHostSignalAt = performance.now();
           if (isGuest && !isFollowing) { updateFollowBar(); return; }
           if (Math.abs(video.currentTime - msg.currentTime) > 0.15) {
             video.currentTime = msg.currentTime;
@@ -2138,7 +2148,8 @@
         }
         else if (msg.type === 'TIME_PULSE') {
           hostState = { time: msg.currentTime, playing: !!msg.isPlaying };
-          if (isGuest) syncToHost(0.4);
+          if (msg.isPlaying) lastHostSignalAt = performance.now();
+          if (isGuest) syncToHost(0.5);
         }
         else if (msg.type === 'ROOM_DATA_UPDATED') {
           const frame = guestFrame();
@@ -2149,6 +2160,7 @@
           hostWorkspace = msg.state;
           if (isGuest && typeof msg.state.time === 'number') {
             hostState = { time: msg.state.time, playing: msg.state.playing === true };
+            if (msg.state.playing === true) lastHostSignalAt = performance.now();
           } else if (isGuest && wasInApp && (msg.state.mode === 'screening' || msg.state.mode === 'review')) {
             // The app pauses when the host leaves Studio or Explore; do not keep playing on the old flag.
             hostState.playing = false;
@@ -2218,14 +2230,37 @@
       return true;
     }
 
+    // Phase-lock to the host: small differences are removed by running a few percent faster or slower
+    // (no visible jump); only a large gap seeks. Called with fresh host time, so a late start of playback
+    // is corrected within a second or two instead of being left at a few frames behind.
+    function lockToHost() {
+      if (!isGuest || !isFollowing || !hostState.playing) return;
+      const drift = hostState.time - video.currentTime;   // positive: this device is behind
+      if (Math.abs(drift) > 0.5) { video.currentTime = hostState.time; video.playbackRate = 1; }
+      else if (Math.abs(drift) > 0.04) video.playbackRate = Math.max(0.9, Math.min(1.1, 1 + drift * 0.8));
+      else video.playbackRate = 1;
+    }
+
+    let lastHostSignalAt = performance.now();   // the last time the host said it was playing
+    setInterval(() => {
+      // The host's page sends a pulse twice a second while playing. Silence means it has stopped
+      // (or is unreachable): do not keep playing on the last thing we heard.
+      if (!isGuest || !hostState.playing || performance.now() - lastHostSignalAt < 3500) return;
+      hostState.playing = false;
+      if (isFollowing && !video.paused) { video.pause(); video.playbackRate = 1; updatePlayButtonUI(false); }
+      updateFollowBar();
+    }, 1000);
+
     function syncToHost(threshold) {
       if (!isGuest || !isFollowing) { updateFollowBar(); return; }
       const inStudioOrExplore = hostWorkspace && (hostWorkspace.mode === 'studio' || hostWorkspace.mode === 'explore');
       if (Math.abs(video.currentTime - hostState.time) > threshold) video.currentTime = hostState.time;
       if (hostState.playing && !inStudioOrExplore) {
         if (video.paused) video.play().catch(() => {});
-      } else if (!video.paused) {
-        video.pause();
+        lockToHost();
+      } else {
+        video.playbackRate = 1;
+        if (!video.paused) video.pause();
       }
       updatePlayButtonUI(!video.paused);
       updateFollowBar();
@@ -2362,6 +2397,12 @@
       const away = isGuest && w && (w.mode === 'studio' || w.mode === 'explore');
       postGuestHeader();
       el.classList.toggle('hidden', !away);
+      // A hidden Studio picture must not keep playing and decoding underneath the Review picture.
+      const studioFrame = guestFrame();
+      if (studioFrame && studioFrame.dataset.started && studioFrame.contentWindow && studioFrame.dataset.shown !== (away ? '1' : '0')) {
+        studioFrame.dataset.shown = away ? '1' : '0';
+        if (!away) studioFrame.contentWindow.postMessage({ type: 'GUEST_HIDE' }, window.location.origin);
+      }
       const studioBtn = document.getElementById('btnStudio');
       if (studioBtn) {
         studioBtn.style.boxShadow = away ? '0 0 0 2px rgba(229,169,60,0.7)' : '';
