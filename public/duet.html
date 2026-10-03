@@ -1293,6 +1293,7 @@
     let isFollowing = true;
     let hostState = { time: 0, playing: false };
     let hostWorkspace = null;
+    let roomVideoUrl = null;           // the film the room currently has
     let roomFilm = null;               // host: the film uploaded to the room server, announced once the room is joined
     let lastWorkspaceMessage = null;   // host only: the app's latest workspace, resent on reconnect
     let strokes = [];                  // everyone's pencil strokes, so one person's can be erased
@@ -1678,7 +1679,7 @@
       const xhr = new XMLHttpRequest();
       // Inside the app this page is served by Vite, which sends /api/* to the analysis backend.
       // The upload belongs to the room server, so address it directly (as the join link does).
-      const roomBase = window.location.port === '3000' ? '' : `${window.location.protocol}//${window.location.hostname}:3000`;
+      const roomBase = roomServerBase();
       xhr.open('POST', `${roomBase}/api/upload`, true);
       xhr.setRequestHeader('x-file-name', encodeURIComponent(file.name));
 
@@ -1705,13 +1706,7 @@
           loadAudioWaveform(file || video.src);
           clearMarkersState(true);
 
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({
-              type: 'SHARE_VIDEO',
-              videoUrl: resp.url,
-              videoName: file.name
-            }));
-          }
+          announceFilm();
         }
       };
       const failTransfer = (why) => {
@@ -2005,10 +2000,10 @@
           document.getElementById('connectedCountBadge').textContent = msg.connectedCount;
           myId = msg.yourInfo ? msg.yourInfo.id : null;
           setGuest(!msg.yourInfo || msg.yourInfo.role !== 'host');
-          // The film was uploaded before this room was joined, so announce it now (once: a reconnect must not wipe the markers).
-          if (!isGuest && roomFilm && msg.state.videoUrl !== roomFilm.url) {
-            ws.send(JSON.stringify({ type: 'SHARE_VIDEO', videoUrl: roomFilm.url, videoName: roomFilm.name }));
-          }
+          // The film may have been uploaded before this room was joined, or in an earlier session: announce it
+          // now, once (a reconnect must not wipe the markers).
+          roomVideoUrl = msg.state.videoUrl || null;
+          if (!isGuest) { announceFilm(); adoptUploadedFilm(); }
           if (isGuest) {
             showGuestHeader();
             activeWaxColor = personalPenColor();
@@ -2168,6 +2163,33 @@
       bar.classList.toggle('hidden', !show);
       const label = document.getElementById('followBarLabel');
       if (label && show) label.textContent = `Host at ${formatSMPTE(hostState.time)} ${hostState.playing ? '▶' : '❚❚'}`;
+    }
+
+    // The room server's address. Inside the app this page is served by Vite, so it is addressed in full.
+    function roomServerBase() {
+      return window.location.port === '3000' ? '' : `${window.location.protocol}//${window.location.hostname}:3000`;
+    }
+
+    // Host: tell the room which film to stream, once.
+    function announceFilm() {
+      if (isGuest || !roomFilm || !ws || ws.readyState !== WebSocket.OPEN || roomVideoUrl === roomFilm.url) return;
+      roomVideoUrl = roomFilm.url;
+      ws.send(JSON.stringify({ type: 'SHARE_VIDEO', videoUrl: roomFilm.url, videoName: roomFilm.name }));
+    }
+
+    // Host: a film chosen on this Mac that was already transferred (same name and size) needs no second upload.
+    async function adoptUploadedFilm() {
+      if (isGuest || roomFilm || !selectedFile) return;
+      try {
+        const response = await fetch(`${roomServerBase()}/api/uploads`, { cache: 'no-store' });
+        if (!response.ok) return;
+        const files = await response.json();
+        const clean = String(selectedFile.name).replace(/[^a-zA-Z0-9._-]/g, '_').replace(/^\.+/, '_');
+        const hit = files.find(f => f.name === clean && f.size === selectedFile.size);
+        if (!hit) return;
+        roomFilm = { url: `/uploads/${encodeURIComponent(hit.name)}`, name: selectedFile.name };
+        announceFilm();
+      } catch (e) { /* the room server is not reachable: nothing to share */ }
     }
 
     // The host's own header, for guests, above everything else.

@@ -195,6 +195,21 @@ const server = http.createServer((req, res) => {
     return res.end();
   }
 
+  // Films already on this machine's room server, so the host's page can recognise one it uploaded earlier.
+  if (req.method === 'GET' && reqPath === '/api/uploads') {
+    const cors = roomDataCors(req);
+    if (!isLocalHost(req)) { res.writeHead(403); return res.end(); }
+    let files = [];
+    try {
+      files = fs.readdirSync(UPLOADS_DIR)
+        .map((name) => ({ name, stat: fs.statSync(path.join(UPLOADS_DIR, name)) }))
+        .filter((f) => f.stat.isFile())
+        .map((f) => ({ name: f.name, size: f.stat.size }));
+    } catch { /* an empty list is fine */ }
+    res.writeHead(200, { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify(files));
+  }
+
   // 1. In-App Video Upload: POST /api/upload
   if (reqPath === '/api/upload' && req.method === 'OPTIONS') {
     res.writeHead(204, roomDataCors(req, 'x-file-name, content-type'));

@@ -337,3 +337,12 @@ test("the embedded hub can upload the film from the app's origin, and no other s
   assert.equal(evil.headers["access-control-allow-origin"], undefined);
   assert.equal((await request({ path: "/api/upload", method: "POST", headers: { Origin: "https://evil.example", "x-file-name": "a.mp4" }, body: "x" })).status, 403);
 });
+
+test("only the host machine can list the films already uploaded", async () => {
+  const list = await request({ path: "/api/uploads", headers: { Origin: "http://127.0.0.1:5173" } });
+  assert.equal(list.status, 200);
+  assert.equal(list.headers["access-control-allow-origin"], "http://127.0.0.1:5173");
+  const files = JSON.parse(list.body) as { name: string; size: number }[];
+  assert.ok(files.some((f) => f.name === "clip.mp4" && f.size === 10), "name and size, so the host can recognise a film");
+  assert.equal((await request({ path: "/api/uploads", headers: { Host: `192.168.0.9:${PORT}`, Cookie: `duet_token=${token}` } })).status, 403, "a guest cannot list them");
+});
