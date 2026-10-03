@@ -379,7 +379,9 @@ function getOrCreateRoom(roomCode) {
         mode: 'screening',
         updatedAt: 0,
         workspace: null
-      }
+      },
+      // The temporary pencil layer for the frame the host is paused on: [{ authorId, stroke }], oldest first.
+      drawing: []
     });
   }
   return rooms.get(roomCode);
@@ -412,6 +414,29 @@ const HOST_ONLY_MESSAGES = new Set([
 // selected shot, open tool...). The server keeps the latest one so a guest who joins
 // late starts from it, and relays every change. It is opaque to the server apart from
 // these bounds: the shape is defined by src/playback/workspaceState.ts.
+// Drawings are temporary: they belong to one paused frame. Anything that moves the host off that frame empties them.
+const MAX_STROKES = 400;
+const MAX_STROKE_POINTS = 2000;
+
+function sanitizeStroke(stroke) {
+  if (!stroke || typeof stroke !== 'object' || !Array.isArray(stroke.points)) return null;
+  const points = [];
+  for (const p of stroke.points.slice(0, MAX_STROKE_POINTS)) {
+    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
+    points.push({ x: Math.min(1, Math.max(0, p.x)), y: Math.min(1, Math.max(0, p.y)) });
+  }
+  if (points.length < 2) return null;
+  const color = typeof stroke.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(stroke.color) ? stroke.color : '#f3bb40';
+  return { points, color };
+}
+
+// Empties the shared drawing once, telling everyone else only if there was something to remove.
+function dropDrawing(roomCode, room, senderWs) {
+  if (!room.drawing.length) return;
+  room.drawing = [];
+  broadcastToRoom(roomCode, senderWs, { type: 'CLEAR_DRAW' }, false);
+}
+
 const WORKSPACES = new Set(['screening', 'review', 'studio', 'explore']);
 const MAX_WORKSPACE_BYTES = 16 * 1024;
 
@@ -468,6 +493,7 @@ wss.on('connection', (ws, req) => {
         ws.send(JSON.stringify({
           type: 'INIT_STATE',
           state: { ...room.state, currentTime: liveTime(room) },
+          drawing: room.drawing,
           participants: participants,
           connectedCount: room.clients.size,
           yourInfo: clientInfo
@@ -490,6 +516,10 @@ wss.on('connection', (ws, req) => {
         if (HOST_ONLY_MESSAGES.has(type) && clientInfo.role !== 'host') return;
 
         // Shared Video File: Starting a new film resets markers for a clean slate
+        if (type === 'SHARE_VIDEO' || type === 'PLAY' || type === 'SEEK' || type === 'SELECT_MARKER' || (type === 'MODE_CHANGE' && data.mode !== room.state.mode)) {
+          dropDrawing(currentRoomCode, room, ws);
+        }
+
         if (type === 'SHARE_VIDEO') {
           room.state.videoUrl = data.videoUrl;
           room.state.videoName = data.videoName;
@@ -505,6 +535,7 @@ wss.on('connection', (ws, req) => {
         }
         // Explicit clean slate request
         else if (type === 'CLEAR_MARKERS') {
+          dropDrawing(currentRoomCode, room, ws);
           room.state.markers = [];
           room.state.activeMarkerId = null;
           broadcastToRoom(currentRoomCode, ws, {
@@ -618,6 +649,9 @@ wss.on('connection', (ws, req) => {
           if (!workspace) return;
           const wasInApp = room.state.workspace && (room.state.workspace.mode === 'studio' || room.state.workspace.mode === 'explore');
           room.state.workspace = workspace;
+          if (workspace.mode !== 'review') {
+            dropDrawing(currentRoomCode, room, ws);
+          }
           // The app pauses when the host leaves Studio or Explore, and its Screening/Review state carries no play flag.
           if (wasInApp && (workspace.mode === 'screening' || workspace.mode === 'review') && typeof workspace.time !== 'number') {
             setPlayhead(room, undefined, false);
@@ -627,22 +661,42 @@ wss.on('connection', (ws, req) => {
           broadcastToRoom(currentRoomCode, ws, { type: 'WORKSPACE_STATE', state: workspace }, false);
         }
         // Grease Pencil Drawing Sync
-        // Drawing belongs to Review, where the frame is still; nobody draws during a screening.
+        // Drawing belongs to Review, on a paused frame; nobody draws during a screening or while the film plays.
+        // The author is always this connection, never something the client says.
         else if (type === 'DRAW_STROKE') {
-          if (room.state.mode !== 'review') return;
+          if (room.state.mode !== 'review' || room.state.isPlaying) return;
+          const stroke = sanitizeStroke(data.stroke);
+          if (!stroke) return;
+          room.drawing.push({ authorId: clientInfo.id, stroke });
+          if (room.drawing.length > MAX_STROKES) room.drawing.shift();
           broadcastToRoom(currentRoomCode, ws, {
             type: 'DRAW_STROKE',
-            stroke: data.stroke,
+            stroke,
             authorId: clientInfo.id
           }, false);
         }
         else if (type === 'CLEAR_DRAW') {
+          room.drawing = [];
           broadcastToRoom(currentRoomCode, ws, {
             type: 'CLEAR_DRAW'
           }, false);
         }
-        // Anyone can take back their own strokes, nobody else's.
+        // Take back the latest stroke this connection drew, nobody else's.
+        else if (type === 'UNDO_DRAW') {
+          let index = -1;
+          for (let i = room.drawing.length - 1; i >= 0; i--) {
+            if (room.drawing[i].authorId === clientInfo.id) { index = i; break; }
+          }
+          if (index === -1) return;
+          room.drawing.splice(index, 1);
+          broadcastToRoom(currentRoomCode, ws, {
+            type: 'UNDO_DRAW',
+            authorId: clientInfo.id
+          }, false);
+        }
+        // Anyone can take back all of their own strokes, nobody else's.
         else if (type === 'ERASE_DRAW') {
+          room.drawing = room.drawing.filter(d => d.authorId !== clientInfo.id);
           broadcastToRoom(currentRoomCode, ws, {
             type: 'ERASE_DRAW',
             authorId: clientInfo.id

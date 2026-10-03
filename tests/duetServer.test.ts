@@ -217,7 +217,7 @@ test("drawing is relayed only in Review", async () => {
   const room = "roles-draw";
   const host = await joinRoom(room, "host", "Teacher", false);
   const anna = await joinRoom(room, "student", "Anna", true);
-  const stroke = { points: [[0, 0], [1, 1]], color: "#e5a93c" };
+  const stroke = { points: [{ x: 0, y: 0 }, { x: 1, y: 1 }], color: "#e5a93c" };
 
   anna.send({ type: "DRAW_STROKE", stroke });
   await settle();
@@ -284,6 +284,121 @@ test("a guest can erase their own pencil strokes, and the room is told whose", a
   assert.equal(received(host, "ERASE_DRAW")[0].authorId, annaId, "the erase names the guest who sent it, not a client-supplied id");
   anna.close();
   host.close();
+});
+
+// --- Temporary drawing: per-author undo, one shared layer, cleared when the host moves --------------
+
+const line = (color = "#e5a93c") => ({ points: [{ x: 0.1, y: 0.1 }, { x: 0.8, y: 0.7 }], color });
+
+async function reviewRoom(room: string) {
+  const host = await joinRoom(room, "host", "Teacher", false);
+  const anna = await joinRoom(room, "student", "Anna", true);
+  const ben = await joinRoom(room, "student", "Ben", true);
+  host.send({ type: "MODE_CHANGE", mode: "review" });
+  host.send({ type: "PAUSE", currentTime: 3 });
+  await until(() => received(ben, "PAUSE").length === 1);
+  const id = (peer: Peer) => peer.messages.find((m) => m.type === "INIT_STATE").yourInfo.id as string;
+  return { host, anna, ben, annaId: id(anna), benId: id(ben), hostId: id(host), close: () => { anna.close(); ben.close(); host.close(); } };
+}
+
+test("undo removes only the sender's latest stroke, whoever sends it, and the room is told whose", async () => {
+  const r = await reviewRoom("draw-undo");
+  r.anna.send({ type: "DRAW_STROKE", stroke: line("#ef5266") });
+  r.ben.send({ type: "DRAW_STROKE", stroke: line("#39c99d") });
+  r.anna.send({ type: "DRAW_STROKE", stroke: line("#39cbe2") });
+  await until(() => received(r.host, "DRAW_STROKE").length === 3);
+
+  // A forged author is ignored: the server uses the connection.
+  r.ben.send({ type: "UNDO_DRAW", authorId: r.annaId });
+  await until(() => received(r.host, "UNDO_DRAW").length === 1);
+  assert.equal(received(r.host, "UNDO_DRAW")[0].authorId, r.benId);
+  assert.equal(received(r.anna, "UNDO_DRAW")[0].authorId, r.benId);
+
+  // Ben has nothing left: a second undo does nothing, and Anna's strokes are untouched.
+  r.ben.send({ type: "UNDO_DRAW" });
+  await settle();
+  assert.equal(received(r.host, "UNDO_DRAW").length, 1);
+
+  const late = await joinRoom("draw-undo", "student", "Late", true);
+  const drawing = late.messages.find((m) => m.type === "INIT_STATE").drawing;
+  assert.deepEqual(drawing.map((d: any) => d.authorId), [r.annaId, r.annaId], "a late joiner gets exactly what is left");
+  late.close();
+  r.close();
+});
+
+test("a guest's clear takes only their own strokes; only the host clears everyone's", async () => {
+  const r = await reviewRoom("draw-clear");
+  r.host.send({ type: "DRAW_STROKE", stroke: line() });
+  r.anna.send({ type: "DRAW_STROKE", stroke: line() });
+  await until(() => received(r.ben, "DRAW_STROKE").length === 2);
+
+  r.anna.send({ type: "CLEAR_DRAW" });
+  r.anna.send({ type: "ERASE_DRAW" });
+  await until(() => received(r.host, "ERASE_DRAW").length === 1);
+  assert.equal(received(r.host, "CLEAR_DRAW").length, 0, "a guest cannot clear the shared drawing");
+  let late = await joinRoom("draw-clear", "student", "Late", true);
+  assert.deepEqual(late.messages.find((m) => m.type === "INIT_STATE").drawing.map((d: any) => d.authorId), [r.hostId], "the host's stroke survives");
+  late.close();
+
+  r.host.send({ type: "CLEAR_DRAW" });
+  await until(() => received(r.ben, "CLEAR_DRAW").length === 1);
+  late = await joinRoom("draw-clear", "student", "Late2", true);
+  assert.equal(late.messages.find((m) => m.type === "INIT_STATE").drawing.length, 0);
+  late.close();
+  r.close();
+});
+
+test("drawing is refused while the film plays, and malformed strokes are dropped", async () => {
+  const r = await reviewRoom("draw-rules");
+  r.anna.send({ type: "DRAW_STROKE", stroke: { points: [{ x: 0, y: 0 }], color: "#e5a93c" } });
+  r.anna.send({ type: "DRAW_STROKE", stroke: { points: [{ x: "a", y: 0 }, { x: 1, y: 1 }] } });
+  r.anna.send({ type: "DRAW_STROKE", stroke: "nope" });
+  r.host.send({ type: "PLAY", currentTime: 3 });
+  await until(() => received(r.ben, "PLAY").length === 1);
+  r.anna.send({ type: "DRAW_STROKE", stroke: line() });
+  await settle();
+  assert.equal(received(r.host, "DRAW_STROKE").length, 0);
+  r.close();
+});
+
+test("the host leaving the frame empties the drawing once: play, seek, cue, mode and film", async () => {
+  const r = await reviewRoom("draw-nav");
+  const moves: object[] = [
+    { type: "PLAY", currentTime: 3 },
+    { type: "SEEK", currentTime: 9 },
+    { type: "SELECT_MARKER", id: "m1", currentTime: 12 },
+    { type: "MODE_CHANGE", mode: "screening" },
+    { type: "SHARE_VIDEO", videoUrl: "/uploads/x.mp4", videoName: "x" },
+  ];
+  let expected = 0;
+  for (const move of moves) {
+    r.host.send({ type: "MODE_CHANGE", mode: "review" });
+    r.host.send({ type: "PAUSE", currentTime: 3 });
+    r.anna.send({ type: "DRAW_STROKE", stroke: line() });
+    expected++;
+    await until(() => received(r.host, "DRAW_STROKE").length === expected);
+    r.host.send(move);
+    await until(() => received(r.ben, "CLEAR_DRAW").length === expected);
+    // Scrubbing sends many seeks: the drawing is already gone, so nobody is told again.
+    r.host.send({ type: "SEEK", currentTime: 10 });
+    r.host.send({ type: "SEEK", currentTime: 11 });
+    await settle();
+    assert.equal(received(r.ben, "CLEAR_DRAW").length, expected, `${(move as any).type} clears exactly once`);
+  }
+  r.close();
+});
+
+test("a guest's drawing is not cleared by a guest, and a host pause or tick keeps the drawing", async () => {
+  const r = await reviewRoom("draw-keep");
+  r.anna.send({ type: "DRAW_STROKE", stroke: line() });
+  await until(() => received(r.host, "DRAW_STROKE").length === 1);
+  r.anna.send({ type: "SEEK", currentTime: 50 }); // refused: guests cannot move the room
+  r.host.send({ type: "PAUSE", currentTime: 3 });
+  r.host.send({ type: "TIME_PULSE", currentTime: 3, isPlaying: false });
+  r.host.send({ type: "MODE_CHANGE", mode: "review" }); // same mode: not a change
+  await settle();
+  assert.equal(received(r.ben, "CLEAR_DRAW").length, 0);
+  r.close();
 });
 
 // --- Analysis data for guests' read-only Studio -----------------------------------------------

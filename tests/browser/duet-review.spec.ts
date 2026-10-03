@@ -65,35 +65,77 @@ test.describe("DUET Review Screen Mockup Implementation", () => {
     await expect(durTc).toBeVisible();
 
     // ========================================================
-    // REQUIREMENT 2: Pencil toolbar & Clear button
+    // REQUIREMENT 2: Pencil rail under the picture
     // ========================================================
     const pencilToolbar = iframe.locator("#pencilToolbar");
     await expect(pencilToolbar).toBeVisible();
-    await expect(pencilToolbar.locator("b")).toHaveText("Pencil");
 
-    // 4 color swatches
+    // The rail sits between the picture and the timeline, never over the video
+    const pictureBox = (await iframe.locator("#cinemaViewer").boundingBox())!;
+    const railBox = (await pencilToolbar.boundingBox())!;
+    const timelineBox = (await iframe.locator("#pulsePanel").boundingBox())!;
+    expect(railBox.y).toBeGreaterThanOrEqual(pictureBox.y + pictureBox.height - 1);
+    expect(railBox.y + railBox.height).toBeLessThanOrEqual(timelineBox.y + 1);
+    expect(await pencilToolbar.evaluate((el) => getComputedStyle(el).backdropFilter)).toBe("none");
+
+    // Pencil is a real mode and starts off
+    const pencilBtn = iframe.locator("#btnPencil");
+    await expect(pencilBtn).toHaveAttribute("aria-pressed", "false");
+    await expect(iframe.locator("#btnUndoDraw")).toBeDisabled();
+    await expect(iframe.locator("#btnClearDraw")).toBeDisabled();
+
+    // 4 color swatches, amber selected by default
     const swatches = pencilToolbar.locator(".swatch");
     await expect(swatches).toHaveCount(4);
-
-    // Amber is selected by default
     const amberSwatch = pencilToolbar.locator(".swatch[data-color='#f3bb40']");
     await expect(amberSwatch).toHaveClass(/sel/);
-
-    // Click Green swatch and verify unmistakable selection
     const greenSwatch = pencilToolbar.locator(".swatch[data-color='#39c99d']");
     await greenSwatch.click();
     await expect(greenSwatch).toHaveClass(/sel/);
     await expect(amberSwatch).not.toHaveClass(/sel/);
-
-    // Click Rose swatch
     const roseSwatch = pencilToolbar.locator(".swatch[data-color='#ef5266']");
     await roseSwatch.click();
     await expect(roseSwatch).toHaveClass(/sel/);
 
-    // Clear button
-    const clearBtn = pencilToolbar.locator("button.clear");
-    await expect(clearBtn).toHaveText("Clear");
-    await clearBtn.click();
+    // Drawing: nothing while off, a stroke while on, Undo and Clear follow the strokes
+    const drag = async () => {
+      const box = (await iframe.locator("#waxCanvas").boundingBox())!;
+      await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.3);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.45, { steps: 6 });
+      await page.mouse.up();
+    };
+    const strokeCount = () => iframe.locator("#mainVideoPlayer").evaluate("strokes.length") as Promise<number>;
+    await iframe.locator("#mainVideoPlayer").evaluate((v: HTMLVideoElement) => v.pause());
+    await drag();
+    expect(await strokeCount()).toBe(0);
+
+    await pencilBtn.click();
+    await expect(pencilBtn).toHaveAttribute("aria-pressed", "true");
+    await drag();
+    await expect.poll(strokeCount).toBe(1);
+    await expect(iframe.locator("#btnUndoDraw")).toBeEnabled();
+    await expect(iframe.locator("#btnClearDraw")).toBeEnabled();
+    await iframe.locator("#btnUndoDraw").click();
+    await expect.poll(strokeCount).toBe(0);
+    await expect(iframe.locator("#btnUndoDraw")).toBeDisabled();
+
+    await drag();
+    await expect.poll(strokeCount).toBe(1);
+    // Moving a frame ends the discussion: the drawing goes
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(strokeCount).toBe(0);
+    await drag();
+    await expect.poll(strokeCount).toBe(1);
+    await iframe.locator("#btnClearDraw").click();
+    await expect.poll(strokeCount).toBe(0);
+
+    // Keyboard: focus ring is visible and Enter toggles
+    await pencilBtn.focus();
+    await page.keyboard.press("Enter");
+    await expect(pencilBtn).toHaveAttribute("aria-pressed", "false");
+    await page.keyboard.press("Tab");
+    expect(await iframe.locator("#btnPencil").evaluate(() => document.activeElement?.matches(":focus-visible"))).toBe(true);
 
     // ========================================================
     // REQUIREMENT 3 & 4: Waveform visible, no toggle button / W
@@ -173,28 +215,28 @@ test.describe("DUET Review Screen Mockup Implementation", () => {
     await expect(iframe.locator("#cueCountBadge")).toHaveText(String(cueCount + 1));
 
     // ========================================================
-    // Playback, Frame Stepping, Audio Scrub, Projector & EDL
+    // Playback transport: icon-only, no frame buttons, no Audio Scrub
     // ========================================================
-    // Play / Pause toggle
     const playBtn = iframe.locator("#btnPlayPause");
     await expect(playBtn).toBeVisible();
+    await expect(playBtn).toHaveAttribute("aria-label", "Play");
+    await expect(iframe.locator("[aria-label='Previous cue']")).toBeVisible();
+    await expect(iframe.locator("[aria-label='Next cue']")).toBeVisible();
+    await expect(iframe.locator("button:has-text('+1 Frame')")).toHaveCount(0);
+    await expect(iframe.locator("button:has-text('-1 Frame')")).toHaveCount(0);
+    await expect(iframe.locator("#btnAudioScrub")).toHaveCount(0);
+    await expect(iframe.locator("text=Audio Scrub")).toHaveCount(0);
     await playBtn.click();
+    await expect(playBtn).toHaveAttribute("aria-label", "Pause");
     await page.waitForTimeout(400);
     await playBtn.click();
+    await expect(playBtn).toHaveAttribute("aria-label", "Play");
 
-    // Frame stepping
-    const stepFwdBtn = iframe.locator("button:has-text('+1 Frame')");
-    await stepFwdBtn.click();
-    const stepBackBtn = iframe.locator("button:has-text('-1 Frame')");
-    await stepBackBtn.click();
-
-    // Audio scrub toggle
-    const audioScrubBtn = iframe.locator("#btnAudioScrub");
-    await expect(audioScrubBtn).toContainText("Audio Scrub: OFF");
-    await audioScrubBtn.click();
-    await expect(audioScrubBtn).toContainText("Audio Scrub: ON");
-    await audioScrubBtn.click();
-    await expect(audioScrubBtn).toContainText("Audio Scrub: OFF");
+    // Left/Right still step a frame from the keyboard
+    const timeNow = () => iframe.locator("#mainVideoPlayer").evaluate((v: HTMLVideoElement) => v.currentTime);
+    const t0 = await timeNow();
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(timeNow).toBeGreaterThan(t0);
 
     // Projector button in EDITMAP header
     const projectorBtn = page.locator(".header-projector-btn");
