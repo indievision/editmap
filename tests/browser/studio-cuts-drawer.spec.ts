@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
-import { startNewProject } from "../helpers";
+import { startNewProject } from "./helpers";
 
 test("Studio Cuts drawer design, interactions, boundary frames, evidence rows, playback, and ribbon highlight", async ({
   page,
@@ -10,14 +10,9 @@ test("Studio Cuts drawer design, interactions, boundary frames, evidence rows, p
 
   await page.goto("/");
 
-  // 1. Setup new project with fixture video and EDL
+  // 1. Setup new project (the helper links the fixture film) and import the EDL
   await startNewProject(page);
   await page.getByLabel("Project name").fill("Studio Cuts Drawer Verification");
-
-  await page
-    .locator("input[type=file]")
-    .first()
-    .setInputFiles(path.resolve("fixtures/test-film.mp4"));
 
   await page
     .locator('input[accept*=".edl"]')
@@ -70,27 +65,25 @@ test("Studio Cuts drawer design, interactions, boundary frames, evidence rows, p
   await closeBtn.click();
   await expect(drawer).not.toBeVisible();
 
-  // 6. Re-open via Cuts rail button, test close via Escape key
-  await cutsRailBtn.click();
-  await expect(drawer).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(drawer).not.toBeVisible();
-
-  // 7. Re-open and test close via clicking Cuts rail button again
-  await cutsRailBtn.click();
-  await expect(drawer).toBeVisible();
-  await cutsRailBtn.click();
-  await expect(drawer).not.toBeVisible();
-
   // 8. Select a cut by clicking the boundary on the Editing Map
   await page.locator(".shot-track").scrollIntoViewIfNeeded();
   const cutBoundary = page.locator(".cut-boundary").first();
   await expect(cutBoundary).toBeVisible();
   await cutBoundary.click();
 
-  // Drawer should automatically open
+  // Drawer should automatically open (the tool rail lives inside it, so a closed
+  // drawer is reopened by selecting a cut or from the Studio toolbar).
   await expect(drawer).toBeVisible();
   await expect(drawer).toHaveClass(/drawer-open/);
+
+  // Escape closes it, and selecting a cut brings it back. (The playhead is parked
+  // on the cut just selected, so reopen with the other cut, then return to the first.)
+  await page.keyboard.press("Escape");
+  await expect(drawer).not.toBeVisible();
+  await page.locator(".cut-boundary").nth(1).click();
+  await expect(drawer).toBeVisible();
+  await expect(page.locator(".cut-drawer-subtitle")).toHaveText("Shot 002 → 003");
+  await cutBoundary.click();
 
   // Header should now show cut pair: Shot 001 → 002
   await expect(page.locator(".cut-drawer-subtitle")).toHaveText("Shot 001 → 002");
@@ -191,17 +184,6 @@ test("Studio Cuts drawer design, interactions, boundary frames, evidence rows, p
   await expect(noteTextarea).toBeVisible();
   await noteTextarea.fill("Cutting on head turn to maintain viewer focus.");
   await expect(noteTextarea).toHaveValue("Cutting on head turn to maintain viewer focus.");
-
-  // Scroll drawer content to top before screenshot
-  await page.locator(".cut-drawer-content").evaluate((el) => {
-    el.scrollTop = 0;
-  });
-  await page.waitForTimeout(100);
-
-  // 15. Capture screenshot for verification
-  await page.screenshot({
-    path: "/Users/indievision/.gemini/antigravity/brain/4c6df2a4-56cd-418c-a1af-1c4e1ccc8883/studio-cuts-drawer.png",
-  });
 
   expect(errors).toEqual([]);
 });

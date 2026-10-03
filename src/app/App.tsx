@@ -3482,7 +3482,11 @@ export default function App() {
                 setSelected(incoming.id);
                 seek(incoming.startSeconds);
                 setDeckTab("cuts");
-                if (workspaceMode === "studio") setStudioDrawerOpen(true);
+                if (workspaceMode === "studio") {
+                  setStudioDrawerOpen(true);
+                  // A collapsed drawer must open too, like it does for a selected range.
+                  if (leftCollapsed) toggleLeftCollapse();
+                }
               }}
               onSplitShot={handleSplitShot}
               onDeleteCut={handleMergeShots}
