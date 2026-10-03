@@ -29,3 +29,21 @@ export async function startNewProject(page: Page, video = "fixtures/test-film.mp
   }).toPass({ timeout: 15_000 });
   await page.getByLabel("Project name").waitFor();
 }
+
+/**
+ * Opens a saved project from the Screening hub's "Recent projects" list, links
+ * the fixture film (Studio stays locked until a film is linked) and switches to
+ * Studio. Use after seeding IndexedDB and reloading.
+ */
+export async function openRecentProjectInStudio(page: Page, name: RegExp, video = "fixtures/test-film.mp4") {
+  const hub = page.frameLocator(".duet-console-iframe");
+  await hub.locator("button.recent-item").filter({ hasText: name }).click();
+  await page.locator("input[type=file]").first().setInputFiles(path.resolve(video));
+  await hub.getByText("Video loaded").waitFor();
+  const studio = page.getByRole("tab", { name: /^Studio/ });
+  await expect(async () => {
+    await studio.click();
+    await expect(studio).toHaveAttribute("aria-selected", "true", { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  await expect(page.locator(".workspace")).toHaveClass(/mode-studio/);
+}

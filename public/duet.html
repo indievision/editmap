@@ -1515,6 +1515,29 @@
       }
     }
 
+    // Forget the chosen film completely (used when the app starts a new project), so
+    // the setup screen shows no old video and Studio stays locked until a new one is picked.
+    function resetFilm() {
+      selectedFile = null;
+      window.selectedFile = null;
+      try { video.pause(); } catch (_) { /* nothing playing */ }
+      const previous = video.currentSrc || video.src;
+      video.removeAttribute('src');
+      video.load();
+      if (previous && previous.startsWith('blob:')) URL.revokeObjectURL(previous);
+      clearMarkersState(false);
+      const setText = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+      setText('fileNameLabel', 'Drop a video here');
+      setText('fileNameSub', 'Or choose a file from this Mac.');
+      setText('headerCutName', 'Cut: No video loaded');
+      for (const id of ['videoFileInput', 'wifiFileInput']) {
+        const input = document.getElementById(id);
+        if (input) input.value = '';
+      }
+      const cancelBtn = document.getElementById('btnCancelChangeFilm');
+      if (cancelBtn) cancelBtn.classList.add('hidden');
+    }
+
     function loadLocalFile(file, autoClose = false) {
       if (!file) return;
       selectedFile = file;
@@ -1843,7 +1866,9 @@
     // host machine can read it; other devices get a 403 here and show nothing.
     (async function showJoinLink() {
       try {
-        const response = await fetch('/api/join-info', { cache: 'no-store' });
+        // Served by the DUET server this page is same-origin; inside the app it is served by Vite.
+        const base = window.location.port === '3000' ? '' : `${window.location.protocol}//${window.location.hostname}:3000`;
+        const response = await fetch(`${base}/api/join-info`, { cache: 'no-store' });
         if (!response.ok) return;
         const info = await response.json();
         if (!info.lan || !info.urls.length) return;
@@ -3424,6 +3449,8 @@
             badge.classList.remove('flex');
           }, 3500);
         }
+      } else if (data.type === 'RESET_FILM') {
+        resetFilm();
       } else if (data.type === 'SHOW_ONBOARDING') {
         const onboarding = document.getElementById('onboardingScreen');
         if (onboarding) onboarding.classList.remove('hidden');

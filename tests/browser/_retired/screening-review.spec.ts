@@ -55,7 +55,8 @@ test("screening marks, perception controls, context replay, evidence, persistenc
   }, p);
   await page.reload();
   await page
-    .locator(".recent-item")
+    .frameLocator(".duet-console-iframe")
+    .locator("button.recent-item")
     .filter({ hasText: /review verification/i })
     .click();
   await page.getByRole("tab", { name: /Screening Room|Review/ }).click();
@@ -275,7 +276,8 @@ test("screening marks, perception controls, context replay, evidence, persistenc
   ).toBeVisible();
   await page.reload();
   await page
-    .locator(".recent-item")
+    .frameLocator(".duet-console-iframe")
+    .locator("button.recent-item")
     .filter({ hasText: /review verification/i })
     .click();
   await page.getByRole("tab", { name: /Screening Room|Review/ }).click();

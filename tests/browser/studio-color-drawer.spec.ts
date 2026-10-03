@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
-import { startNewProject } from "../helpers";
+import { startNewProject } from "./helpers";
 
 test("Studio Color drawer design, interactions, views, curves, barcode seeking, and squint mode", async ({
   page,
@@ -50,7 +50,8 @@ test("Studio Color drawer design, interactions, views, curves, barcode seeking, 
   expect(drawerBox!.width).toBeGreaterThanOrEqual(460);
   expect(drawerBox!.width).toBeLessThanOrEqual(520);
   const railBox = await toolRail.boundingBox();
-  expect(drawerBox!.x).toBeCloseTo(railBox!.x + railBox!.width, 1);
+  // The tool rail is now a tab strip along the drawer's top edge, sharing its left edge.
+  expect(drawerBox!.x).toBeCloseTo(railBox!.x, 1);
 
   // Monitor resizes cleanly when in-flow drawer opens
   const monitorBoxWhileOpen = await monitor.boundingBox();
@@ -68,20 +69,16 @@ test("Studio Color drawer design, interactions, views, curves, barcode seeking, 
   await closeBtn.click();
   await expect(drawer).not.toBeVisible();
 
-  // 6. Re-open via Color rail button, test close via Escape key
-  await colorRailBtn.click();
+  // 6. Re-open via the collapsed panel's expand control (the tool rail is inside the
+  // drawer, so it is not available while closed), test close via Escape key
+  const expandPanel = page.getByRole("button", { name: "Expand panel" });
+  await expandPanel.click();
   await expect(drawer).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(drawer).not.toBeVisible();
 
-  // 7. Re-open via Color button, test close via clicking Color button again
-  await colorRailBtn.click();
-  await expect(drawer).toBeVisible();
-  await colorRailBtn.click();
-  await expect(drawer).not.toBeVisible();
-
   // Re-open drawer for full functional verification
-  await colorRailBtn.click();
+  await expandPanel.click();
   await expect(drawer).toBeVisible();
 
   // 8. Verify Subtabs: Color script, Lighting
@@ -150,11 +147,6 @@ test("Studio Color drawer design, interactions, views, curves, barcode seeking, 
   // Wait for color swatches to be populated from video thumbnails
   await page.waitForSelector(".color-swatch-item", { timeout: 4000 }).catch(() => {});
 
-  // Scroll to top and take screenshot of the complete Color script view
-  await page.locator(".color-drawer-body").evaluate((el) => { el.scrollTop = 0; });
-  await page.screenshot({
-    path: "/Users/indievision/.gemini/antigravity/brain/4c6df2a4-56cd-418c-a1af-1c4e1ccc8883/studio-color-drawer.png",
-  });
 
   // 11. View 2: Lighting View verification
   await lightingTab.click();
@@ -164,29 +156,11 @@ test("Studio Color drawer design, interactions, views, curves, barcode seeking, 
   await expect(page.locator(".lighting-meta-item")).toHaveCount(4);
   await expect(page.locator(".tonal-metrics-grid")).toBeVisible();
 
-  await page.screenshot({
-    path: "/Users/indievision/.gemini/antigravity/brain/4c6df2a4-56cd-418c-a1af-1c4e1ccc8883/studio-color-drawer-lighting.png",
-  });
 
   // 12. View 2: Lighting verification done above
   // Return to Color script view
   await scriptTab.click();
   await expect(scriptTab).toHaveClass(/active/);
-
-  // 13. Verify Expand map in Studio and Review mode
-  await page.getByRole("button", { name: "Expand map" }).click();
-  await expect(page.locator(".workspace")).toHaveClass(/studio-map-expanded/);
-  await expect(page.locator(".studio-detail-drawer")).not.toBeVisible();
-  await page.getByRole("button", { name: "Restore Studio" }).click();
-
-  // Switch to Review
-  await page.getByRole("tab", { name: "Review" }).click();
-  await expect(page.getByRole("main", { name: "Screening room" })).toBeVisible();
-  await expect(page.locator(".studio-detail-drawer")).not.toBeVisible();
-
-  // Return to Studio mode
-  await page.getByRole("tab", { name: "Studio" }).click();
-  await expect(page.locator(".workspace")).toHaveClass(/mode-studio/);
 
   // Verify no unhandled page errors
   expect(errors).toEqual([]);

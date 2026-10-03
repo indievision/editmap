@@ -46,12 +46,23 @@ function joinUrls() {
   return getLocalIpAddresses().map((ip) => `http://${ip}:${PORT}/?t=${JOIN_TOKEN}`);
 }
 
-// A browser page from another site must not drive this server: when an Origin
-// header is present its host must be the host the request was addressed to.
+// A browser page from another site must not drive this server. An Origin is
+// accepted when its host is the one the request was addressed to (pages served by
+// this server), or when the request comes from this machine and the page is the
+// EditMap app itself: the Screening hub embedded in the app is served by Vite and
+// connects here from there. These are the same app origins the CV backend allows.
+const APP_ORIGINS = new Set([
+  ...['127.0.0.1', 'localhost'].flatMap((host) => Array.from({ length: 8 }, (_, i) => `http://${host}:${5173 + i}`)),
+  ...String(process.env.EDITMAP_ORIGINS || '').split(',').map((o) => o.trim()).filter(Boolean),
+]);
+
 function sameOrigin(req) {
   const origin = req.headers.origin;
   if (!origin) return true;
-  try { return new URL(origin).host === req.headers.host; } catch { return false; }
+  try {
+    if (new URL(origin).host === req.headers.host) return true;
+  } catch { return false; }
+  return isLocalHost(req) && APP_ORIGINS.has(origin);
 }
 
 // Last-resort guard: one bad request must never end a screening session.
@@ -98,7 +109,13 @@ const server = http.createServer((req, res) => {
   // Only the host machine can read the join links.
   if (reqPath === '/api/join-info') {
     if (!isLocalHost(req)) { res.writeHead(403); return res.end(); }
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
+    // The in-app hub page is served by Vite, so let exactly the app's origins read this.
+    if (req.headers.origin && APP_ORIGINS.has(req.headers.origin)) {
+      headers['Access-Control-Allow-Origin'] = req.headers.origin;
+      headers['Vary'] = 'Origin';
+    }
+    res.writeHead(200, headers);
     return res.end(JSON.stringify({ lan: LAN_ENABLED, urls: LAN_ENABLED ? joinUrls() : [] }));
   }
 

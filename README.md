@@ -6,7 +6,7 @@ Editing rhythm includes Framing summary and Framing arc tabs. The summary shows 
 
 Local pacing overlays a dashed gold Close/Extreme close screen-time share on the existing blue cuts/minute curve. The right axis is percent; the left axis is cuts/minute. Both use the selected centered 10/30/60-second window. Framing weights each shot's actual overlap with the window and excludes unranked sizes from its denominator; missing framing produces a break rather than zero. Coverage and confirmation percentages expose incomplete tagging. These views use current tags, never pending model suggestions. Framing segments reflect a single tag per shot, not tracked camera movement; no emotional-intensity score is inferred.
 
-Local film-editing analysis prototype, built with React, TypeScript, Vite, native video playback and IndexedDB. No backend, account, telemetry, cloud processing or media uploads.
+Local film-editing analysis prototype, built with React, TypeScript, Vite, native video playback and IndexedDB. No account, telemetry or cloud processing. Optional local services run on this machine only: a Python computer-vision service (shot size, faces, audio) and the DUET screening server. Media never leaves the machine.
 
 ## Run
 
@@ -18,6 +18,19 @@ npm run dev
 ```
 
 Open the localhost URL printed by Vite. Keep the same browser and port when reopening projects: IndexedDB is scoped to the origin. `npm run build` checks TypeScript and creates the static application in `dist/`.
+
+`npm run dev` also starts the two local services when it can:
+
+| Service | Port | Started when | Notes |
+|---|---|---|---|
+| CV backend (FastAPI) | 8000 | `server/.venv` exists | Setup and limits: `server/README.md`. Loopback only, with a per-session token. |
+| DUET screening server | 3000 | always | Loopback only by default. |
+
+Browser origins allowed to call the CV backend are `http://127.0.0.1` or `http://localhost` on ports 5173-5180. Add others with `EDITMAP_ORIGINS=http://127.0.0.1:4000,...`.
+
+### Wi-Fi screening (optional)
+
+To let other devices on your network join a DUET screening, start with `EDITMAP_DUET_LAN=1 npm run dev`. The server then listens on all interfaces and requires a secret that changes on every launch. The host's DUET page shows a **Wi-Fi join link** (the server also prints it): share that link only with your audience. Opening it sets a cookie on the joining device. Uploads, video, pages and the WebSocket all require it, and the secret travels over plain HTTP, so use trusted networks only. Without `EDITMAP_DUET_LAN=1`, nothing is reachable from other machines.
 
 ## Workflow
 
@@ -41,25 +54,43 @@ Open the localhost URL printed by Vite. Keep the same browser and port when reop
 ## Verification
 
 ```sh
-npm test
-npm run build
-npm run test:browser
+npm test                       # unit tests (Node), including the DUET server's access rules
+npm run build                  # type-check + production build
+server/.venv/bin/python -m unittest discover -s server -p 'test_*.py'   # CV backend
+npx vite --host 127.0.0.1 --port 5174 --strictPort --no-open &         # dev server for browser tests
+PLAYWRIGHT_BASE_URL=http://127.0.0.1:5174 npm run test:browser
 ```
 
-The browser test uses installed Google Chrome and a running dev server at `http://127.0.0.1:5174` (configure in `playwright.config.ts` for your port). It covers video/EDL import, duration proportions, seeking, frame stepping, single-shot playback, active-shot synchronization, annotation, zoom, rhythm selection, saving and reopening. The synthetic MP4 contains a 440 Hz tone so original embedded audio can also be checked by ear.
+The browser tests use installed Google Chrome and a running dev server; set `PLAYWRIGHT_BASE_URL` to its URL. They cover project setup, EDL import, seeking, playback across cuts, tagging and persistence, the Cast, Cuts, Color, Framing and Explore drawers, the Screening hub and Duet review, and scanning with the CV service mocked.
+
+Writing a browser test:
+
+- Start with `startNewProject(page)` from `tests/browser/helpers.ts`. It creates a project from the File menu, links `fixtures/test-film.mp4` and switches to Studio, which stays locked until a film is linked. For a saved project, seed IndexedDB, reload and use `openRecentProjectInStudio`.
+- The Screening hub is an iframe (`.duet-console-iframe`), so use `page.frameLocator(...)` for anything inside it.
+- Navigate with relative URLs (`page.goto("/")`) and write screenshots under `test-results/`, never to absolute paths.
+- Specs written for the pre-redesign UI are kept in `tests/browser/_retired/` (excluded by `testIgnore`; see its README). Port one by updating it to the current UI and moving it back.
+
+CI (`.github/workflows/ci.yml`) runs the build and unit tests, the Python tests, and the browser suite on every pull request. The synthetic MP4 contains a 440 Hz tone so original embedded audio can also be checked by ear.
 
 Fixtures: `cuts-24.edl` (1, 2.5 and 10 second shots), `drop-2997.edl` (minute boundary), `gaps-25.edl` (audio and gap), `invalid-24.edl` (expected rejection), `test-film.mp4` (13.5 second synthetic video/audio).
 
 ## Structure
 
 - `src/app/`: project orchestration and interface styles
+- `src/playback/`: the playback clock (`playhead.ts`) and components that follow it
+- `server/`: local CV backend (FastAPI)
+- `duet_server.cjs`, `public/`: DUET screening server and its pages
 - `src/models/`: typed project and shot records
 - `src/parsers/`: CMX 3600 ingestion
 - `src/utils/`: timecode conversion
 - `src/analysis/`: generic color mapping and playback lookup
 - `src/timeline/`: duration-scaled map
 - `src/components/`: rhythm visualization
-- `src/storage/`: IndexedDB projects
+- `src/storage/`: IndexedDB projects (single connection, migrations, quota-aware errors)
+
+### Playback clock
+
+Playback time is not React state. It lives in `src/playback/playhead.ts`, and the player writes it every animation frame. Read it in event handlers with `playhead.get()`. Components that show or follow the time call `usePlayhead(active)`, passing `false` while hidden so they stop re-rendering; use `usePlayheadSelector` when only a value derived from the time matters (for example the active shot). Putting the time back into a parent's state re-renders the whole workspace on every frame.
 
 ## Limits
 

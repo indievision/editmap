@@ -220,6 +220,15 @@ export default function ColorDrawer({
   const handleBarcodePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!isDraggingBarcodeRef.current) return;
     isDraggingBarcodeRef.current = false;
+    // The strip captured the pointer on press, so the browser sends the click to
+    // the strip and never to the slice under the cursor. For a plain click (not a
+    // drag), select the shot at that position here so the reading follows it.
+    if (e.type === "pointerup" && !hasDraggedBarcodeRef.current && duration > 0 && shots.length) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const time = Math.max(0, Math.min(1, (e.clientX - rect.left) / Math.max(1, rect.width))) * duration;
+      const hit = shots.find((s) => time >= s.startSeconds && time < s.endSeconds) ?? shots[shots.length - 1];
+      if (hit) onSelect(hit.id);
+    }
     try {
       e.currentTarget.releasePointerCapture(e.pointerId);
     } catch {

@@ -62,10 +62,21 @@ export default function FramingArc({
     if (!isDraggingRef.current) return;
     isDraggingRef.current = false;
     dragStartPosRef.current = null;
+    const dragged = hasDraggedRef.current;
     try {
       e.currentTarget.releasePointerCapture(e.pointerId);
     } catch {
       // ignore
+    }
+    // The strip captured the pointer on press, so the browser sends the click to
+    // the strip, not to the segment under the cursor. For a plain click, forward it
+    // to that segment so selecting a shot works.
+    if (e.type === "pointerup" && !dragged) {
+      // The playhead marker sits on top after the press seeks there, so look through the whole stack.
+      const segment = document
+        .elementsFromPoint(e.clientX, e.clientY)
+        .find((el): el is HTMLElement => el instanceof HTMLElement && el.matches("button.framing-segment"));
+      segment?.click();
     }
   };
 
