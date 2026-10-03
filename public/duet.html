@@ -1296,9 +1296,11 @@
     let isGuest = false;
     let myId = null;
     let isFollowing = true;
-    let hostState = { time: 0, playing: false };
+    let hostState = { time: 0, playing: false, at: performance.now() };
+    // Where the host is now: its last reported time plus the time since, while it plays.
+    function hostNow() { return hostState.time + (hostState.playing ? (performance.now() - hostState.at) / 1000 : 0); }
     let hostWorkspace = null;
-    const PAGE_BUILD = '2026-10-03-steady7';   // shown in the diagnostic, to tell a stale cached page from a current one
+    const PAGE_BUILD = '2026-10-03-steady8';   // shown in the diagnostic, to tell a stale cached page from a current one
     const roomLog = [];                      // the last room messages, for the diagnostic (Shift+D)
     let pendingCueRender = false;
     document.addEventListener('focusout', (e) => {
@@ -2136,7 +2138,7 @@
           if (isGuest) {
             showGuestHeader();
             activeWaxColor = personalPenColor();
-            hostState = { time: msg.state.currentTime || 0, playing: !!msg.state.isPlaying };
+            hostState = { time: msg.state.currentTime || 0, playing: !!msg.state.isPlaying, at: performance.now() };
             hostWorkspace = msg.state.workspace || null;
           }
           if (msg.state.videoUrl && !video.src) {
@@ -2176,7 +2178,7 @@
           clearMarkersState(false);
         }
         else if (msg.type === 'PLAY') {
-          hostState = { time: msg.currentTime, playing: true };
+          hostState = { time: msg.currentTime, playing: true, at: performance.now() };
           lastHostSignalAt = performance.now();
           if (isGuest && !isFollowing) { updateFollowBar(); return; }
           if (Math.abs(video.currentTime - msg.currentTime) > 0.15) {
@@ -2186,14 +2188,14 @@
           updatePlayButtonUI(true);
         }
         else if (msg.type === 'PAUSE') {
-          hostState = { time: msg.currentTime, playing: false };
+          hostState = { time: msg.currentTime, playing: false, at: performance.now() };
           if (isGuest && !isFollowing) { updateFollowBar(); return; }
           video.currentTime = msg.currentTime;
           video.pause();
           updatePlayButtonUI(false);
         }
         else if (msg.type === 'SEEK') {
-          hostState.time = msg.currentTime;
+          hostState.time = msg.currentTime; hostState.at = performance.now();
           if (isGuest && !isFollowing) { updateFollowBar(); return; }
           video.currentTime = msg.currentTime;
           updateTimecodeUI();
@@ -2203,7 +2205,7 @@
           if (isGuest) followHost();   // the host's switch brings everyone back to the host's frame
         }
         else if (msg.type === 'TIME_PULSE') {
-          hostState = { time: msg.currentTime, playing: !!msg.isPlaying };
+          hostState = { time: msg.currentTime, playing: !!msg.isPlaying, at: performance.now() };
           if (msg.isPlaying) lastHostSignalAt = performance.now();
           if (isGuest) syncToHost(1.0);
         }
@@ -2215,7 +2217,7 @@
           const wasInApp = hostWorkspace && (hostWorkspace.mode === 'studio' || hostWorkspace.mode === 'explore');
           hostWorkspace = msg.state;
           if (isGuest && typeof msg.state.time === 'number') {
-            hostState = { time: msg.state.time, playing: msg.state.playing === true };
+            hostState = { time: msg.state.time, playing: msg.state.playing === true, at: performance.now() };
             if (msg.state.playing === true) lastHostSignalAt = performance.now();
           } else if (isGuest && wasInApp && (msg.state.mode === 'screening' || msg.state.mode === 'review')) {
             // The app pauses when the host leaves Studio or Explore; do not keep playing on the old flag.
@@ -2257,7 +2259,7 @@
           removeMarkerLocal(msg.id);
         }
         else if (msg.type === 'SELECT_MARKER') {
-          hostState.time = msg.currentTime;
+          hostState.time = msg.currentTime; hostState.at = performance.now();
           if (isGuest && !isFollowing) { updateFollowBar(); return; }
           const idx = markers.findIndex(m => sameId(m.id, msg.id));
           if (idx !== -1) jumpToCue(idx, false);
@@ -2291,10 +2293,10 @@
     // is corrected within a second or two instead of being left at a few frames behind.
     function lockToHost() {
       if (!isGuest || !isFollowing || !hostState.playing) return;
-      const gap = Math.abs(hostState.time - video.currentTime);
+      const gap = Math.abs(hostNow() - video.currentTime);
       // Steady 1x playback: changing the speed made Safari drop frames. Only a real gap seeks.
       if (video.playbackRate !== 1) video.playbackRate = 1;
-      if (gap > 0.6) video.currentTime = hostState.time;
+      if (gap > 0.6) video.currentTime = hostNow();
     }
 
     let lastHostSignalAt = performance.now();   // the last time the host said it was playing
@@ -2310,7 +2312,7 @@
     function syncToHost(threshold) {
       if (!isGuest || !isFollowing) { updateFollowBar(); return; }
       const inStudioOrExplore = hostWorkspace && (hostWorkspace.mode === 'studio' || hostWorkspace.mode === 'explore');
-      if (Math.abs(video.currentTime - hostState.time) > threshold) video.currentTime = hostState.time;
+      if (Math.abs(video.currentTime - hostNow()) > threshold) video.currentTime = hostNow();
       if (hostState.playing && !inStudioOrExplore) {
         if (video.paused) video.play().catch(() => {});
         lockToHost();
