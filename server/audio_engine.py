@@ -69,13 +69,14 @@ class DmeSeparator:
     def extract_audio_to_wav(self, input_path: str, output_wav_path: str, cancel_event=None) -> None:
         """Extracts audio to 44.1kHz stereo 16-bit PCM WAV using ffmpeg."""
         import json
-        probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", input_path], capture_output=True, text=True, timeout=30)
+        probe = subprocess.run(["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries", "format=duration", "-of", "json", input_path], capture_output=True, text=True, timeout=30)
         duration = float(json.loads(probe.stdout).get("format", {}).get("duration", 0))
         if not 0 < duration <= 14400:
             raise ValueError("DME supports media up to four hours with a known duration.")
         cmd = [
             "ffmpeg", "-nostdin",
             "-y",
+            "-protocol_whitelist", "file,pipe",
             "-i", input_path,
             "-vn",
             "-acodec", "pcm_s16le",

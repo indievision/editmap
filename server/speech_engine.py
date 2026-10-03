@@ -50,7 +50,7 @@ class SpeechEngine:
 
     @staticmethod
     def duration(path: str) -> float:
-        probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", path], capture_output=True, text=True, timeout=30)
+        probe = subprocess.run(["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries", "format=duration", "-of", "json", path], capture_output=True, text=True, timeout=30)
         value = float(json.loads(probe.stdout).get("format", {}).get("duration", 0))
         if not 0 < value <= 14_400: raise ValueError("Speech analysis supports media up to four hours with a known duration.")
         return value
@@ -59,7 +59,7 @@ class SpeechEngine:
         duration = self.duration(path)
         self.ensure_model(on_progress)
         if cancel_event and cancel_event.is_set(): raise RuntimeError("Speech scan cancelled.")
-        command = ["ffmpeg", "-nostdin", "-v", "error", "-i", path, "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "f32le", "pipe:1"]
+        command = ["ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "file,pipe", "-i", path, "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "f32le", "pipe:1"]
         started = time.monotonic(); regions: List[Dict[str, float]] = []; state = np.zeros((2, 1, 128), dtype=np.float32)
         active_start = None; speech_frames = 0; silence_frames = 0; position = 0
         threshold, min_speech, min_silence = .35, int(.25 * SAMPLE_RATE), int(.10 * SAMPLE_RATE)

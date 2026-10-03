@@ -26,7 +26,7 @@ Use the reviewer-labelled JSON template at `fixtures/framing-benchmark.example.j
 
 It emits a dataset-specific report and only marks it `qualified_on_this_dataset` when it has at least 100 shots from three films, ten examples per scale, and 75% accuracy. This is deliberately not a universal reliability claim.
 
-Only localhost/127.0.0.1 browser origins and hostnames are supported. `GET /api/session` returns a process-local token; other `/api/*` requests require `X-Editmap-Token`. The client negotiates this automatically and refreshes after a backend restart. These checks reject unrelated websites; this is not an authentication boundary against other trusted local processes.
+Only the Vite app origins `http://127.0.0.1|localhost:5173–5180` are accepted (add others with `EDITMAP_ORIGINS=http://127.0.0.1:4000,...`); other localhost pages cannot obtain a token. `GET /api/session` returns a process-local token; other `/api/*` requests require `X-Editmap-Token`. The client negotiates this automatically and refreshes after a backend restart. These checks reject unrelated websites; this is not an authentication boundary against other trusted local processes.
 
 ## Endpoints
 
@@ -35,7 +35,7 @@ Only localhost/127.0.0.1 browser origins and hostnames are supported. `GET /api/
 - `POST /api/detect-shot-faces`: `{image, shotId, time}` → embeddings and face crops.
 - `POST /api/track-shot-faces`: `{shotId, frames[]}` → five ordered face samples associated into shot-local tracks; these reduce duplicate cluster evidence but do not assign cast identity.
 - `POST /api/cluster-faces`: `{faces, existingCast?, similarityThreshold?, minAppearances?}` → clusters reconciled with existing references. Existing IDs/names survive confident matches; unmatched identities receive UUIDs.
-- `POST /api/detect-shots-upload`: browser-selected `file` plus optional threshold/minimum-shot-length → primary TransNet V2 shot-boundary intervals. The file is held in a temporary local path only for the scan, then removed. `POST /api/detect-shots` remains for trusted local tooling that already has a path.
+- `POST /api/detect-shots-upload`: browser-selected `file` plus optional threshold/minimum-shot-length → primary TransNet V2 shot-boundary intervals. The file is held in a temporary local path only for the scan, then removed. There is no path-based variant: the service never opens a caller-supplied filesystem path.
 - `POST /api/analyze-color`, `/api/analyze-eye-trace`, `/api/analyze-motion`: local visual readings.
 - `GET /api/dme-status`: DME model availability.
 - `POST /api/separate-dme`: multipart `file`, `binCount` (1–10000), optional client-generated UUID `jobId` → HTTP 202 `{jobId}`.

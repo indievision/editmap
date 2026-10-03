@@ -134,14 +134,6 @@ def perform_scanner_update(
     except Exception as err:
         logger.warning("Character recognizer re-init warning: %s", err)
 
-    # 2. Check framing classifier availability
-    try:
-        if getattr(shot_classifier.framing_classifier, "_model", None) is None:
-            # Try lazy init if possible without blocking
-            pass
-    except Exception as err:
-        logger.warning("Framing classifier verification warning: %s", err)
-
     engines = collect_scanner_engines(
         shot_classifier,
         character_recognizer,
@@ -151,12 +143,20 @@ def perform_scanner_update(
         shot_boundary_detector,
     )
 
-    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    # Nothing is downloaded or upgraded here: this only re-checks readiness.
+    problems = [e for e in engines if e.status == "unavailable"]
+    if problems:
+        message = "Some engines are unavailable: " + "; ".join(
+            f"{e.name} ({e.error or 'unknown error'})" for e in problems
+        )
+    else:
+        not_loaded = [e.name for e in engines if e.status == "not_loaded"]
+        message = "No problems found. Models load on first use" + (f" ({', '.join(not_loaded)} not loaded yet)." if not_loaded else ".")
 
     return ScannerUpdateResponse(
-        success=True,
-        message="All local scanner models and algorithms are verified and up to date.",
-        updated=True,
+        success=not problems,
+        message=message,
+        updated=False,
         version="1.1.0",
         engines=engines,
     )

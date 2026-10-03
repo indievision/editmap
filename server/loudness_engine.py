@@ -41,7 +41,7 @@ class LoudnessEngine:
     @staticmethod
     def duration(path: str) -> float:
         probe = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", path],
+            ["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries", "format=duration", "-of", "json", path],
             capture_output=True,
             text=True,
             timeout=30,
@@ -67,6 +67,7 @@ class LoudnessEngine:
             "-nostdin",
             "-loglevel", "verbose",
             "-y",
+            "-protocol_whitelist", "file,pipe",
             "-i", path,
             "-filter_complex", "ebur128=peak=true:framelog=verbose",
             "-f", "null",
