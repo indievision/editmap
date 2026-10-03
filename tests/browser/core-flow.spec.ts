@@ -97,3 +97,28 @@ test("a drawer opened after playback moved shows the current time, not a stale o
   await page.getByRole("button", { name: "Shot 1", exact: true }).click();
   await expect(page.getByTitle(/^Playhead: 00:00:00:00/)).toBeVisible();
 });
+
+test("a new project does not keep the previous film", async ({ page }) => {
+  await page.goto("/");
+  await startNewProject(page);
+  const hub = page.frameLocator(".duet-console-iframe");
+
+  // The film from the first project is linked and Studio is open.
+  await expect(page.locator("#studioVideoPlayer")).toHaveAttribute("src", /blob:/);
+
+  // Starting another project (from Studio) returns to a clean setup screen.
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: /^File\b/ }).click();
+  await page.getByRole("menuitem", { name: "New project" }).click();
+
+  await expect(hub.getByRole("heading", { name: "Screen a cut together." })).toBeVisible();
+  await expect(hub.locator("#fileNameLabel")).toHaveText("Drop a video here");
+  await expect(hub.getByText("Video loaded · Ready to screen")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Analyze", exact: true })).toBeDisabled();
+  expect(await page.evaluate(() => (window as any).selectedFile ?? null)).toBeNull();
+
+  // Going to Studio without choosing a film must not bring the old one back.
+  await page.getByRole("tab", { name: /^Studio/ }).click();
+  await expect(page.getByRole("tab", { name: /^Studio/ })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#studioVideoPlayer")).not.toHaveAttribute("src", /blob:/);
+});

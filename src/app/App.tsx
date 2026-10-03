@@ -446,6 +446,14 @@ export default function App() {
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [dirty]);
+  // A new project must not inherit the previous film: drop the retained file and
+  // tell the Screening hub (an iframe) to clear the film it has selected.
+  const forgetLinkedFilm = () => {
+    pendingFile.current = null;
+    (window as any).selectedFile = null;
+    const iframe = document.querySelector(".duet-console-iframe") as HTMLIFrameElement | null;
+    iframe?.contentWindow?.postMessage({ type: "RESET_FILM" }, "*");
+  };
   const commitSave = (snapshot: Project, savedRevision: number) => {
     setSaveState("Saving");
     const write = saveQueue.current.then(() => saveProject(snapshot));
@@ -2350,6 +2358,7 @@ export default function App() {
             setUrl("");
             setIsScreeningRoomEntered(false);
             setWorkspaceMode("screening");
+            forgetLinkedFilm();
             const iframe = document.querySelector(".duet-console-iframe") as HTMLIFrameElement | null;
             iframe?.contentWindow?.postMessage({ type: "SHOW_ONBOARDING" }, "*");
           }
@@ -2362,6 +2371,9 @@ export default function App() {
             replace(newProject());
             setUrl("");
             setIsScreeningRoomEntered(false);
+            // The film picker is on the Screening setup screen; Studio has nothing to show yet.
+            setWorkspaceMode("screening");
+            forgetLinkedFilm();
             const iframe = document.querySelector(".duet-console-iframe") as HTMLIFrameElement | null;
             iframe?.contentWindow?.postMessage({ type: "SHOW_ONBOARDING" }, "*");
           }
