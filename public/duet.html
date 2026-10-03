@@ -711,6 +711,13 @@
     .shortcuts-sep {
       color: #475569;
     }
+
+    /* Guests: the host drives the room, guests contribute. */
+    body.guest .host-only { display: none !important; }
+    body.guest .guest-locked { pointer-events: none; }
+    body.guest #pencilToolbar .swatch { display: none; }
+    body.guest #screeningModeOverlay, body.guest #hostWorkspaceOverlay { top: 64px; }
+    #followBar { position: fixed; top: 72px; left: 50%; transform: translateX(-50%); z-index: 70; }
   </style>
 </head>
 <body class="text-slate-200 font-sans antialiased h-screen flex flex-col select-none overflow-hidden text-xs">
@@ -903,6 +910,8 @@
   <!-- ============================================== -->
   <!-- TOP CONSOLE BAR (Distilled Cinema Header)      -->
   <!-- ============================================== -->
+  <!-- Guests: the same header as the host's app (public/guest/, npm run build:guest). Falls back to the header below. -->
+  <iframe id="guestHeaderFrame" title="EditMap header" class="hidden flex-shrink-0 w-full" style="height:64px;border:0"></iframe>
   <header id="duetConsoleHeader" class="hidden h-14 border-b theater-border theater-panel px-5 flex items-center justify-between z-50 relative flex-shrink-0 bg-[#0e1218]">
     
     <!-- LEFT: BRAND & CUT INFO & CONNECTED STATUS -->
@@ -930,7 +939,7 @@
     </div>
 
     <!-- CENTER: MODE TOGGLE (SCREENING VS REVIEW) -->
-    <div class="bg-[#090b0e] p-0.5 rounded-lg border border-[#1b222d] flex text-xs font-mono">
+    <div class="guest-locked bg-[#090b0e] p-0.5 rounded-lg border border-[#1b222d] flex text-xs font-mono">
       <button id="navBtnScreening" onclick="setMode('screening')" class="px-3.5 py-1 rounded text-slate-400 hover:text-slate-200 transition flex items-center gap-1.5">
         <span>🎬</span>
         <span>Dark Screening</span>
@@ -956,7 +965,7 @@
       </button>
 
       <!-- Inspect in Studio -->
-      <button onclick="inspectInStudio()" class="h-8 px-3 rounded-lg bg-[#e5a93c]/15 hover:bg-[#e5a93c]/25 border border-[#e5a93c]/40 text-[#e5a93c] font-bold font-mono text-xs flex items-center gap-1.5 transition cursor-pointer" title="Inspect current cut & markers in EditMap Studio">
+      <button id="btnStudio" onclick="inspectInStudio()" class="h-8 px-3 rounded-lg bg-[#e5a93c]/15 hover:bg-[#e5a93c]/25 border border-[#e5a93c]/40 text-[#e5a93c] font-bold font-mono text-xs flex items-center gap-1.5 transition cursor-pointer" title="Inspect current cut & markers in EditMap Studio">
         <span>Studio &rarr;</span>
       </button>
     </div>
@@ -1004,7 +1013,7 @@
         </div>
 
         <!-- OPTION A: INTEGRATED TRANSPORT SCRUBBER -->
-        <div class="mt-5 pt-4 border-t border-slate-900/90 flex flex-col gap-2.5">
+        <div class="host-only mt-5 pt-4 border-t border-slate-900/90 flex flex-col gap-2.5">
           <div class="flex items-center justify-between text-xs font-mono">
             <div class="flex items-center gap-2">
               <span id="screeningPlayStateDot" class="w-2 h-2 rounded-full bg-slate-600 transition"></span>
@@ -1039,7 +1048,7 @@
           </div>
         </div>
 
-        <div class="shortcuts-legend">
+        <div class="shortcuts-legend host-only">
           <span><kbd>Space</kbd> play / pause</span>
           <span class="shortcuts-sep">·</span>
           <span><kbd>←</kbd><kbd>→</kbd> frame step</span>
@@ -1050,7 +1059,7 @@
         </div>
       </div>
 
-      <button onclick="setMode('review')" class="mt-8 px-6 py-2.5 rounded-lg bg-transparent hover:bg-slate-900/60 border border-slate-700/60 hover:border-slate-500 text-slate-300 text-xs font-mono font-medium transition flex items-center gap-2 mx-auto">
+      <button onclick="setMode('review')" class="host-only mt-8 px-6 py-2.5 rounded-lg bg-transparent hover:bg-slate-900/60 border border-slate-700/60 hover:border-slate-500 text-slate-300 text-xs font-mono font-medium transition flex items-center gap-2 mx-auto">
         <span>Stop Screening & Turn On Review Lights</span> <span class="text-amber-400">→</span>
       </button>
     </div>
@@ -1059,6 +1068,21 @@
   <!-- ============================================== -->
   <!-- SCREEN 3: MAIN REVIEW CONSOLE (The Lights On!) -->
   <!-- ============================================== -->
+  <!-- Guests: shown in Review while they look around on their own -->
+  <div id="followBar" class="hidden flex items-center gap-3 px-3 py-1.5 rounded-full bg-black/90 border border-amber-500/50 text-xs font-mono text-slate-200 shadow-2xl">
+    <span id="followBarLabel">Host at 00:00:00:00</span>
+    <button type="button" onclick="followHost()" class="px-3 py-0.5 rounded-full bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold">Follow host</button>
+  </div>
+
+  <!-- Guests: shown while the host works in Studio or Explore -->
+  <div id="hostWorkspaceOverlay" class="hidden fixed inset-0 top-14 z-[60] bg-[#060709] flex flex-col items-center justify-center text-center p-6">
+    <h2 id="hostWorkspaceTitle" class="text-slate-200 font-semibold text-2xl tracking-tight">The host is in Studio</h2>
+    <p id="hostWorkspaceDetail" class="text-slate-400 text-sm mt-2"></p>
+    <p id="hostWorkspaceTime" class="text-amber-400 font-mono text-lg mt-6">00:00:00:00</p>
+    <!-- The read-only Studio / Explore (public/guest/, built with npm run build:guest). The text above is the fallback. -->
+    <iframe id="guestStudioFrame" title="The host's Studio" class="hidden absolute inset-0 w-full h-full bg-[#060709]" style="border:0"></iframe>
+  </div>
+
   <main id="reviewWorkspace" class="flex-1 min-h-0 flex overflow-hidden">
 
     <!-- LEFT STAGE: Cinema Viewer + Audience Pulse Timeline -->
@@ -1260,6 +1284,35 @@
     let fps = 24;
     let ws = null;
     let markers = [];
+
+    // Roles. The server decides who the host is (the machine running it); a guest only
+    // moves their own playhead, and only in Review, until they press Follow host.
+    let activeCueIndex = -1;   // was only ever assigned, so reading it first threw
+    let isGuest = false;
+    let myId = null;
+    let isFollowing = true;
+    let hostState = { time: 0, playing: false };
+    let hostWorkspace = null;
+    let lastWorkspaceMessage = null;   // host only: the app's latest workspace, resent on reconnect
+    let strokes = [];                  // everyone's pencil strokes, so one person's can be erased
+    let lastRoomPulse = 0;
+    const HOST_ONLY_TYPES = new Set(['SHARE_VIDEO', 'CLEAR_MARKERS', 'CLEAR_DRAW', 'PLAY', 'PAUSE', 'SEEK', 'MODE_CHANGE', 'SELECT_MARKER', 'TIME_PULSE', 'WORKSPACE_STATE']);
+    const PEN_COLORS = ['#ef5266', '#f3bb40', '#39c99d', '#39cbe2', '#a78bfa', '#fb923c', '#f472b6', '#84cc16'];
+    function personalPenColor() {
+      let h = 0;
+      for (const ch of String(myId || userName)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+      return PEN_COLORS[h % PEN_COLORS.length];
+    }
+    function isMine(marker) {
+      return !isGuest || (marker && myId && marker.authorId === myId);
+    }
+    function setGuest(flag) {
+      isGuest = flag;
+      document.body.classList.toggle('guest', flag);
+      if (flag) video.muted = true;   // sound comes only from the host's machine
+      const clear = document.querySelector('#pencilToolbar .clear');
+      if (clear) clear.textContent = flag ? 'Erase mine' : 'Clear';
+    }
     window.markers = markers;
     window.setMarkers = (m) => { 
       markers = m; 
@@ -1359,6 +1412,13 @@
           }
         }
 
+        // Heartbeat for guests in the room, once a second, so they correct drift
+        const roomNow = performance.now();
+        if (!isGuest && ws && ws.readyState === WebSocket.OPEN && roomNow - lastRoomPulse > 1000) {
+          lastRoomPulse = roomNow;
+          ws.send(JSON.stringify({ type: 'TIME_PULSE', currentTime: video.currentTime, isPlaying: true }));
+        }
+
         // Heartbeat pulse every 500ms for cross-process or remote tabs
         const now = performance.now();
         if (now - lastPulseTime > 500) {
@@ -1387,6 +1447,7 @@
       }
     }
 
+    video.addEventListener('volumechange', () => { if (isGuest && !video.muted) video.muted = true; });
     video.addEventListener('play', startContinuousSync);
     video.addEventListener('pause', stopContinuousSync);
 
@@ -1395,7 +1456,12 @@
 
     window.addExternalMarker = function(marker) {
       if (!marker) return;
-      if (!markers.some(m => m.id === marker.id)) {
+      const known = markers.find(m => m.id === marker.id);
+      if (known) {
+        // The server's copy says who really wrote it.
+        if (marker.authorId) known.authorId = marker.authorId;
+      }
+      if (!known) {
         markers.push(marker);
         window.markers = markers;
         if (currentMode === 'review') {
@@ -1832,6 +1898,7 @@
       const nameInput = document.getElementById('inputUserName').value.trim();
       if (nameInput) userName = nameInput;
 
+      setGuest(selectedRole === 'student');
       if (selectedRole === 'student') {
         const inputCode = document.getElementById('inputRoomCode').value.trim();
         if (inputCode) currentRoomCode = inputCode;
@@ -1842,11 +1909,12 @@
 
       document.getElementById('onboardingScreen').classList.add('hidden');
       const header = document.getElementById('duetConsoleHeader');
-      if (header && !isEmbedded) {
+      if (header && !isEmbedded && !isGuest) {
         header.classList.remove('hidden');
       }
+      if (isGuest) showGuestHeader();
       setupWebSocket();
-      setMode('screening'); // Starts in Dark Theater Mode
+      if (isGuest) applyMode('screening'); else setMode('screening'); // Starts in Dark Theater Mode
       resizeCanvas();
 
       if (window.parent && window.parent !== window) {
@@ -1895,6 +1963,15 @@
         return;
       }
 
+      // Guests never send the messages that drive the room (the server ignores them too).
+      const sendRaw = ws.send.bind(ws);
+      ws.send = (data) => {
+        if (isGuest) {
+          try { if (HOST_ONLY_TYPES.has(JSON.parse(data).type)) return; } catch (e) { return; }
+        }
+        sendRaw(data);
+      };
+
       ws.onopen = () => {
         ws.send(JSON.stringify({
           type: 'JOIN_ROOM',
@@ -1903,6 +1980,7 @@
           avatar: userAvatar,
           role: selectedRole
         }));
+        if (lastWorkspaceMessage) ws.send(JSON.stringify(lastWorkspaceMessage));
       };
 
       ws.onmessage = (event) => {
@@ -1910,6 +1988,14 @@
 
         if (msg.type === 'INIT_STATE') {
           document.getElementById('connectedCountBadge').textContent = msg.connectedCount;
+          myId = msg.yourInfo ? msg.yourInfo.id : null;
+          setGuest(!msg.yourInfo || msg.yourInfo.role !== 'host');
+          if (isGuest) {
+            showGuestHeader();
+            activeWaxColor = personalPenColor();
+            hostState = { time: msg.state.currentTime || 0, playing: !!msg.state.isPlaying };
+            hostWorkspace = msg.state.workspace || null;
+          }
           if (msg.state.videoUrl && !video.src) {
             video.src = msg.state.videoUrl;
             video.load();
@@ -1925,6 +2011,12 @@
             window.markers = markers;
             if (currentMode === 'review') renderReviewTimelineAndCues();
           }
+          if (isGuest) {
+            // Start where the host is: same mode, same frame, playing or paused.
+            if (msg.state.mode) applyMode(msg.state.mode);
+            followHost();
+            renderHostWorkspaceOverlay();
+          }
         }
         else if (msg.type === 'PEER_JOINED' || msg.type === 'PEER_LEFT') {
           document.getElementById('connectedCountBadge').textContent = msg.connectedCount;
@@ -1933,6 +2025,7 @@
           video.src = msg.videoUrl;
           video.load();
           document.getElementById('headerCutName').textContent = `Cut: ${msg.videoName}`;
+          postGuestHeader();
           loadAudioWaveform(msg.videoUrl);
           clearMarkersState(false);
         }
@@ -1940,6 +2033,8 @@
           clearMarkersState(false);
         }
         else if (msg.type === 'PLAY') {
+          hostState = { time: msg.currentTime, playing: true };
+          if (isGuest && !isFollowing) { updateFollowBar(); return; }
           if (Math.abs(video.currentTime - msg.currentTime) > 0.15) {
             video.currentTime = msg.currentTime;
           }
@@ -1947,16 +2042,46 @@
           updatePlayButtonUI(true);
         }
         else if (msg.type === 'PAUSE') {
+          hostState = { time: msg.currentTime, playing: false };
+          if (isGuest && !isFollowing) { updateFollowBar(); return; }
           video.currentTime = msg.currentTime;
           video.pause();
           updatePlayButtonUI(false);
         }
         else if (msg.type === 'SEEK') {
+          hostState.time = msg.currentTime;
+          if (isGuest && !isFollowing) { updateFollowBar(); return; }
           video.currentTime = msg.currentTime;
           updateTimecodeUI();
         }
         else if (msg.type === 'MODE_CHANGE') {
           applyMode(msg.mode);
+          if (isGuest) followHost();   // the host's switch brings everyone back to the host's frame
+        }
+        else if (msg.type === 'TIME_PULSE') {
+          hostState = { time: msg.currentTime, playing: !!msg.isPlaying };
+          if (isGuest) syncToHost(0.4);
+        }
+        else if (msg.type === 'ROOM_DATA_UPDATED') {
+          const frame = guestFrame();
+          if (frame && frame.contentWindow) frame.contentWindow.postMessage({ type: 'ROOM_DATA_UPDATED', part: msg.part }, window.location.origin);
+        }
+        else if (msg.type === 'WORKSPACE_STATE') {
+          hostWorkspace = msg.state;
+          if (isGuest && typeof msg.state.time === 'number') {
+            hostState = { time: msg.state.time, playing: msg.state.playing === true };
+          }
+          renderHostWorkspaceOverlay();
+          if (isGuest) {
+            // The host's header switches Screening/Review without a MODE_CHANGE, so take the mode from here too.
+            const roomMode = msg.state.mode;
+            if ((roomMode === 'screening' || roomMode === 'review') && roomMode !== currentMode) {
+              applyMode(roomMode);
+              followHost();
+            } else if (roomMode !== 'review') {
+              followHost();
+            }
+          }
         }
         else if (msg.type === 'ADD_MARKER') {
           window.addExternalMarker(msg.marker);
@@ -1969,17 +2094,166 @@
           }
         }
         else if (msg.type === 'SELECT_MARKER') {
+          hostState.time = msg.currentTime;
+          if (isGuest && !isFollowing) { updateFollowBar(); return; }
           const idx = markers.findIndex(m => m.id === msg.id);
           if (idx !== -1) jumpToCue(idx, false);
         }
         else if (msg.type === 'DRAW_STROKE') {
+          strokes.push({ points: msg.stroke.points, color: msg.stroke.color, authorId: msg.authorId });
           renderWaxStroke(msg.stroke.points, msg.stroke.color, waxCtx, waxCanvas);
         }
         else if (msg.type === 'CLEAR_DRAW') {
+          strokes = [];
           waxCtx.clearRect(0, 0, waxCanvas.width, waxCanvas.height);
+        }
+        else if (msg.type === 'ERASE_DRAW') {
+          strokes = strokes.filter(st => st.authorId !== msg.authorId);
+          redrawStrokes();
         }
       };
     }
+
+    // Following the host (guests)
+    function guestMayNavigate() {
+      // A guest moves only their own playhead, and only in Review. Doing so lets go of the host.
+      if (!isGuest) return true;
+      if (currentMode !== 'review') return false;
+      if (isFollowing) { isFollowing = false; updateFollowBar(); }
+      return true;
+    }
+
+    function syncToHost(threshold) {
+      if (!isGuest || !isFollowing) { updateFollowBar(); return; }
+      const inStudioOrExplore = hostWorkspace && (hostWorkspace.mode === 'studio' || hostWorkspace.mode === 'explore');
+      if (Math.abs(video.currentTime - hostState.time) > threshold) video.currentTime = hostState.time;
+      if (hostState.playing && !inStudioOrExplore) {
+        if (video.paused) video.play().catch(() => {});
+      } else if (!video.paused) {
+        video.pause();
+      }
+      updatePlayButtonUI(!video.paused);
+      updateFollowBar();
+    }
+
+    function followHost() {
+      isFollowing = true;
+      syncToHost(0.15);
+    }
+    window.followHost = followHost;
+
+    function updateFollowBar() {
+      const bar = document.getElementById('followBar');
+      if (!bar) return;
+      const show = isGuest && currentMode === 'review' && !isFollowing;
+      bar.classList.toggle('hidden', !show);
+      const label = document.getElementById('followBarLabel');
+      if (label && show) label.textContent = `Host at ${formatSMPTE(hostState.time)} ${hostState.playing ? '▶' : '❚❚'}`;
+    }
+
+    // The host's own header, for guests, above everything else.
+    let guestHeaderReady = false;
+    function showGuestHeader() {
+      const frame = document.getElementById('guestHeaderFrame');
+      const own = document.getElementById('duetConsoleHeader');
+      if (!frame || frame.dataset.started) return;
+      frame.dataset.started = '1';
+      if (own) own.classList.add('hidden');
+      frame.src = '/guest/guest.html?view=header';
+      frame.classList.remove('hidden');
+      // Without the guest build the frame never reports in: bring back this page's own header.
+      setTimeout(() => {
+        if (guestHeaderReady) return;
+        frame.classList.add('hidden');
+        if (own) own.classList.remove('hidden');
+      }, 5000);
+    }
+    function postGuestHeader() {
+      const frame = document.getElementById('guestHeaderFrame');
+      if (!frame || !frame.contentWindow || !guestHeaderReady) return;
+      const away = hostWorkspace && (hostWorkspace.mode === 'studio' || hostWorkspace.mode === 'explore');
+      const label = (document.getElementById('headerCutName')?.textContent || '').trim().replace(/^Cut:\s*/, '');
+      frame.contentWindow.postMessage({
+        type: 'GUEST_HEADER',
+        mode: away ? hostWorkspace.mode : currentMode,
+        name: label === 'No video loaded' ? '' : label
+      }, window.location.origin);
+    }
+    window.addEventListener('message', (event) => {
+      const frame = document.getElementById('guestHeaderFrame');
+      if (!frame || event.source !== frame.contentWindow || !event.data) return;
+      if (event.data.type === 'GUEST_HEADER_READY') { guestHeaderReady = true; postGuestHeader(); }
+      else if (event.data.type === 'GUEST_HEADER_ACTION') {
+        if (event.data.action === 'projector') openProjectorWindow();
+        else if (event.data.action === 'export-edl') exportToResolve();
+      }
+    });
+
+    // The guest's read-only Studio / Explore, shown inside the overlay and fed by this page.
+    let guestFrameReady = false;
+    function guestFrame() {
+      return document.getElementById('guestStudioFrame');
+    }
+    function ensureGuestFrame() {
+      const frame = guestFrame();
+      if (!frame || frame.dataset.started) return;
+      frame.dataset.started = '1';
+      frame.src = '/guest/guest.html';
+      frame.classList.remove('hidden');
+      // Without the guest build (npm run build:guest) the frame never reports in: show the plain panel.
+      setTimeout(() => { if (!guestFrameReady) frame.classList.add('hidden'); }, 5000);
+    }
+    function postGuestState() {
+      const frame = guestFrame();
+      if (!frame || !frame.contentWindow || !hostWorkspace) return;
+      frame.contentWindow.postMessage({
+        type: 'GUEST_STATE',
+        workspace: hostWorkspace,
+        time: hostState.time,
+        playing: hostState.playing,
+        videoUrl: video.currentSrc || video.src || ''
+      }, window.location.origin);
+    }
+    window.addEventListener('message', (event) => {
+      const frame = guestFrame();
+      if (!frame || event.source !== frame.contentWindow || !event.data) return;
+      if (event.data.type === 'GUEST_READY') {
+        guestFrameReady = true;
+        frame.classList.remove('hidden');
+        postGuestState();
+      }
+    });
+
+    function renderHostWorkspaceOverlay() {
+      const el = document.getElementById('hostWorkspaceOverlay');
+      if (!el) return;
+      const w = hostWorkspace;
+      const away = isGuest && w && (w.mode === 'studio' || w.mode === 'explore');
+      postGuestHeader();
+      el.classList.toggle('hidden', !away);
+      const studioBtn = document.getElementById('btnStudio');
+      if (studioBtn) {
+        studioBtn.style.boxShadow = away ? '0 0 0 2px rgba(229,169,60,0.7)' : '';
+        if (isGuest) studioBtn.title = away ? 'The host is here' : 'Follows the host into Studio';
+      }
+      if (!away) return;
+      const title = document.getElementById('hostWorkspaceTitle');
+      const detail = document.getElementById('hostWorkspaceDetail');
+      if (title) title.textContent = w.mode === 'studio' ? 'The host is in Studio' : 'The host is in Explore';
+      const bits = [];
+      if (w.mode === 'studio') {
+        if (w.deckTab) bits.push(`${w.deckTab} tool${w.drawerOpen ? '' : ' (closed)'}`);
+        if (w.selectedShot) bits.push('a shot selected');
+      } else if (w.exploreSubpage) {
+        bits.push(w.exploreSubpage);
+      }
+      if (detail) detail.textContent = bits.join(' · ');
+      ensureGuestFrame();
+      postGuestState();
+      const time = document.getElementById('hostWorkspaceTime');
+      if (time) time.textContent = formatSMPTE(hostState.time);
+    }
+    video.addEventListener('loadedmetadata', () => { if (isGuest && isFollowing) syncToHost(0.15); });
 
     // Timecode Formatting
     function formatSMPTE(seconds) {
@@ -1993,6 +2267,7 @@
 
     // Mode Toggle (Screening vs Review)
     function setMode(mode) {
+      if (isGuest) return;   // only the host switches the room's mode
       applyMode(mode);
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'MODE_CHANGE', mode }));
@@ -2039,11 +2314,13 @@
         if (rightPanel) rightPanel.style.display = 'flex';
         resizeCanvas();
         renderReviewTimelineAndCues();
-        if (markers.length > 0 && activeCueIndex === -1) {
+        if (markers.length > 0 && activeCueIndex === -1 && !isGuest) {
           jumpToCue(0);
         }
       }
 
+      updateFollowBar();
+      postGuestHeader();
       if (window.parent && window.parent !== window) {
         window.parent.postMessage({ type: 'DUET_MODE_CHANGE', mode }, '*');
       }
@@ -2090,6 +2367,7 @@
         resolveColor: colorConfig.resolveColor,
         note: `Flagged at ${smpte}`,
         thumbnail: thumbnailData,
+        authorId: myId,
         authorName: userName,
         authorAvatar: userAvatar
       };
@@ -2285,6 +2563,9 @@
           const isSelected = idx === activeCueIndex;
           const count = cluster.markers.length;
           const firstM = cluster.markers[0];
+          // A guest edits their own marker in the cue; everyone else's is read-only for them.
+          const noteM = isGuest ? (cluster.markers.find(m => isMine(m)) || firstM) : firstM;
+          const noteLocked = !isMine(noteM);
           const resolveColorName = (firstM.resolveColor || '').replace('ResolveColor', '') || COLOR_PALETTE[firstM.key]?.name || 'Red';
           const authorsLabel = cluster.markers.map(m => m.authorName || 'Host').join(' + ');
 
@@ -2306,12 +2587,13 @@
               </small>
             </div>
 
-            <textarea onchange="updateCueNote(${firstM.id}, this.value)" 
-                      oninput="updateCueNote(${firstM.id}, this.value)"
+            <textarea onchange="updateCueNote(${noteM.id}, this.value)" 
+                      oninput="updateCueNote(${noteM.id}, this.value)"
+                      ${noteLocked ? 'readonly' : ''}
                       onclick="event.stopPropagation()"
                       placeholder="No discussion note yet"
                       rows="2"
-                      class="cue-note-area w-full bg-transparent text-xs text-slate-300 resize-none focus:outline-none focus:bg-black/40 rounded px-1.5 py-1 border border-transparent focus:border-slate-700 leading-relaxed font-sans placeholder:italic placeholder:text-slate-600 pl-4">${escapeHtml(firstM.note)}</textarea>
+                      class="cue-note-area w-full bg-transparent text-xs text-slate-300 resize-none focus:outline-none focus:bg-black/40 rounded px-1.5 py-1 border border-transparent focus:border-slate-700 leading-relaxed font-sans placeholder:italic placeholder:text-slate-600 pl-4">${escapeHtml(noteM.note)}</textarea>
 
             <div class="cue-meta flex items-center justify-between text-[10px] font-mono text-slate-400 border-t border-slate-900/80 pt-1.5 mt-0.5 pl-4">
               <span class="author flex items-center gap-1.5 truncate max-w-[170px]" title="${escapeHtml(authorsLabel)}">
@@ -2344,6 +2626,7 @@
 
     function jumpToCue(idx, broadcast = true) {
       window.jumpToCue = jumpToCue;
+      if (broadcast && !guestMayNavigate()) return;
       const clusters = getConsensusClusters();
 
       if (idx >= 0 && idx < clusters.length) {
@@ -2385,6 +2668,7 @@
     }
 
     function stepFrame(delta) {
+      if (!guestMayNavigate()) return;
       video.pause();
       const frameDuration = 1 / fps;
       video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + (delta * frameDuration)));
@@ -2404,6 +2688,7 @@
     }
 
     function stepSecondsScreening(delta) {
+      if (!guestMayNavigate()) return;
       video.pause();
       updatePlayButtonUI(false);
       const dur = video.duration || 0;
@@ -2450,6 +2735,7 @@
       let wasPlayingBeforeScrub = false;
 
       const onScrubStart = () => {
+        if (isGuest) return;
         if (!isScreeningScrubbing) {
           isScreeningScrubbing = true;
           wasPlayingBeforeScrub = !video.paused;
@@ -2464,6 +2750,7 @@
       };
 
       const handleScrubMove = () => {
+        if (isGuest) return;
         onScrubStart();
         const dur = video.duration || 0;
         if (dur <= 0) return;
@@ -2510,7 +2797,7 @@
 
     function updateCueNote(id, newNote) {
       const target = markers.find(m => m.id === id);
-      if (target) {
+      if (target && isMine(target)) {
         target.note = newNote;
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'UPDATE_MARKER', id, note: newNote }));
@@ -2534,6 +2821,7 @@
         resolveColor: 'ResolveColorYellow',
         note: text,
         thumbnail: '',
+        authorId: myId,
         authorName: userName,
         authorAvatar: userAvatar
       };
@@ -2559,6 +2847,7 @@
     }
 
     function togglePlay() {
+      if (!guestMayNavigate()) return;
       const pVid = getProjectorVideo();
       if (video.paused) {
         // Synchronously trigger projector playback in the same microtick
@@ -2868,6 +3157,7 @@
     }
 
     function performTimelineScrub(clientX, snapToMarker = false) {
+      if (!guestMayNavigate()) return;
       const container = document.getElementById('timelineContainer');
       if (!container) return;
       const rect = container.getBoundingClientRect();
@@ -2931,6 +3221,7 @@
 
     timelineContainer.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return;
+      if (!guestMayNavigate()) return;
       isTimelineScrubbing = true;
       preScrubMuted = video.muted;
 
@@ -2986,6 +3277,8 @@
       const smpte = formatSMPTE(video.currentTime);
       const smpteElem = document.getElementById('smpteDisplay');
       if (smpteElem) smpteElem.textContent = smpte;
+      const hostTimeElem = document.getElementById('hostWorkspaceTime');
+      if (hostTimeElem) hostTimeElem.textContent = smpte;
       const currentTcElem = document.getElementById('currentTimecodeLabel');
       if (currentTcElem) currentTcElem.textContent = smpte;
       const noteCurrentTc = document.getElementById('noteCurrentTc');
@@ -3041,11 +3334,14 @@
       const rect = waxCanvas.getBoundingClientRect();
       waxCanvas.width = rect.width;
       waxCanvas.height = rect.height;
+      redrawStrokes();
       requestWaveformRedraw();
     }
     window.addEventListener('resize', resizeCanvas);
 
     waxCanvas.addEventListener('mousedown', (e) => {
+      // Drawing belongs to Review. A guest who has wandered off the host's frame would draw on the wrong picture.
+      if (currentMode !== 'review' || (isGuest && !isFollowing)) return;
       isDrawing = true;
       const rect = waxCanvas.getBoundingClientRect();
       currentStroke = [{ x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height }];
@@ -3060,6 +3356,7 @@
 
     window.addEventListener('mouseup', () => {
       if (isDrawing && currentStroke.length > 1) {
+        strokes.push({ points: currentStroke, color: activeWaxColor, authorId: myId });
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({
             type: 'DRAW_STROKE',
@@ -3098,7 +3395,20 @@
       }
     }
 
+    function redrawStrokes() {
+      waxCtx.clearRect(0, 0, waxCanvas.width, waxCanvas.height);
+      strokes.forEach(st => renderWaxStroke(st.points, st.color, waxCtx, waxCanvas));
+    }
+
     function clearWaxCanvas() {
+      if (isGuest) {
+        // A guest takes back their own strokes; clearing everyone's is the host's call.
+        strokes = strokes.filter(st => st.authorId !== myId);
+        redrawStrokes();
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ERASE_DRAW' }));
+        return;
+      }
+      strokes = [];
       waxCtx.clearRect(0, 0, waxCanvas.width, waxCanvas.height);
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'CLEAR_DRAW' }));
@@ -3271,6 +3581,7 @@
 
     // EditMap Host Bridge & Remote Control APIs
     function inspectInStudio() {
+      if (isGuest) { renderHostWorkspaceOverlay(); return; }   // guests follow the host there; they do not leave the room
       if (window.parent && window.parent !== window) {
         window.parent.postMessage({
           type: 'DUET_INSPECT_IN_STUDIO',
@@ -3449,6 +3760,9 @@
             badge.classList.remove('flex');
           }, 3500);
         }
+      } else if (data.type === 'WORKSPACE_STATE' && data.state) {
+        lastWorkspaceMessage = { type: 'WORKSPACE_STATE', state: data.state };
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(lastWorkspaceMessage));
       } else if (data.type === 'RESET_FILM') {
         resetFilm();
       } else if (data.type === 'SHOW_ONBOARDING') {
