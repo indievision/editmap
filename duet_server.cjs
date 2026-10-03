@@ -88,6 +88,39 @@ const MIME_TYPES = {
   '.m4v': 'video/x-m4v'
 };
 
+// The host's analysis data, for the guests' read-only Studio and Explore. The app
+// posts it in parts (project, thumbnails, colour profiles) so a small edit does not
+// resend the thumbnails. Only the host machine can write it; anyone in the room can read it.
+const MAX_ROOM_DATA_BYTES = 256 * 1024 ** 2;
+const ROOM_DATA_PARTS = new Set(['project', 'thumbnails', 'colorProfiles']);
+const roomData = new Map(); // part -> { version, body }
+let roomDataVersion = 0;
+
+function roomDataCors(req) {
+  const headers = {};
+  if (req.headers.origin && APP_ORIGINS.has(req.headers.origin) && isLocalHost(req)) {
+    headers['Access-Control-Allow-Origin'] = req.headers.origin;
+    headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS';
+    headers['Access-Control-Allow-Headers'] = 'content-type';
+    headers['Vary'] = 'Origin';
+  }
+  return headers;
+}
+
+function readLimited(req, limit) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > limit) { reject(new Error('too large')); req.destroy(); return; }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
 // HTTP Server with static serving, uploads, and video range streaming
 const server = http.createServer((req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -122,6 +155,40 @@ const server = http.createServer((req, res) => {
   if (!isAuthorized(req)) {
     res.writeHead(401, { 'Content-Type': 'text/plain' });
     return res.end('Open the join link shown on the host to connect.');
+  }
+
+  // 0. Analysis data for guests: GET /api/room-data/:part, POST (host machine only)
+  const dataMatch = /^\/api\/room-data\/([A-Za-z]+)$/.exec(reqPath);
+  if (dataMatch) {
+    const part = dataMatch[1];
+    if (!ROOM_DATA_PARTS.has(part)) { res.writeHead(404); return res.end(); }
+    const cors = roomDataCors(req);
+    if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
+    if (req.method === 'GET') {
+      const entry = roomData.get(part);
+      if (!entry) { res.writeHead(404, cors); return res.end(); }
+      res.writeHead(200, { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Room-Version': String(entry.version) });
+      return res.end(entry.body);
+    }
+    if (req.method === 'POST') {
+      if (!isLocalHost(req) || !sameOrigin(req)) { res.writeHead(403, cors); return res.end(); }
+      readLimited(req, MAX_ROOM_DATA_BYTES).then((body) => {
+        try { JSON.parse(body.toString('utf8')); } catch { res.writeHead(400, cors); return res.end(); }
+        const version = ++roomDataVersion;
+        roomData.set(part, { version, body });
+        const update = JSON.stringify({ type: 'ROOM_DATA_UPDATED', part, version });
+        for (const room of rooms.values()) {
+          for (const client of room.clients) if (client.readyState === WebSocket.OPEN) client.send(update);
+        }
+        res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ version }));
+      }, () => {
+        if (!res.headersSent) { res.writeHead(413, cors); res.end(); }
+      });
+      return;
+    }
+    res.writeHead(405, cors);
+    return res.end();
   }
 
   // 1. In-App Video Upload: POST /api/upload
@@ -233,7 +300,7 @@ const server = http.createServer((req, res) => {
   }
 
   // 3. Static Files from public/
-  let filePath = path.join(PUBLIC_DIR, reqPath === '/' ? '/duet.html' : reqPath);
+  let filePath = path.join(PUBLIC_DIR, reqPath === '/' ? '/duet.html' : reqPath.endsWith('/') ? `${reqPath}index.html` : reqPath);
 
   if (filePath !== PUBLIC_DIR && !filePath.startsWith(PUBLIC_DIR + path.sep)) {
     res.writeHead(403);
@@ -280,7 +347,9 @@ function getOrCreateRoom(roomCode) {
         activeMarkerId: null,
         videoUrl: null,
         videoName: null,
-        mode: 'screening'
+        mode: 'screening',
+        updatedAt: 0,
+        workspace: null
       }
     });
   }
@@ -299,9 +368,48 @@ function broadcastToRoom(roomCode, senderWs, messageData, includeSender = false)
   }
 }
 
-wss.on('connection', (ws) => {
+// Only the host drives the room. Everything else a participant sends is their own
+// contribution (markers, notes, drawings) and is checked per message below.
+const HOST_ONLY_MESSAGES = new Set([
+  'SHARE_VIDEO', 'CLEAR_MARKERS', 'CLEAR_DRAW', 'PLAY', 'PAUSE', 'SEEK', 'MODE_CHANGE', 'SELECT_MARKER',
+  'TIME_PULSE', 'WORKSPACE_STATE'
+]);
+
+// What the host is looking at in the app (Screening, Review, Studio or Explore, the
+// selected shot, open tool...). The server keeps the latest one so a guest who joins
+// late starts from it, and relays every change. It is opaque to the server apart from
+// these bounds: the shape is defined by src/playback/workspaceState.ts.
+const WORKSPACES = new Set(['screening', 'review', 'studio', 'explore']);
+const MAX_WORKSPACE_BYTES = 16 * 1024;
+
+function sanitizeWorkspace(state) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return null;
+  if (!WORKSPACES.has(state.mode)) return null;
+  let json;
+  try { json = JSON.stringify(state); } catch { return null; }
+  if (json.length > MAX_WORKSPACE_BYTES) return null;
+  return JSON.parse(json);
+}
+
+// The room's playhead as it is now: while playing, the stored time keeps advancing.
+function liveTime(room) {
+  const { isPlaying, currentTime, updatedAt } = room.state;
+  if (!isPlaying || !updatedAt) return currentTime;
+  return currentTime + (Date.now() - updatedAt) / 1000;
+}
+
+function setPlayhead(room, currentTime, isPlaying) {
+  if (typeof currentTime === 'number' && Number.isFinite(currentTime)) room.state.currentTime = currentTime;
+  if (typeof isPlaying === 'boolean') room.state.isPlaying = isPlaying;
+  room.state.updatedAt = Date.now();
+}
+
+wss.on('connection', (ws, req) => {
+  // The host is the machine running this server. A client cannot claim it: a
+  // connection from any other device is a guest whatever role it asks for.
+  const fromHostMachine = isLocalHost(req);
   let currentRoomCode = null;
-  let clientInfo = { name: 'Anonymous', avatar: '🎬', role: 'guest' };
+  let clientInfo = { id: crypto.randomUUID(), name: 'Anonymous', avatar: '🎬', role: 'student' };
 
   ws.on('message', (rawMessage) => {
     try {
@@ -310,10 +418,12 @@ wss.on('connection', (ws) => {
 
       if (type === 'JOIN_ROOM') {
         currentRoomCode = roomCode || '4821';
+        const role = fromHostMachine && data.role === 'host' ? 'host' : 'student';
         clientInfo = {
-          name: data.name || (data.role === 'host' ? 'Teacher' : 'Student'),
-          avatar: data.avatar || (data.role === 'host' ? '🎓' : '🎬'),
-          role: data.role || 'student'
+          id: clientInfo.id,
+          name: data.name || (role === 'host' ? 'Teacher' : 'Student'),
+          avatar: data.avatar || (role === 'host' ? '🎓' : '🎬'),
+          role
         };
 
         const room = getOrCreateRoom(currentRoomCode);
@@ -324,7 +434,7 @@ wss.on('connection', (ws) => {
         const participants = Array.from(room.clientMeta.values());
         ws.send(JSON.stringify({
           type: 'INIT_STATE',
-          state: room.state,
+          state: { ...room.state, currentTime: liveTime(room) },
           participants: participants,
           connectedCount: room.clients.size,
           yourInfo: clientInfo
@@ -343,6 +453,8 @@ wss.on('connection', (ws) => {
       else if (currentRoomCode) {
         const room = rooms.get(currentRoomCode);
         if (!room) return;
+
+        if (HOST_ONLY_MESSAGES.has(type) && clientInfo.role !== 'host') return;
 
         // Shared Video File: Starting a new film resets markers for a clean slate
         if (type === 'SHARE_VIDEO') {
@@ -368,23 +480,21 @@ wss.on('connection', (ws) => {
         }
         // Playback Sync
         else if (type === 'PLAY') {
-          room.state.isPlaying = true;
-          room.state.currentTime = data.currentTime;
+          setPlayhead(room, data.currentTime, true);
           broadcastToRoom(currentRoomCode, ws, {
             type: 'PLAY',
             currentTime: data.currentTime
           }, false);
         } 
         else if (type === 'PAUSE') {
-          room.state.isPlaying = false;
-          room.state.currentTime = data.currentTime;
+          setPlayhead(room, data.currentTime, false);
           broadcastToRoom(currentRoomCode, ws, {
             type: 'PAUSE',
             currentTime: data.currentTime
           }, false);
         } 
         else if (type === 'SEEK') {
-          room.state.currentTime = data.currentTime;
+          setPlayhead(room, data.currentTime);
           broadcastToRoom(currentRoomCode, ws, {
             type: 'SEEK',
             currentTime: data.currentTime
@@ -402,6 +512,7 @@ wss.on('connection', (ws) => {
         else if (type === 'ADD_MARKER') {
           const marker = {
             ...data.marker,
+            authorId: clientInfo.id,
             authorName: clientInfo.name,
             authorAvatar: clientInfo.avatar,
             role: clientInfo.role
@@ -416,7 +527,8 @@ wss.on('connection', (ws) => {
         else if (type === 'UPDATE_MARKER') {
           const { id, note, solved } = data;
           const target = room.state.markers.find(m => m.id === id);
-          if (target) {
+          // A marker is edited by its author or by the host, nobody else.
+          if (target && (clientInfo.role === 'host' || target.authorId === clientInfo.id)) {
             if (note !== undefined) target.note = note;
             if (solved !== undefined) target.solved = solved;
             broadcastToRoom(currentRoomCode, ws, {
@@ -428,23 +540,51 @@ wss.on('connection', (ws) => {
         // Select Cue in Review Mode
         else if (type === 'SELECT_MARKER') {
           room.state.activeMarkerId = data.id;
-          room.state.currentTime = data.currentTime;
+          setPlayhead(room, data.currentTime);
           broadcastToRoom(currentRoomCode, ws, {
             type: 'SELECT_MARKER',
             id: data.id,
             currentTime: data.currentTime
           }, false);
         }
+        // Host heartbeat while playing, so followers correct drift.
+        else if (type === 'TIME_PULSE') {
+          setPlayhead(room, data.currentTime, data.isPlaying === true);
+          broadcastToRoom(currentRoomCode, ws, {
+            type: 'TIME_PULSE',
+            currentTime: room.state.currentTime,
+            isPlaying: room.state.isPlaying
+          }, false);
+        }
+        // The host's app workspace (also carries the playhead while the host is in Studio or Explore).
+        else if (type === 'WORKSPACE_STATE') {
+          const workspace = sanitizeWorkspace(data.state);
+          if (!workspace) return;
+          room.state.workspace = workspace;
+          if (workspace.mode === 'screening' || workspace.mode === 'review') room.state.mode = workspace.mode;
+          if (typeof workspace.time === 'number') setPlayhead(room, workspace.time, workspace.playing === true);
+          broadcastToRoom(currentRoomCode, ws, { type: 'WORKSPACE_STATE', state: workspace }, false);
+        }
         // Grease Pencil Drawing Sync
+        // Drawing belongs to Review, where the frame is still; nobody draws during a screening.
         else if (type === 'DRAW_STROKE') {
+          if (room.state.mode !== 'review') return;
           broadcastToRoom(currentRoomCode, ws, {
             type: 'DRAW_STROKE',
-            stroke: data.stroke
+            stroke: data.stroke,
+            authorId: clientInfo.id
           }, false);
         }
         else if (type === 'CLEAR_DRAW') {
           broadcastToRoom(currentRoomCode, ws, {
             type: 'CLEAR_DRAW'
+          }, false);
+        }
+        // Anyone can take back their own strokes, nobody else's.
+        else if (type === 'ERASE_DRAW') {
+          broadcastToRoom(currentRoomCode, ws, {
+            type: 'ERASE_DRAW',
+            authorId: clientInfo.id
           }, false);
         }
       }
