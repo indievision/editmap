@@ -32,3 +32,6 @@ __pycache__/
 
 # Model weights are provisioned, not committed (see server/README.md)
 /*.pt
+
+# Personal Claude Code overrides
+.claude/settings.local.json

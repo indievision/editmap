@@ -1301,7 +1301,8 @@
         setTimeout(() => { if (currentMode === 'review') renderReviewTimelineAndCues(); }, 0);
       }
     });
-    const roomMarkerIds = new Set();   // host: markers the room already has
+    const roomMarkerIds = new Set();   // host: markers the room already has (ids as text)
+    const sameId = (a, b) => String(a) === String(b);
     let roomVideoUrl = null;           // the film the room currently has
     let roomFilm = null;               // host: the film uploaded to the room server, announced once the room is joined
     let lastWorkspaceMessage = null;   // host only: the app's latest workspace, resent on reconnect
@@ -1325,11 +1326,20 @@
       if (clear) clear.textContent = flag ? 'Erase mine' : 'Clear';
     }
     window.markers = markers;
-    window.setMarkers = (m) => { 
-      markers = m; 
-      window.markers = markers; 
-      renderReviewTimelineAndCues(); 
+    window.setMarkers = (m) => {
+      // The app sends the marker list back after every keystroke in a note. If nothing changed, do nothing;
+      // if something did, never redraw the cue sheet while a note box has focus (a redraw replaces the box
+      // and the caret is lost after one letter).
+      const unchanged = m.length === markers.length && m.every((n, i) => sameId(n.id, markers[i].id) && n.seconds === markers[i].seconds && (n.note || '') === (markers[i].note || ''));
+      if (unchanged) return;
+      markers = m;
+      window.markers = markers;
       renderScreeningMarkerPips();
+      if (document.activeElement && document.activeElement.classList && document.activeElement.classList.contains('cue-note-area')) {
+        pendingCueRender = true;
+        return;
+      }
+      renderReviewTimelineAndCues();
     };
     window.getMarkers = () => markers;
 
@@ -1480,7 +1490,7 @@
 
     window.addExternalMarker = function(marker) {
       if (!marker) return;
-      const known = markers.find(m => m.id === marker.id);
+      const known = markers.find(m => sameId(m.id, marker.id));
       if (known) {
         // The server's copy says who really wrote it.
         if (marker.authorId) known.authorId = marker.authorId;
@@ -1722,7 +1732,9 @@
           document.getElementById('headerCutName').textContent = `Cut: ${file.name}`;
           
           // The room server's address, in full, so it also resolves when this page is the one served by Vite.
-          video.src = `${roomBase}${resp.url}`;
+          // The host's own player keeps the local file: a picture served from the room server (another address)
+          // cannot be read back for analysis (framing, colour), and it saves streaming the film to itself.
+          video.src = URL.createObjectURL(file);
           roomFilm = { url: resp.url, name: file.name };
           video.load();
           loadAudioWaveform(file || video.src);
@@ -2026,7 +2038,7 @@
           // now, once (a reconnect must not wipe the markers).
           roomVideoUrl = msg.state.videoUrl || null;
           if (!isGuest) {
-            (msg.state.markers || []).forEach(m => roomMarkerIds.add(m.id));
+            (msg.state.markers || []).forEach(m => roomMarkerIds.add(String(m.id)));
             announceFilm(); adoptUploadedFilm(); shareSavedMarkers();
           }
           if (isGuest) {
@@ -2043,7 +2055,7 @@
           }
           if (msg.state.markers && msg.state.markers.length) {
             msg.state.markers.forEach(m => {
-              if (!markers.some(existing => existing.id === m.id)) {
+              if (!markers.some(existing => sameId(existing.id, m.id))) {
                 markers.push(m);
               }
             });
@@ -2130,7 +2142,7 @@
           window.addExternalMarker(msg.marker);
         }
         else if (msg.type === 'UPDATE_MARKER') {
-          const target = markers.find(m => m.id === msg.id);
+          const target = markers.find(m => sameId(m.id, msg.id));
           if (target) {
             if (msg.note !== undefined) target.note = msg.note;
             if (currentMode === 'review') {
@@ -2152,7 +2164,7 @@
         else if (msg.type === 'SELECT_MARKER') {
           hostState.time = msg.currentTime;
           if (isGuest && !isFollowing) { updateFollowBar(); return; }
-          const idx = markers.findIndex(m => m.id === msg.id);
+          const idx = markers.findIndex(m => sameId(m.id, msg.id));
           if (idx !== -1) jumpToCue(idx, false);
         }
         else if (msg.type === 'DRAW_STROKE') {
@@ -2215,9 +2227,9 @@
     // Host: markers restored from the project exist only on this page, so give them to the room (once each).
     function shareSavedMarkers() {
       if (isGuest || !ws || ws.readyState !== WebSocket.OPEN) return;
-      const fresh = markers.filter(m => m.authorId === undefined && !roomMarkerIds.has(m.id));
+      const fresh = markers.filter(m => m.authorId === undefined && !roomMarkerIds.has(String(m.id)));
       if (!fresh.length) return;
-      fresh.forEach(m => roomMarkerIds.add(m.id));
+      fresh.forEach(m => roomMarkerIds.add(String(m.id)));
       ws.send(JSON.stringify({ type: 'RESTORE_MARKERS', markers: fresh.map(({ thumbnail, ...rest }) => rest) }));
     }
 
@@ -2904,11 +2916,11 @@
     // Remove a marker from this page and from the project it belongs to.
     function removeMarkerLocal(id) {
       const before = markers.length;
-      markers = markers.filter(m => m.id !== id);
+      markers = markers.filter(m => !sameId(m.id, id));
       window.markers = markers;
       if (markers.length === before) return false;
       activeCueIndex = -1;
-      roomMarkerIds.delete(id);
+      roomMarkerIds.delete(String(id));
       renderReviewTimelineAndCues();
       renderScreeningMarkerPips();
       notifyParentMarkersUpdate();
@@ -2917,7 +2929,7 @@
 
     // Delete a marker you may delete (your own, or any as the host). The server checks the same rule.
     function deleteMarker(id) {
-      const target = markers.find(m => m.id === id);
+      const target = markers.find(m => sameId(m.id, id));
       if (!target || !isMine(target)) return;
       const who = isGuest ? 'your marker' : `${target.authorName || 'this'} marker`;
       if (!confirm(`Delete ${who} at ${target.smpte || formatSMPTE(target.seconds)}? This also removes its note.`)) return;
@@ -2928,7 +2940,7 @@
     window.deleteMarker = deleteMarker;
 
     function updateCueNote(id, newNote) {
-      const target = markers.find(m => m.id === id);
+      const target = markers.find(m => sameId(m.id, id));
       if (target && isMine(target)) {
         target.note = newNote;
         if (ws && ws.readyState === WebSocket.OPEN) {

@@ -399,6 +399,10 @@ function broadcastToRoom(roomCode, senderWs, messageData, includeSender = false)
 
 // Only the host drives the room. Everything else a participant sends is their own
 // contribution (markers, notes, drawings) and is checked per message below.
+// Marker ids reach the room as numbers (made on a page) and as text (after the app has saved them in the
+// project), so they are always compared as text.
+const sameId = (a, b) => String(a) === String(b);
+
 const HOST_ONLY_MESSAGES = new Set([
   'SHARE_VIDEO', 'CLEAR_MARKERS', 'CLEAR_DRAW', 'PLAY', 'PAUSE', 'SEEK', 'MODE_CHANGE', 'SELECT_MARKER',
   'TIME_PULSE', 'WORKSPACE_STATE', 'RESTORE_MARKERS'
@@ -547,7 +551,7 @@ wss.on('connection', (ws, req) => {
             role: clientInfo.role
           };
           // A marker is added once: the same id arriving again (a resend) is ignored.
-          if (room.state.markers.some(m => m.id === marker.id)) return;
+          if (room.state.markers.some(m => sameId(m.id, marker.id))) return;
           room.state.markers.push(marker);
           broadcastToRoom(currentRoomCode, ws, {
             type: 'ADD_MARKER',
@@ -556,10 +560,10 @@ wss.on('connection', (ws, req) => {
         }
         // The host's saved markers (from the project) join the room, keeping who originally wrote them.
         else if (type === 'RESTORE_MARKERS') {
-          const known = new Set(room.state.markers.map(m => m.id));
+          const known = new Set(room.state.markers.map(m => String(m.id)));
           for (const saved of Array.isArray(data.markers) ? data.markers.slice(0, 2000) : []) {
-            if (!saved || saved.id === undefined || known.has(saved.id)) continue;
-            known.add(saved.id);
+            if (!saved || saved.id === undefined || known.has(String(saved.id))) continue;
+            known.add(String(saved.id));
             const marker = { ...saved, authorId: clientInfo.id, role: 'host' };
             room.state.markers.push(marker);
             broadcastToRoom(currentRoomCode, ws, { type: 'ADD_MARKER', marker }, false);
@@ -568,7 +572,7 @@ wss.on('connection', (ws, req) => {
         // Edit cue note in Review Mode
         else if (type === 'UPDATE_MARKER') {
           const { id, note, solved } = data;
-          const target = room.state.markers.find(m => m.id === id);
+          const target = room.state.markers.find(m => sameId(m.id, id));
           // A marker is edited by its author or by the host, nobody else.
           if (target && (clientInfo.role === 'host' || target.authorId === clientInfo.id)) {
             if (note !== undefined) target.note = note;
@@ -581,12 +585,12 @@ wss.on('connection', (ws, req) => {
         }
         // Delete a marker: its author or the host, like editing its note.
         else if (type === 'DELETE_MARKER') {
-          const index = room.state.markers.findIndex(m => m.id === data.id);
+          const index = room.state.markers.findIndex(m => sameId(m.id, data.id));
           if (index === -1) return;
           const target = room.state.markers[index];
           if (clientInfo.role !== 'host' && target.authorId !== clientInfo.id) return;
           room.state.markers.splice(index, 1);
-          if (room.state.activeMarkerId === data.id) room.state.activeMarkerId = null;
+          if (sameId(room.state.activeMarkerId, data.id)) room.state.activeMarkerId = null;
           broadcastToRoom(currentRoomCode, ws, { type: 'DELETE_MARKER', id: data.id }, false);
         }
         // Select Cue in Review Mode

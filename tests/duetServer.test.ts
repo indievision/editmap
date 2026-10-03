@@ -428,3 +428,29 @@ test("a marker is deleted by its author or the host, for everyone, for good", as
   late.close();
   host.close();
 });
+
+test("a marker id is the same marker whether it arrives as a number or as text", async () => {
+  const room = "roles-ids";
+  const host = await joinRoom(room, "host", "Teacher", false);
+  const anna = await joinRoom(room, "student", "Anna", true);
+
+  host.send({ type: "ADD_MARKER", marker: { id: 1791032313713, seconds: 60 } });
+  await until(() => received(anna, "ADD_MARKER").length === 1);
+
+  // the app saves the project with the id as text and the page sends it back as a "saved" marker
+  host.send({ type: "RESTORE_MARKERS", markers: [{ id: "1791032313713", seconds: 60 }] });
+  host.send({ type: "ADD_MARKER", marker: { id: "1791032313713", seconds: 60 } });
+  await settle();
+  assert.equal(received(anna, "ADD_MARKER").length, 1, "no second copy reaches the guests");
+
+  host.send({ type: "UPDATE_MARKER", id: "1791032313713", note: "found by its text id" });
+  await until(() => received(anna, "UPDATE_MARKER").length === 1);
+
+  host.send({ type: "DELETE_MARKER", id: "1791032313713" });
+  await until(() => received(anna, "DELETE_MARKER").length === 1);
+  const late = await joinRoom(room, "student", "Ben", true);
+  assert.equal(late.messages.find((m) => m.type === "INIT_STATE").state.markers.length, 0);
+  anna.close();
+  late.close();
+  host.close();
+});
