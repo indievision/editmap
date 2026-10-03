@@ -91,7 +91,7 @@
       font-size: 11px;
       z-index: 20;
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
-      backdrop-filter: blur(8px);
+      /* No backdrop-filter: it sits over the Review video, and Safari then paints that video black. The background is already nearly opaque. */
     }
     .wax b { font-weight: 690; margin-right: 1px; color: #f0f2f3; }
     .swatch {
@@ -2149,7 +2149,7 @@
         else if (msg.type === 'TIME_PULSE') {
           hostState = { time: msg.currentTime, playing: !!msg.isPlaying };
           if (msg.isPlaying) lastHostSignalAt = performance.now();
-          if (isGuest) syncToHost(0.5);
+          if (isGuest) syncToHost(1.0);
         }
         else if (msg.type === 'ROOM_DATA_UPDATED') {
           const frame = guestFrame();
@@ -2236,9 +2236,11 @@
     function lockToHost() {
       if (!isGuest || !isFollowing || !hostState.playing) return;
       const drift = hostState.time - video.currentTime;   // positive: this device is behind
-      if (Math.abs(drift) > 0.5) { video.currentTime = hostState.time; video.playbackRate = 1; }
-      else if (Math.abs(drift) > 0.04) video.playbackRate = Math.max(0.9, Math.min(1.1, 1 + drift * 0.8));
-      else video.playbackRate = 1;
+      const gap = Math.abs(drift);
+      const setRate = (r) => { if (Math.abs(video.playbackRate - r) > 0.001) video.playbackRate = r; };
+      if (gap > 1.0) { video.currentTime = hostState.time; setRate(1); }   // a jump only for a large gap: a seek lands on a keyframe and shows
+      else if (gap > 0.06) setRate(drift > 0 ? 1.06 : 0.94);              // two fixed speeds, never a changing one (Safari stutters on that)
+      else if (gap < 0.02) setRate(1);                                     // between the two thresholds the speed is left alone (no flapping)
     }
 
     let lastHostSignalAt = performance.now();   // the last time the host said it was playing
