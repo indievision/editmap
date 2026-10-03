@@ -346,3 +346,17 @@ test("only the host machine can list the films already uploaded", async () => {
   assert.ok(files.some((f) => f.name === "clip.mp4" && f.size === 10), "name and size, so the host can recognise a film");
   assert.equal((await request({ path: "/api/uploads", headers: { Host: `192.168.0.9:${PORT}`, Cookie: `duet_token=${token}` } })).status, 403, "a guest cannot list them");
 });
+
+test("leaving Studio pauses the room's playhead, so a guest does not keep playing on an old flag", async () => {
+  const room = "roles-leave-studio";
+  const host = await joinRoom(room, "host", "Teacher", false);
+  host.send({ type: "WORKSPACE_STATE", state: { mode: "studio", time: 20, playing: true } });
+  host.send({ type: "WORKSPACE_STATE", state: { mode: "review" } });
+  await settle();
+  const late = await joinRoom(room, "student", "Anna", true);
+  const init = late.messages.find((m) => m.type === "INIT_STATE");
+  assert.equal(init.state.isPlaying, false);
+  assert.ok(Math.abs(init.state.currentTime - 20) < 0.5, "and it stays where the host left it");
+  late.close();
+  host.close();
+});

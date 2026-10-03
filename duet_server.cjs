@@ -585,7 +585,12 @@ wss.on('connection', (ws, req) => {
         else if (type === 'WORKSPACE_STATE') {
           const workspace = sanitizeWorkspace(data.state);
           if (!workspace) return;
+          const wasInApp = room.state.workspace && (room.state.workspace.mode === 'studio' || room.state.workspace.mode === 'explore');
           room.state.workspace = workspace;
+          // The app pauses when the host leaves Studio or Explore, and its Screening/Review state carries no play flag.
+          if (wasInApp && (workspace.mode === 'screening' || workspace.mode === 'review') && typeof workspace.time !== 'number') {
+            setPlayhead(room, undefined, false);
+          }
           if (workspace.mode === 'screening' || workspace.mode === 'review') room.state.mode = workspace.mode;
           if (typeof workspace.time === 'number') setPlayhead(room, workspace.time, workspace.playing === true);
           broadcastToRoom(currentRoomCode, ws, { type: 'WORKSPACE_STATE', state: workspace }, false);

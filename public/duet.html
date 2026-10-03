@@ -1091,6 +1091,7 @@
       <!-- CINEMA VIEWER (Native Video Player + Pencil Toolbar) -->
       <div class="relative flex-1 min-h-0 bg-black rounded-xl overflow-hidden border theater-border flex items-center justify-center shadow-2xl">
         <video id="mainVideoPlayer" class="w-full h-full object-contain pointer-events-none" preload="auto" playsinline></video>
+        <div id="filmStatus" class="hidden absolute inset-x-0 top-3 mx-auto w-fit max-w-[90%] px-3 py-1.5 rounded-lg bg-black/85 border border-slate-700 text-xs font-mono text-slate-200 z-20 pointer-events-none"></div>
 
         <!-- Grease-Pencil Drawing Canvas Layer -->
         <canvas id="waxCanvas" class="absolute inset-0 w-full h-full cursor-crosshair z-10"></canvas>
@@ -1449,6 +1450,19 @@
       }
     }
 
+    // Say what the film is doing when there is no picture, instead of leaving a black box.
+    function updateFilmStatus() {
+      const el = document.getElementById('filmStatus');
+      if (!el) return;
+      let text = '';
+      if (video.error) text = `The film could not be played (${video.error.message || 'error ' + video.error.code}).`;
+      else if (!video.currentSrc && !video.src) text = isGuest ? 'Waiting for the host to share the film…' : '';
+      else if (video.readyState < 2) text = 'Loading the film from the host…';
+      el.textContent = text;
+      el.classList.toggle('hidden', !text);
+    }
+    ['error', 'loadstart', 'loadeddata', 'canplay', 'waiting', 'playing', 'seeked', 'emptied'].forEach(n => video.addEventListener(n, updateFilmStatus));
+    setInterval(updateFilmStatus, 1000);
     video.addEventListener('volumechange', () => { if (isGuest && !video.muted) video.muted = true; });
     video.addEventListener('play', startContinuousSync);
     video.addEventListener('pause', stopContinuousSync);
@@ -2081,9 +2095,13 @@
           if (frame && frame.contentWindow) frame.contentWindow.postMessage({ type: 'ROOM_DATA_UPDATED', part: msg.part }, window.location.origin);
         }
         else if (msg.type === 'WORKSPACE_STATE') {
+          const wasInApp = hostWorkspace && (hostWorkspace.mode === 'studio' || hostWorkspace.mode === 'explore');
           hostWorkspace = msg.state;
           if (isGuest && typeof msg.state.time === 'number') {
             hostState = { time: msg.state.time, playing: msg.state.playing === true };
+          } else if (isGuest && wasInApp && (msg.state.mode === 'screening' || msg.state.mode === 'review')) {
+            // The app pauses when the host leaves Studio or Explore; do not keep playing on the old flag.
+            hostState.playing = false;
           }
           renderHostWorkspaceOverlay();
           if (isGuest) {
@@ -3677,6 +3695,7 @@
         const pVid = getProjectorVideo();
         if (pVid) pVid.currentTime = t;
         syncChannel?.postMessage({ type: 'SEEK', currentTime: t });
+        if (!isGuest && ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'SEEK', currentTime: t }));
       }
     };
 
