@@ -1,0 +1,22 @@
+/* The guest's read-only Studio and Explore (see GuestApp.tsx). */
+.guest-app { height: 100vh; overflow: hidden; }
+.guest-banner {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: #e5a93c;
+  background: #0b0c10;
+  border-bottom: 1px solid #1b222d;
+}
+.guest-wait { height: 100vh; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 14px; }
+.guest-app .studio-tool-rail button,
+.guest-app .section-head button { cursor: default; }
+.guest-app .expanded-map-context { order: 3; flex: 0 0 280px; min-width: 0; overflow: auto; }
+
+.guest-header { height: 64px; overflow: hidden; }
+.guest-header .mode-tab,
+.guest-header .brand { cursor: default; }

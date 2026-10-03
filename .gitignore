@@ -1,5 +1,6 @@
 node_modules/
 dist/
+public/guest/
 *.tsbuildinfo
 .DS_Store
 test-results/

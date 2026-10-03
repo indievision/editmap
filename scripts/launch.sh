@@ -26,6 +26,12 @@ fi
 
 echo "Starting EditMap and local AI / screening services..."
 
+# Guests in the screening room get a read-only Studio and Explore; build it once if it is missing.
+if [ ! -f public/guest/guest.html ]; then
+  echo "Building the guest view for Wi-Fi screening..."
+  npm run build:guest >> logs/guest-build.log 2>&1 || echo "Guest view build failed (see logs/guest-build.log); guests will see a plain panel instead."
+fi
+
 # Start EditMap via python subprocess with a completely detached new session
 python3 -c "import subprocess; p = subprocess.Popen(['npm', 'run', 'dev'], stdout=open('logs/editmap.log', 'w'), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True); open('logs/editmap.pid', 'w').write(str(p.pid))"
 

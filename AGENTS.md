@@ -20,6 +20,8 @@
 
 ## Local screening server (DUET) and access
 - `duet_server.cjs` (port 3000) is loopback-only by default. Wi-Fi access is opt-in with `EDITMAP_DUET_LAN=1` and requires the per-launch join secret (cookie set by the join link). Never bind it to `0.0.0.0` without that check, and never serve files from outside `uploads/` and `public/`. The access rules are covered by `tests/duetServer.test.ts`.
+- Roles are decided by the server, never the client: the host is a connection from the machine running `duet_server.cjs`; every other device is a guest whatever role it asks for. Guests only drop markers, edit their own marker notes, and draw in Review. Play/pause/seek, mode, film, clear and the host's workspace are host-only (`HOST_ONLY_MESSAGES`, covered in `tests/duetServer.test.ts`).
+- Guests follow the host in a read-only Studio and Explore: `src/guest/` builds to `public/guest/` with `npm run build:guest` (also run by `npm run build` and `scripts/launch.sh`; the server still serves only `public/` and `uploads/`). The host's app posts its analysis to `/api/room-data/:part` (host machine only, via `useRoomDataRelay`) and its view state through `useRoomWorkspaceRelay` / `src/playback/workspaceState.ts`. Guest components must not write: every edit and scan callback in `GuestApp.tsx` is a no-op. Guests reach the room over plain http, so browser APIs that need a secure context (for example `crypto.randomUUID`, `navigator.clipboard`) are missing there; see `src/guest/polyfills.ts`.
 - The CV backend only accepts the Vite origins listed in `server/local_access.py` (extend with `EDITMAP_ORIGINS`). Do not reintroduce endpoints that take filesystem paths.
 
 ## Playback clock

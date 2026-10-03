@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --open",
     "start": "vite --host 127.0.0.1 --open",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && npm run build:guest && vite build",
+    "build:guest": "vite build --config vite.guest.config.ts",
     "test": "node --import tsx --test tests/*.test.ts",
     "test:browser": "playwright test"
   },

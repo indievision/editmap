@@ -31,6 +31,7 @@ export default function ProjectHeader({
   isScreeningSetup = false,
   showChangeFilm = false,
   onChangeFilm,
+  readOnly = false,
 }: {
   project: Project | null;
   dirty: boolean;
@@ -59,6 +60,8 @@ export default function ProjectHeader({
   isScreeningSetup?: boolean;
   showChangeFilm?: boolean;
   onChangeFilm?: () => void;
+  /** A guest in the screening room: same header, following the host. Nothing here edits, saves or scans. */
+  readOnly?: boolean;
 }) {
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const fileMenuRef = useRef<HTMLDivElement>(null);
@@ -86,7 +89,36 @@ export default function ProjectHeader({
     };
   }, [fileMenuOpen]);
 
-  const fileDropdown = (
+  const fileDropdown = readOnly ? (
+    <div className="header-dropdown-container" ref={fileMenuRef}>
+      <button
+        type="button"
+        className={`header-menu-btn file-trigger-btn ${fileMenuOpen ? "active" : ""}`}
+        onClick={() => setFileMenuOpen(!fileMenuOpen)}
+        aria-expanded={fileMenuOpen}
+        aria-haspopup="true"
+        title="File operations"
+      >
+        <span>File</span>
+        <span className="dropdown-arrow">▾</span>
+      </button>
+      {fileMenuOpen && (
+        <div className="dropdown-menu file-menu" role="menu">
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setFileMenuOpen(false);
+              onExportEdlMarkers?.();
+            }}
+            title="Export markers to DaVinci Resolve EDL"
+          >
+            <span>Export .EDL</span>
+          </button>
+        </div>
+      )}
+    </div>
+  ) : (
     <div className="header-dropdown-container" ref={fileMenuRef}>
       <button
         type="button"
@@ -287,11 +319,12 @@ export default function ProjectHeader({
               <input
                 aria-label="Project name"
                 className="header-project-input"
+                readOnly={readOnly}
                 value={project.name}
                 onChange={(e) => onProjectNameChange?.(e.target.value)}
                 placeholder="Untitled film"
               />
-              <button
+              {!readOnly && <button
                 type="button"
                 className={`header-save-status ${dirty ? "dirty" : "saved"}`}
                 onClick={onSave}
@@ -302,7 +335,7 @@ export default function ProjectHeader({
                 <span className="save-status-text">
                   {saveState === "Saving" ? "Saving…" : dirty ? "Unsaved" : "Saved"}
                 </span>
-              </button>
+              </button>}
             </div>
           )
         )}
@@ -374,7 +407,7 @@ export default function ProjectHeader({
           </button>
         )}
 
-        {project && (
+        {project && !readOnly && (
           <button
             type="button"
             className="header-analyze-btn"
