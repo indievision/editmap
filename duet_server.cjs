@@ -131,7 +131,10 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && parsedUrl.searchParams.has('t')) {
     if (tokenMatches(parsedUrl.searchParams.get('t'))) {
       res.writeHead(302, {
-        'Set-Cookie': `duet_token=${JOIN_TOKEN}; HttpOnly; SameSite=Strict; Path=/`,
+        // Lax, not Strict: a join link clicked in a chat or mail app starts a cross-site navigation, and
+        // Strict would withhold the cookie on the redirect back to "/", leaving a blank 401 page. Lax still
+        // keeps it off cross-site background requests (fetch, WebSocket, uploads); the Origin checks stay.
+        'Set-Cookie': `duet_token=${JOIN_TOKEN}; HttpOnly; SameSite=Lax; Path=/`,
         'Location': reqPath,
       });
     } else {

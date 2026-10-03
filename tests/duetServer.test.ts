@@ -65,7 +65,7 @@ test("join link validates the token and sets an HttpOnly cookie", async () => {
   assert.equal(bad.status, 403);
   const good = await request({ path: `/?t=${token}`, headers: { Host: `192.168.0.9:${PORT}` } });
   assert.equal(good.status, 302);
-  assert.match(String(good.headers["set-cookie"]), /duet_token=[0-9a-f]+; HttpOnly; SameSite=Strict/);
+  assert.match(String(good.headers["set-cookie"]), /duet_token=[0-9a-f]+; HttpOnly; SameSite=Lax/);
   const viaCookie = await request({ path: "/", headers: { Host: `192.168.0.9:${PORT}`, Cookie: `duet_token=${token}` } });
   assert.equal(viaCookie.status, 200);
 });
