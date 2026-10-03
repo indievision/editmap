@@ -360,3 +360,9 @@ test("leaving Studio pauses the room's playhead, so a guest does not keep playin
   late.close();
   host.close();
 });
+
+test("pages are re-checked every time so a guest never keeps an old copy", async () => {
+  const page = await request({ path: "/duet.html" });
+  assert.equal(page.status, 200);
+  assert.equal(page.headers["cache-control"], "no-cache");
+});

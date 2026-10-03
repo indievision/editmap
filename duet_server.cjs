@@ -344,7 +344,11 @@ const server = http.createServer((req, res) => {
 
     const ext = path.extname(filePath).toLowerCase();
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-    res.writeHead(200, { 'Content-Type': contentType });
+    // Pages must be re-checked every time: with no cache header Safari reuses an old copy, so a guest
+    // can keep running yesterday's page after the host has updated it. (Built guest assets are hashed.)
+    const headers = { 'Content-Type': contentType };
+    if (ext === '.html') headers['Cache-Control'] = 'no-cache';
+    res.writeHead(200, headers);
     res.end(data);
   });
 });
