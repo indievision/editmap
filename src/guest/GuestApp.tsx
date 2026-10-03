@@ -90,7 +90,7 @@ function GuestWorkspace() {
     const v = video.current;
     if (!v) return;
     // While playing, small differences are removed by speed (below); only a large gap, or a paused frame, seeks.
-    if (Math.abs(v.currentTime - state.time) > (state.playing ? 1.0 : 0.05)) v.currentTime = state.time;
+    if (Math.abs(v.currentTime - state.time) > (state.playing ? 0.6 : 0.05)) v.currentTime = state.time;
     if (state.playing) void v.play().catch(noop);
     else v.pause();
   }, [state, ready]);
@@ -107,18 +107,11 @@ function GuestWorkspace() {
         setPlayhead(v.currentTime);
         // Phase-lock to the host: where the host is now, from its last update plus the time since.
         const hostNow = state.time + (performance.now() - state.at) / 1000;
-        const drift = hostNow - v.currentTime; // positive: this picture is behind
-        const gap = Math.abs(drift);
-        // Two fixed speeds with a dead band, and a seek only for a large gap: a seek lands on a keyframe and
-        // shows, and Safari stutters if the speed keeps changing.
-        const setRate = (r: number) => {
-          if (Math.abs(v.playbackRate - r) > 0.001) v.playbackRate = r;
-        };
-        if (gap > 1.0) {
-          v.currentTime = hostNow;
-          setRate(1);
-        } else if (gap > 0.06) setRate(drift > 0 ? 1.06 : 0.94);
-        else if (gap < 0.02) setRate(1);
+        const gap = Math.abs(hostNow - v.currentTime);
+        // Steady 1x playback. Changing the speed made Safari drop frames, so a guest may sit a few frames off the
+        // host; only a real gap seeks (a seek lands on a keyframe and shows).
+        if (v.playbackRate !== 1) v.playbackRate = 1;
+        if (gap > 0.6) v.currentTime = hostNow;
       }
       frame = requestAnimationFrame(tick);
     };

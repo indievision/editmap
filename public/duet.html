@@ -1298,7 +1298,7 @@
     let isFollowing = true;
     let hostState = { time: 0, playing: false };
     let hostWorkspace = null;
-    const PAGE_BUILD = '2026-10-03-mirror5';   // shown in the diagnostic, to tell a stale cached page from a current one
+    const PAGE_BUILD = '2026-10-03-steady6';   // shown in the diagnostic, to tell a stale cached page from a current one
     const roomLog = [];                      // the last room messages, for the diagnostic (Shift+D)
     let pendingCueRender = false;
     document.addEventListener('focusout', (e) => {
@@ -2291,12 +2291,10 @@
     // is corrected within a second or two instead of being left at a few frames behind.
     function lockToHost() {
       if (!isGuest || !isFollowing || !hostState.playing) return;
-      const drift = hostState.time - video.currentTime;   // positive: this device is behind
-      const gap = Math.abs(drift);
-      const setRate = (r) => { if (Math.abs(video.playbackRate - r) > 0.001) video.playbackRate = r; };
-      if (gap > 1.0) { video.currentTime = hostState.time; setRate(1); }   // a jump only for a large gap: a seek lands on a keyframe and shows
-      else if (gap > 0.06) setRate(drift > 0 ? 1.06 : 0.94);              // two fixed speeds, never a changing one (Safari stutters on that)
-      else if (gap < 0.02) setRate(1);                                     // between the two thresholds the speed is left alone (no flapping)
+      const gap = Math.abs(hostState.time - video.currentTime);
+      // Steady 1x playback: changing the speed made Safari drop frames. Only a real gap seeks.
+      if (video.playbackRate !== 1) video.playbackRate = 1;
+      if (gap > 0.6) video.currentTime = hostState.time;
     }
 
     let lastHostSignalAt = performance.now();   // the last time the host said it was playing
