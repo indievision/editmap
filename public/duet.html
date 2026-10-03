@@ -1068,6 +1068,8 @@
   <!-- ============================================== -->
   <!-- SCREEN 3: MAIN REVIEW CONSOLE (The Lights On!) -->
   <!-- ============================================== -->
+  <pre id="debugBadge" class="hidden fixed bottom-2 left-2 z-[90] max-w-[90vw] px-3 py-2 rounded-lg bg-black/90 border border-amber-500/60 text-[11px] leading-snug font-mono text-amber-200 pointer-events-none"></pre>
+
   <!-- Guests: shown in Review while they look around on their own -->
   <div id="followBar" class="hidden flex items-center gap-3 px-3 py-1.5 rounded-full bg-black/90 border border-amber-500/50 text-xs font-mono text-slate-200 shadow-2xl">
     <span id="followBarLabel">Host at 00:00:00:00</span>
@@ -1294,6 +1296,8 @@
     let isFollowing = true;
     let hostState = { time: 0, playing: false };
     let hostWorkspace = null;
+    const PAGE_BUILD = '2026-10-03-diag1';   // shown in the diagnostic, to tell a stale cached page from a current one
+    const roomLog = [];                      // the last room messages, for the diagnostic (Shift+D)
     let pendingCueRender = false;
     document.addEventListener('focusout', (e) => {
       if (pendingCueRender && e.target.classList && e.target.classList.contains('cue-note-area')) {
@@ -1467,6 +1471,27 @@
         pVid.playbackRate = video.playbackRate;
       }
     }
+
+    // Diagnostic (Shift+D): what this page believes the host is doing, what the video is doing, what the room last said.
+    function updateDebugBadge() {
+      const el = document.getElementById('debugBadge');
+      if (!el || el.classList.contains('hidden')) return;
+      const v = video;
+      el.textContent = [
+        `build ${PAGE_BUILD}  role ${isGuest ? 'guest' : 'host'}  mode ${currentMode}  following ${isFollowing}`,
+        `host says: ${formatSMPTE(hostState.time)}  ${hostState.playing ? 'PLAYING' : 'paused'}  workspace ${hostWorkspace ? hostWorkspace.mode : '-'}`,
+        `video: t=${v.currentTime.toFixed(2)} ${v.paused ? 'paused' : 'PLAYING'} ready=${v.readyState} net=${v.networkState} seeking=${v.seeking} ${v.videoWidth}x${v.videoHeight}${v.error ? ' ERROR ' + v.error.code : ''}`,
+        `socket: ${ws ? ws.readyState : '-'}   last from room:`,
+        ...roomLog.slice().reverse()
+      ].join('\n');
+    }
+    setInterval(updateDebugBadge, 500);
+    window.addEventListener('keydown', (e) => {
+      if (e.shiftKey && (e.key === 'D' || e.key === 'd') && !/INPUT|TEXTAREA/.test(e.target.tagName)) {
+        const el = document.getElementById('debugBadge');
+        if (el) { el.classList.toggle('hidden'); updateDebugBadge(); }
+      }
+    });
 
     // Say what the film is doing when there is no picture, instead of leaving a black box.
     function updateFilmStatus() {
@@ -2029,6 +2054,8 @@
 
       ws.onmessage = (event) => {
         const msg = JSON.parse(event.data);
+        roomLog.push(`${msg.type}${msg.currentTime !== undefined ? ' ' + Number(msg.currentTime).toFixed(1) : ''}${msg.isPlaying !== undefined ? (msg.isPlaying ? ' playing' : ' paused') : ''}`);
+        if (roomLog.length > 10) roomLog.shift();
 
         if (msg.type === 'INIT_STATE') {
           document.getElementById('connectedCountBadge').textContent = msg.connectedCount;
