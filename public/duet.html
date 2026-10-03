@@ -1338,7 +1338,7 @@
     // Where the host is now: its last reported time plus the time since, while it plays.
     function hostNow() { return hostState.time + (hostState.playing ? (performance.now() - hostState.at) / 1000 : 0); }
     let hostWorkspace = null;
-    const PAGE_BUILD = '2026-10-04-cues10';   // shown in the diagnostic, to tell a stale cached page from a current one
+    const PAGE_BUILD = '2026-10-04-seek11';   // shown in the diagnostic, to tell a stale cached page from a current one
     const roomLog = [];                      // the last room messages, for the diagnostic (Shift+D)
     let pendingCueRender = false;
     document.addEventListener('focusout', (e) => {
@@ -2337,13 +2337,21 @@
     // Phase-lock to the host: small differences are removed by running a few percent faster or slower
     // (no visible jump); only a large gap seeks. Called with fresh host time, so a late start of playback
     // is corrected within a second or two instead of being left at a few frames behind.
-    let driftSince = 0, lastDriftSeek = 0;
+    let driftSince = 0, lastDriftSeek = 0, lastBigSeek = 0;
+    // Seek toward the host, but never while an earlier seek is still loading and at most every 2 s:
+    // over Wi-Fi a seek can take a moment, and seeking again each pulse keeps the picture from ever arriving.
+    function seekToHost() {
+      const now = performance.now();
+      if (video.seeking || now - lastBigSeek < 2000) return;
+      lastBigSeek = now;
+      video.currentTime = hostNow();
+    }
     function lockToHost() {
       if (!isGuest || !isFollowing || !hostState.playing) return;
       const gap = Math.abs(hostNow() - video.currentTime);
       // Steady 1x playback: changing the speed made Safari drop frames. Only a real gap seeks.
       if (video.playbackRate !== 1) video.playbackRate = 1;
-      if (gap > 0.6) { video.currentTime = hostNow(); driftSince = 0; }
+      if (gap > 0.6) { seekToHost(); driftSince = 0; }
       else if (gap > 0.08) {
         // A steady offset of a few frames is closed with one small seek, early, instead of showing as a jump
         // when the host stops. At most one per 5 s, and only after the offset has stayed for 1.5 s.
@@ -2366,7 +2374,7 @@
     function syncToHost(threshold) {
       if (!isGuest || !isFollowing) { updateFollowBar(); return; }
       const inStudioOrExplore = hostWorkspace && (hostWorkspace.mode === 'studio' || hostWorkspace.mode === 'explore');
-      if (Math.abs(video.currentTime - hostNow()) > threshold) video.currentTime = hostNow();
+      if (Math.abs(video.currentTime - hostNow()) > threshold) seekToHost();
       if (hostState.playing && !inStudioOrExplore) {
         if (video.paused) video.play().catch(() => {});
         lockToHost();
@@ -2380,6 +2388,7 @@
 
     function followHost() {
       isFollowing = true;
+      lastBigSeek = 0;   // an explicit follow always seeks now
       syncToHost(0.15);
     }
     window.followHost = followHost;
