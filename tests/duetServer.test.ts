@@ -366,3 +366,34 @@ test("pages are re-checked every time so a guest never keeps an old copy", async
   assert.equal(page.status, 200);
   assert.equal(page.headers["cache-control"], "no-cache");
 });
+
+test("the host's saved markers join the room, once, keeping their original author", async () => {
+  const room = "roles-restore";
+  const host = await joinRoom(room, "host", "Teacher", false);
+  const anna = await joinRoom(room, "student", "Anna", true);
+
+  anna.send({ type: "RESTORE_MARKERS", markers: [{ id: "g", seconds: 1 }] });
+  await settle();
+  assert.equal(received(host, "ADD_MARKER").length, 0, "a guest cannot restore markers");
+
+  const saved = { id: "duet-mark-0-40", seconds: 40, note: "saved earlier", authorName: "Mara", authorAvatar: "🎞️" };
+  host.send({ type: "RESTORE_MARKERS", markers: [saved] });
+  await until(() => received(anna, "ADD_MARKER").length === 1);
+  host.send({ type: "RESTORE_MARKERS", markers: [saved] });
+  host.send({ type: "ADD_MARKER", marker: { id: "dup", seconds: 5 } });
+  host.send({ type: "ADD_MARKER", marker: { id: "dup", seconds: 5 } });
+  await settle();
+  assert.equal(received(anna, "ADD_MARKER").length, 2, "a resend of the same id is ignored");
+
+  const late = await joinRoom(room, "student", "Ben", true);
+  const markers = late.messages.find((m) => m.type === "INIT_STATE").state.markers as any[];
+  assert.equal(markers.length, 2);
+  assert.equal(markers.find((m) => m.id === "duet-mark-0-40").authorName, "Mara", "the saved marker keeps who wrote it");
+
+  host.send({ type: "UPDATE_MARKER", id: "duet-mark-0-40", note: "edited by the host" });
+  await until(() => received(anna, "UPDATE_MARKER").length === 1);
+  assert.equal(received(anna, "UPDATE_MARKER")[0].note, "edited by the host", "its note can be edited and reaches everyone");
+  anna.close();
+  late.close();
+  host.close();
+});

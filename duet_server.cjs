@@ -401,7 +401,7 @@ function broadcastToRoom(roomCode, senderWs, messageData, includeSender = false)
 // contribution (markers, notes, drawings) and is checked per message below.
 const HOST_ONLY_MESSAGES = new Set([
   'SHARE_VIDEO', 'CLEAR_MARKERS', 'CLEAR_DRAW', 'PLAY', 'PAUSE', 'SEEK', 'MODE_CHANGE', 'SELECT_MARKER',
-  'TIME_PULSE', 'WORKSPACE_STATE'
+  'TIME_PULSE', 'WORKSPACE_STATE', 'RESTORE_MARKERS'
 ]);
 
 // What the host is looking at in the app (Screening, Review, Studio or Explore, the
@@ -546,11 +546,24 @@ wss.on('connection', (ws, req) => {
             authorAvatar: clientInfo.avatar,
             role: clientInfo.role
           };
+          // A marker is added once: the same id arriving again (a resend) is ignored.
+          if (room.state.markers.some(m => m.id === marker.id)) return;
           room.state.markers.push(marker);
           broadcastToRoom(currentRoomCode, ws, {
             type: 'ADD_MARKER',
             marker: marker
           }, true);
+        }
+        // The host's saved markers (from the project) join the room, keeping who originally wrote them.
+        else if (type === 'RESTORE_MARKERS') {
+          const known = new Set(room.state.markers.map(m => m.id));
+          for (const saved of Array.isArray(data.markers) ? data.markers.slice(0, 2000) : []) {
+            if (!saved || saved.id === undefined || known.has(saved.id)) continue;
+            known.add(saved.id);
+            const marker = { ...saved, authorId: clientInfo.id, role: 'host' };
+            room.state.markers.push(marker);
+            broadcastToRoom(currentRoomCode, ws, { type: 'ADD_MARKER', marker }, false);
+          }
         }
         // Edit cue note in Review Mode
         else if (type === 'UPDATE_MARKER') {

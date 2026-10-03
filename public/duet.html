@@ -1294,12 +1294,20 @@
     let isFollowing = true;
     let hostState = { time: 0, playing: false };
     let hostWorkspace = null;
+    let pendingCueRender = false;
+    document.addEventListener('focusout', (e) => {
+      if (pendingCueRender && e.target.classList && e.target.classList.contains('cue-note-area')) {
+        pendingCueRender = false;
+        setTimeout(() => { if (currentMode === 'review') renderReviewTimelineAndCues(); }, 0);
+      }
+    });
+    const roomMarkerIds = new Set();   // host: markers the room already has
     let roomVideoUrl = null;           // the film the room currently has
     let roomFilm = null;               // host: the film uploaded to the room server, announced once the room is joined
     let lastWorkspaceMessage = null;   // host only: the app's latest workspace, resent on reconnect
     let strokes = [];                  // everyone's pencil strokes, so one person's can be erased
     let lastRoomPulse = 0;
-    const HOST_ONLY_TYPES = new Set(['SHARE_VIDEO', 'CLEAR_MARKERS', 'CLEAR_DRAW', 'PLAY', 'PAUSE', 'SEEK', 'MODE_CHANGE', 'SELECT_MARKER', 'TIME_PULSE', 'WORKSPACE_STATE']);
+    const HOST_ONLY_TYPES = new Set(['SHARE_VIDEO', 'CLEAR_MARKERS', 'CLEAR_DRAW', 'PLAY', 'PAUSE', 'SEEK', 'MODE_CHANGE', 'SELECT_MARKER', 'TIME_PULSE', 'WORKSPACE_STATE', 'RESTORE_MARKERS']);
     const PEN_COLORS = ['#ef5266', '#f3bb40', '#39c99d', '#39cbe2', '#a78bfa', '#fb923c', '#f472b6', '#84cc16'];
     function personalPenColor() {
       let h = 0;
@@ -2017,7 +2025,10 @@
           // The film may have been uploaded before this room was joined, or in an earlier session: announce it
           // now, once (a reconnect must not wipe the markers).
           roomVideoUrl = msg.state.videoUrl || null;
-          if (!isGuest) { announceFilm(); adoptUploadedFilm(); }
+          if (!isGuest) {
+            (msg.state.markers || []).forEach(m => roomMarkerIds.add(m.id));
+            announceFilm(); adoptUploadedFilm(); shareSavedMarkers();
+          }
           if (isGuest) {
             showGuestHeader();
             activeWaxColor = personalPenColor();
@@ -2122,7 +2133,17 @@
           const target = markers.find(m => m.id === msg.id);
           if (target) {
             if (msg.note !== undefined) target.note = msg.note;
-            if (currentMode === 'review') renderReviewTimelineAndCues();
+            if (currentMode === 'review') {
+              const box = [...document.querySelectorAll('.cue-note-area')].find(t => t.dataset.markerId === String(msg.id));
+              if (box && msg.note !== undefined) {
+                if (document.activeElement !== box) box.value = msg.note;   // do not overwrite what is being typed
+              } else if (document.activeElement && document.activeElement.classList.contains('cue-note-area')) {
+                pendingCueRender = true;   // redraw once the typing stops, so the box keeps focus
+              } else {
+                renderReviewTimelineAndCues();
+              }
+            }
+            notifyParentMarkersUpdate();
           }
         }
         else if (msg.type === 'SELECT_MARKER') {
@@ -2186,6 +2207,15 @@
     // The room server's address. Inside the app this page is served by Vite, so it is addressed in full.
     function roomServerBase() {
       return window.location.port === '3000' ? '' : `${window.location.protocol}//${window.location.hostname}:3000`;
+    }
+
+    // Host: markers restored from the project exist only on this page, so give them to the room (once each).
+    function shareSavedMarkers() {
+      if (isGuest || !ws || ws.readyState !== WebSocket.OPEN) return;
+      const fresh = markers.filter(m => m.authorId === undefined && !roomMarkerIds.has(m.id));
+      if (!fresh.length) return;
+      fresh.forEach(m => roomMarkerIds.add(m.id));
+      ws.send(JSON.stringify({ type: 'RESTORE_MARKERS', markers: fresh.map(({ thumbnail, ...rest }) => rest) }));
     }
 
     // Host: tell the room which film to stream, once.
@@ -2630,6 +2660,11 @@
           // A guest edits their own marker in the cue; everyone else's is read-only for them.
           const noteM = isGuest ? (cluster.markers.find(m => isMine(m)) || firstM) : firstM;
           const noteLocked = !isMine(noteM);
+          // Everyone else's notes in this cue, read-only, so a note written on one machine shows on all of them.
+          const otherNotes = cluster.markers
+            .filter(m => m !== noteM && String(m.note || '').trim() && !/^Flagged at /.test(m.note))
+            .map(m => `<div class="cue-other-note text-[11px] text-slate-400 pl-4 flex gap-1.5 leading-snug"><span>${escapeHtml(m.authorAvatar || '🎬')}</span><span><b class="text-slate-300">${escapeHtml(m.authorName || 'Host')}:</b> ${escapeHtml(m.note)}</span></div>`)
+            .join('');
           const resolveColorName = (firstM.resolveColor || '').replace('ResolveColor', '') || COLOR_PALETTE[firstM.key]?.name || 'Red';
           const authorsLabel = cluster.markers.map(m => m.authorName || 'Host').join(' + ');
 
@@ -2651,13 +2686,15 @@
               </small>
             </div>
 
-            <textarea onchange="updateCueNote(${noteM.id}, this.value)" 
-                      oninput="updateCueNote(${noteM.id}, this.value)"
+            <textarea data-marker-id="${escapeHtml(String(noteM.id))}"
+                      onchange="updateCueNote(${escapeHtml(JSON.stringify(noteM.id))}, this.value)" 
+                      oninput="updateCueNote(${escapeHtml(JSON.stringify(noteM.id))}, this.value)"
                       ${noteLocked ? 'readonly' : ''}
                       onclick="event.stopPropagation()"
                       placeholder="No discussion note yet"
                       rows="2"
                       class="cue-note-area w-full bg-transparent text-xs text-slate-300 resize-none focus:outline-none focus:bg-black/40 rounded px-1.5 py-1 border border-transparent focus:border-slate-700 leading-relaxed font-sans placeholder:italic placeholder:text-slate-600 pl-4">${escapeHtml(noteM.note)}</textarea>
+            ${otherNotes}
 
             <div class="cue-meta flex items-center justify-between text-[10px] font-mono text-slate-400 border-t border-slate-900/80 pt-1.5 mt-0.5 pl-4">
               <span class="author flex items-center gap-1.5 truncate max-w-[170px]" title="${escapeHtml(authorsLabel)}">
@@ -3805,6 +3842,7 @@
             resolved: m.resolved
           }));
           window.setMarkers(converted);
+          shareSavedMarkers();
         }
       } else if (data.type === 'BG_SCAN_UPDATE') {
         const badge = document.getElementById('duetScanBadge');
