@@ -1293,6 +1293,7 @@
     let isFollowing = true;
     let hostState = { time: 0, playing: false };
     let hostWorkspace = null;
+    let roomFilm = null;               // host: the film uploaded to the room server, announced once the room is joined
     let lastWorkspaceMessage = null;   // host only: the app's latest workspace, resent on reconnect
     let strokes = [];                  // everyone's pencil strokes, so one person's can be erased
     let lastRoomPulse = 0;
@@ -1629,7 +1630,8 @@
         currentTime: 0,
         isPlaying: false
       });
-      if (ws && ws.readyState === WebSocket.OPEN) {
+      // A blob: address exists only on this device, so it is not shared; guests get the film from the Wi-Fi transfer.
+      if (ws && ws.readyState === WebSocket.OPEN && !String(video.src).startsWith('blob:')) {
         ws.send(JSON.stringify({
           type: 'SHARE_VIDEO',
           videoUrl: video.src,
@@ -1698,6 +1700,7 @@
           
           // The room server's address, in full, so it also resolves when this page is the one served by Vite.
           video.src = `${roomBase}${resp.url}`;
+          roomFilm = { url: resp.url, name: file.name };
           video.load();
           loadAudioWaveform(file || video.src);
           clearMarkersState(true);
@@ -2002,6 +2005,10 @@
           document.getElementById('connectedCountBadge').textContent = msg.connectedCount;
           myId = msg.yourInfo ? msg.yourInfo.id : null;
           setGuest(!msg.yourInfo || msg.yourInfo.role !== 'host');
+          // The film was uploaded before this room was joined, so announce it now (once: a reconnect must not wipe the markers).
+          if (!isGuest && roomFilm && msg.state.videoUrl !== roomFilm.url) {
+            ws.send(JSON.stringify({ type: 'SHARE_VIDEO', videoUrl: roomFilm.url, videoName: roomFilm.name }));
+          }
           if (isGuest) {
             showGuestHeader();
             activeWaxColor = personalPenColor();
