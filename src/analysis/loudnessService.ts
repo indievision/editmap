@@ -1,5 +1,6 @@
 import type { LoudnessAnalysis } from "../models/project";
 import { fetchLocalModel } from "./localModel";
+import { fetchJobStatus } from "./jobPolling";
 
 export type LoudnessJob = {
   status: string;
@@ -60,16 +61,11 @@ export async function scanLoudnessAudio(
 
     while (jobId) {
       controller.signal.throwIfAborted();
-      const response = await fetchLocalModel(
+      const job = await fetchJobStatus<LoudnessJob>(
         `/api/loudness-jobs/${encodeURIComponent(jobId)}`,
-        { signal: controller.signal },
+        "Loudness",
+        controller.signal,
       );
-
-      if (!response.ok) {
-        throw new Error(`Loudness status failed (HTTP ${response.status}).`);
-      }
-
-      const job = (await response.json()) as LoudnessJob;
       onProgress(job);
 
       if (job.status === "complete" && job.result) {

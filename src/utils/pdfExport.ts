@@ -1,5 +1,3 @@
-import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
 import type { ReportExportConfig } from "../components/ReportExportModal";
 
 export interface PageDimensions {
@@ -55,6 +53,8 @@ export async function generateReportPdf(
   const bgColor = config.theme === "dark" ? "#0f172a" : "#ffffff";
 
   // Capture the visible report element at high resolution (scale 2 for crisp vector text/charts)
+  // Heavy export libraries load only when a report is actually exported.
+  const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([import("html2canvas"), import("jspdf")]);
   const canvas = await html2canvas(element, {
     scale: 2,
     useCORS: true,

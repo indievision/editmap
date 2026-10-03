@@ -1,4 +1,5 @@
 import { memo, useMemo, useState, useRef, useCallback } from "react";
+import { usePlayhead } from "../playback/playhead";
 import type { Project } from "../models/project";
 import {
   cutTimes,
@@ -15,15 +16,17 @@ import PolyphonicScore from "./PolyphonicScore";
 
 const AudiovisualRhythm = memo(function AudiovisualRhythm({
   project,
-  time,
+  active = true,
   waveform,
   onSeek,
 }: {
   project: Project;
-  time: number;
+  /** False while hidden, so it stops following the playback clock. */
+  active?: boolean;
   waveform: number[];
   onSeek: (time: number) => void;
 }) {
+  const time = usePlayhead(active);
   const [viewMode, setViewMode] = useState<"correlation" | "polyphony">("correlation");
   const [window, setWindow] = useState<number>(15);
   const [hover, setHover] = useState<number>();

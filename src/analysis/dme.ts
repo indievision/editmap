@@ -1,5 +1,6 @@
 import type { DmeWaveforms } from "../models/project";
 import { fetchLocalModel } from "./localModel";
+import { fetchJobStatus } from "./jobPolling";
 
 export async function checkDmeService(): Promise<{
   available: boolean;
@@ -49,9 +50,7 @@ export async function separateDmeAudio(
     jobId = started.jobId;
     while (true) {
       controller.signal.throwIfAborted();
-      const response = await fetchLocalModel(`/api/dme-jobs/${encodeURIComponent(jobId!)}`, { method: "GET", signal: controller.signal });
-      if (!response.ok) throw new Error(`DME status failed (HTTP ${response.status}).`);
-      const job = await response.json();
+      const job = await fetchJobStatus<{ status: string; progress?: number; error?: string; result?: { dialogue: number[]; music: number[]; effects: number[]; duration: number; binCount: number } }>(`/api/dme-jobs/${encodeURIComponent(jobId!)}`, "DME", controller.signal);
       if (job.status === "failed" || job.status === "cancelled") throw new Error(job.error ?? "DME separation cancelled.");
       if (job.status === "complete") {
         const data = job.result;

@@ -1,4 +1,5 @@
 import { memo, useState, useMemo, useEffect, useCallback } from "react";
+import { usePlayhead } from "../playback/playhead";
 import {
   soundKinds,
   type Project,
@@ -22,7 +23,6 @@ export type SoundSubTab = "overview" | "spans" | "loudness" | "speech" | "all";
 export interface SoundDrawerProps {
   project: Project;
   range?: TimeRange;
-  currentTime: number;
   selectedShot?: Shot;
   onRangeChange: (range?: TimeRange) => void;
   onPlayRange: (range: TimeRange, loop: boolean) => void;
@@ -38,6 +38,8 @@ export interface SoundDrawerProps {
   onScanSpeech: () => void;
   onCancelSpeech: () => void;
   onRetrySpeech: () => void;
+  /** False while the component is hidden, so it stops following the playback clock. */
+  active?: boolean;
   onSeek: (time: number) => void;
   showSpeechOverlay: boolean;
   onToggleSpeechOverlay: () => void;
@@ -47,7 +49,6 @@ export interface SoundDrawerProps {
 export const SoundDrawer = memo(function SoundDrawer({
   project,
   range,
-  currentTime,
   selectedShot,
   onRangeChange,
   onPlayRange,
@@ -64,10 +65,12 @@ export const SoundDrawer = memo(function SoundDrawer({
   onCancelSpeech,
   onRetrySpeech,
   onSeek,
+  active = true,
   showSpeechOverlay,
   onToggleSpeechOverlay,
   onClose,
 }: SoundDrawerProps) {
+  const currentTime = usePlayhead(active);
   const [subTab, setSubTab] = useState<SoundSubTab>("overview");
   const [isSelectionOpen, setIsSelectionOpen] = useState(false);
 

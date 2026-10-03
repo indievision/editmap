@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { usePlayhead } from "../playback/playhead";
 import type { Project, Shot, SpeechAnalysis, LoudnessAnalysis, SequenceMarker, CutAnnotation, EyeTraceCutReading } from "../models/project";
 import { classifyCut, pauseRegions } from "../analysis/speech";
 import { lufsToNormalized } from "../analysis/loudness";
@@ -168,7 +169,6 @@ export function generateLoudnessCurvePath(
 export default memo(function EditingMap({
   project,
   thumbnails,
-  time,
   selected,
   active,
   onSeek,
@@ -228,7 +228,6 @@ export default memo(function EditingMap({
 }: {
   project: Project;
   thumbnails: Record<string, string>;
-  time: number;
   selected?: string;
   active?: string;
   onSeek: (t: number) => void;
@@ -287,6 +286,7 @@ export default memo(function EditingMap({
   onSelectTab?: (tab: StudioToolTab) => void;
   onToggleDrawer?: () => void;
 }) {
+  const time = usePlayhead();
   const isStudio = workspaceMode === "studio";
   const viewport = useRef<HTMLDivElement>(null);
   const trackHeaders = useRef<HTMLDivElement>(null);

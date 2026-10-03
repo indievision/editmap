@@ -1,4 +1,5 @@
 import { memo, useMemo, useState, useEffect, useCallback, useRef } from "react";
+import { usePlayhead } from "../playback/playhead";
 import type { Project, Shot, ComparisonObservation, SequenceMarker } from "../models/project";
 import {
   type MeasureId,
@@ -15,7 +16,8 @@ import ComparisonChart from "./charts/ComparisonChart";
 
 export interface ComparisonViewProps {
   project: Project;
-  time: number;
+  /** False while hidden, so it stops following the playback clock. */
+  active?: boolean;
   initialMeasure?: MeasureId;
   onSeek: (time: number) => void;
   onSelectShot?: (shot: Shot) => void;
@@ -54,7 +56,7 @@ function savePrefs(prefs: ComparisonPrefs) {
 
 export const ComparisonView = memo(function ComparisonView({
   project,
-  time,
+  active = true,
   initialMeasure,
   onSeek,
   range,
@@ -63,6 +65,7 @@ export const ComparisonView = memo(function ComparisonView({
   isLooping = false,
   onToggleLoop,
 }: ComparisonViewProps) {
+  const time = usePlayhead(active);
   // 1. Measures selection (1 to 3 measures)
   const [selectedMeasures, setSelectedMeasures] = useState<MeasureId[]>(() => {
     const saved = loadSavedPrefs();

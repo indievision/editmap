@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useMemo } from "react";
+import { usePlayhead } from "../playback/playhead";
 import type { Project } from "../models/project";
 
 export interface DuetMarker {
@@ -22,7 +23,6 @@ export interface DuetConsoleProps {
   onSelectProject: (p: Project) => void;
   onSelectProjectId?: (id: string, name?: string) => void;
   onNewProjectFromVideo: (file: File | string, name: string) => void;
-  currentTime?: number;
   onTimeSync?: (time: number) => void;
   onEnterScreeningRoom?: (customUrl?: string, customFile?: File) => void;
   bgScanStatus?: any;
@@ -50,12 +50,12 @@ export default function DuetConsole({
   onSelectProject,
   onSelectProjectId,
   onNewProjectFromVideo,
-  currentTime,
   onTimeSync,
   onEnterScreeningRoom,
   bgScanStatus,
   onMarkersUpdate,
 }: DuetConsoleProps) {
+  const currentTime = usePlayhead(workspaceMode !== "studio");
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const lastReportedTimeRef = useRef<number>(-1);
   const isIframeReadyRef = useRef<boolean>(false);

@@ -1,13 +1,15 @@
 import { useState, useMemo, useRef, useCallback } from "react";
+import { usePlayhead } from "../playback/playhead";
 import type { Project, Shot, HarmonyType } from "../models/project";
 import { formatTimecode } from "../utils/timecode";
 export interface ColorDrawerProps {
   project: Project;
   shot?: Shot;
-  time?: number;
   thumbnails?: Record<string, string>;
   selected?: string;
   onSelect: (shotId: string) => void;
+  /** False while the component is hidden, so it stops following the playback clock. */
+  active?: boolean;
   onSeek: (seconds: number) => void;
   onClose: () => void;
   onOpenCompare?: (measure: "luminance") => void;
@@ -18,14 +20,15 @@ export type ColorDrawerView = "script" | "lighting";
 export default function ColorDrawer({
   project,
   shot,
-  time = 0,
   thumbnails = {},
   selected,
   onSelect,
   onSeek,
+  active = true,
   onClose,
   onOpenCompare,
 }: ColorDrawerProps) {
+  const time = usePlayhead(active);
   const [activeView, setActiveView] = useState<ColorDrawerView>("script");
   const [hoveredShot, setHoveredShot] = useState<Shot | null>(null);
   const [filterExpanded, setFilterExpanded] = useState(false);

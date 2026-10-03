@@ -14,9 +14,11 @@ import {
   type Shot,
 } from "../models/project";
 import { parseEDL } from "../parsers/edl";
+import { playhead, setPlayhead, usePlayheadSelector } from "../playback/playhead";
+import { PlayheadSeekSlider, PlayheadTimecode } from "../playback/PlayheadReadouts";
 import { actualRate, formatTimecode, rates } from "../utils/timecode";
 import { activeShot, clampSeek } from "../analysis/playback";
-import { getProject, listProjects, saveProject } from "../storage/projects";
+import { getProject, listProjects, requestPersistentStorage, saveProject, storageUsage, type StorageError } from "../storage/projects";
 import { MAX_BACKUP_BYTES, makeBackup, parseBackup } from "../storage/backup";
 import EditingMap, { DEFAULT_MAP_LAYERS, type MapLayerState } from "../timeline/EditingMap";
 import FullscreenMapVisualization from "../timeline/FullscreenMapVisualization";
@@ -165,7 +167,7 @@ export interface BgScanStatus {
 export default function App() {
   const [project, setProject] = useState<Project>(() => newProject()),
     [url, setUrl] = useState(""),
-    [time, setTime] = useState(0),
+    setTime = setPlayhead,
     [playing, setPlaying] = useState(false),
     [selected, setSelected] = useState<string>(),
     [message, setMessage] = useState(""),
@@ -246,6 +248,16 @@ export default function App() {
   const dmeAbortRef = useRef<AbortController | null>(null);
   const speechAbortRef = useRef<AbortController | null>(null);
   const loudnessAbortRef = useRef<AbortController | null>(null);
+  // Ask the browser to keep project data through storage pressure, and warn early when nearly full.
+  useEffect(() => {
+    void (async () => {
+      await requestPersistentStorage();
+      const usage = await storageUsage();
+      if (usage && usage.usage / usage.quota > 0.85) {
+        setMessage(`Browser storage is ${Math.round((usage.usage / usage.quota) * 100)}% full. Export a backup and clear old projects soon.`);
+      }
+    })();
+  }, []);
   useEffect(() => () => { dmeAbortRef.current?.abort(); speechAbortRef.current?.abort(); loudnessAbortRef.current?.abort(); }, []);
   const [isDmeSeparating, setIsDmeSeparating] = useState(false);
   const [dmeSeparationStatus, setDmeSeparationStatus] = useState("");
@@ -361,7 +373,12 @@ export default function App() {
   const undoStack = useRef<Project[]>([]);
   const redoStack = useRef<Project[]>([]);
   const [historyState, setHistoryState] = useState({ undo: 0, redo: 0 });
-  const current = project ? activeShot(project.shots, time) : undefined,
+  // Only the active shot's id is derived from the clock, so App re-renders when
+  // playback crosses a cut, not on every frame.
+  const currentId = usePlayheadSelector((t) => project ? activeShot(project.shots, t)?.id : undefined);
+  // The analytical drawer is on screen only in Studio with the panel open; hidden drawers stop following the clock.
+  const deckVisible = workspaceMode === "studio" && (mapExpanded ? studioDrawerOpen : !leftCollapsed);
+  const current = project && currentId ? project.shots.find((s) => s.id === currentId) : undefined,
     shot = project?.shots.find((s) => s.id === selected);
   const [reviewSearchQuery, setReviewSearchQuery] = useState("");
   const reviewMatches = useMemo(
@@ -404,6 +421,24 @@ export default function App() {
     },
     [url],
   );
+  // Blob URLs applied straight to the <video> (outside `url` state) are cached
+  // per file, so re-renders never mint new ones, and are released on unmount.
+  const sideLoadedUrls = useRef(new Map<File, string>());
+  const sideLoadedUrl = (file: File) => {
+    let existing = sideLoadedUrls.current.get(file);
+    if (!existing) {
+      existing = URL.createObjectURL(file);
+      sideLoadedUrls.current.set(file, existing);
+    }
+    return existing;
+  };
+  useEffect(() => {
+    const registry = sideLoadedUrls.current;
+    return () => {
+      for (const created of registry.values()) URL.revokeObjectURL(created);
+      registry.clear();
+    };
+  }, []);
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       if (dirty) e.preventDefault();
@@ -422,10 +457,16 @@ export default function App() {
         setDirty(false);
         setSaveState("Saved");
       }
-    }, () => {
+    }, async (failure: StorageError) => {
       if (projectRef.current?.id === snapshot.id) {
         setSaveState("Failed");
-        setError("Save failed. Browser storage may be full or unavailable.");
+        if (failure?.kind === "quota") {
+          const usage = await storageUsage();
+          const used = usage ? ` (${Math.round(usage.usage / 1048576)} MB of ${Math.round(usage.quota / 1048576)} MB used)` : "";
+          setError(`Save failed: browser storage is full${used}. Export a backup and delete projects you no longer need.`);
+        } else {
+          setError("Save failed. Browser storage may be unavailable (private window or blocked site data).");
+        }
       }
       throw new Error("Save failed.");
     });
@@ -690,7 +731,7 @@ export default function App() {
 
       if (workspaceMode === "studio" && (e.key === "i" || e.key === "I")) {
         e.preventDefault();
-        const frameSec = quantizeToFrame(time, project?.frameRate || 24);
+        const frameSec = quantizeToFrame(playhead.get(), project?.frameRate || 24);
         setSelectedRange((prev) => ({
           ...prev,
           start: frameSec,
@@ -704,7 +745,7 @@ export default function App() {
       }
       if (workspaceMode === "studio" && (e.key === "o" || e.key === "O")) {
         e.preventDefault();
-        const frameSec = quantizeToFrame(time, project?.frameRate || 24);
+        const frameSec = quantizeToFrame(playhead.get(), project?.frameRate || 24);
         setSelectedRange((prev) => ({
           ...prev,
           end: frameSec,
@@ -719,7 +760,7 @@ export default function App() {
 
       if (e.key === "c" || e.key === "C") {
         e.preventDefault();
-        handleSplitShot(time);
+        handleSplitShot(playhead.get());
         return;
       }
       if (e.key === "s" || e.key === "S") {
@@ -877,7 +918,7 @@ export default function App() {
   const restoreLivePreview = () => {
     const v = video.current;
     if (!v || !url) return;
-    const restoreTime = clampSeek(time, v.duration || project?.duration || 0);
+    const restoreTime = clampSeek(playhead.get(), v.duration || project?.duration || 0);
     setAnalyzedFrame(null);
     // Sampling uses a separate decoder. Reload the visible one once the pass
     // ends so a rejected seek/play request cannot leave the monitor black.
@@ -1276,7 +1317,12 @@ export default function App() {
   const importEDL = () => {
     if (!project || !edl) return;
     try {
-      const result = parseEDL(edl.text, fps, origin || undefined);
+      const { skipped, ...result } = parseEDL(edl.text, fps, origin || undefined, { lenient: true });
+      if (skipped.length) {
+        const shown = skipped.slice(0, 5).map((e) => `line ${e.line}: ${e.reason}`).join("\n");
+        const more = skipped.length > 5 ? `\n…and ${skipped.length - 5} more` : "";
+        if (!confirm(`${skipped.length} EDL event${skipped.length === 1 ? "" : "s"} could not be read and will be left out:\n${shown}${more}\n\nImport the remaining ${result.shots.length} shots?`)) return;
+      }
       const replacing = project.shots.length > 0;
       if (replacing && !confirm(`Replace the current ${project.shots.length}-shot timeline with ${result.shots.length} shots? This is undoable. Only annotations on exact source/timing matches are retained.`)) return;
       detectAbortRef.current?.abort();
@@ -1532,6 +1578,8 @@ export default function App() {
       // -------------------------------------------------------------
       // STAGE 2: FRAMING & SHOT SIZES
       // -------------------------------------------------------------
+      let framingFailed = 0;
+      let firstFramingFailure = "";
       if (options.framing && !abort.signal.aborted) {
         updateProgress("framing", 0, `Analyzing framing across ${workingShots.length} shots...`, {
           framingDone: 0,
@@ -1567,6 +1615,8 @@ export default function App() {
           } catch (e) {
             if (abort.signal.aborted) break;
             const failure = { framing: { message: e instanceof Error ? e.message : "Framing failed", createdAt: new Date().toISOString() } };
+            framingFailed++;
+            firstFramingFailure ||= failure.framing.message;
             updatedShots[i] = { ...currentShot, analysisFailures: failure };
             applyShotPatch(owner, currentShot.id, { analysisFailures: failure });
           }
@@ -1851,7 +1901,13 @@ export default function App() {
       setEdlRevision((rev) => rev + 1);
       setDirty(true);
       if (options.cast) setDeckTab("cast");
-      setMessage("Multi-scan analysis sequence completed.");
+      if (framingFailed > 0) {
+        const detail = `Framing failed for ${framingFailed} of ${workingShots.length} shots (${firstFramingFailure}). Those shots stay untagged and can be retried.`;
+        if (framingFailed === workingShots.length) setError(`Analysis finished without framing results. ${detail}`);
+        else setMessage(`Analysis finished with problems. ${detail}`);
+      } else {
+        setMessage("Multi-scan analysis sequence completed.");
+      }
 
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
@@ -2036,7 +2092,7 @@ export default function App() {
       const iframe = document.querySelector(".duet-console-iframe") as HTMLIFrameElement | null;
       const win = iframe?.contentWindow as any;
       if (win) {
-        const duetTime = typeof win.video?.currentTime === "number" ? win.video.currentTime : time;
+        const duetTime = typeof win.video?.currentTime === "number" ? win.video.currentTime : playhead.get();
         if (win.selectedFile) {
           const selectedFile = win.selectedFile;
           pendingFile.current = selectedFile;
@@ -2104,7 +2160,7 @@ export default function App() {
     } catch (e) {
       console.warn("Could not sync video/markers from Duet console:", e);
     }
-  }, [url, time, syncDuetMarkersToProject]);
+  }, [url, syncDuetMarkersToProject]);
   const applyShotPatch = (projectId: string, shotId: string, patch: Partial<Shot>, human = false) => {
     if (human) recordHistory(project);
     revision.current++;
@@ -2274,10 +2330,10 @@ export default function App() {
             setTimeout(() => {
               const iframe = document.querySelector(".duet-console-iframe") as HTMLIFrameElement | null;
               const win = iframe?.contentWindow as any;
-              const curTime = typeof win?.video?.currentTime === "number" ? win.video.currentTime : time;
+              const curTime = typeof win?.video?.currentTime === "number" ? win.video.currentTime : playhead.get();
               if (video.current) {
                 if (win?.selectedFile && (!video.current.src || !video.current.src.startsWith("blob:"))) {
-                  video.current.src = URL.createObjectURL(win.selectedFile);
+                  video.current.src = sideLoadedUrl(win.selectedFile);
                 }
                 video.current.currentTime = curTime;
               }
@@ -2439,7 +2495,6 @@ export default function App() {
           <DuetConsole
             project={project}
             videoUrl={url}
-            currentTime={time}
             workspaceMode={workspaceMode}
             onModeChange={(m) => {
               if (m === "studio") {
@@ -2448,10 +2503,10 @@ export default function App() {
                 setTimeout(() => {
                   const iframe = document.querySelector(".duet-console-iframe") as HTMLIFrameElement | null;
                   const win = iframe?.contentWindow as any;
-                  const curTime = typeof win?.video?.currentTime === "number" ? win.video.currentTime : time;
+                  const curTime = typeof win?.video?.currentTime === "number" ? win.video.currentTime : playhead.get();
                   if (video.current) {
                     if (win?.selectedFile && (!video.current.src || !video.current.src.startsWith("blob:"))) {
-                      video.current.src = URL.createObjectURL(win.selectedFile);
+                      video.current.src = sideLoadedUrl(win.selectedFile);
                     }
                     video.current.currentTime = curTime;
                   }
@@ -2817,8 +2872,8 @@ export default function App() {
               <div className="deck-pane">
                   <div hidden={deckTab !== "rhythm"}>
                     <EditingRhythm
+                      active={deckVisible && deckTab === "rhythm"}
                       project={project}
-                      time={time}
                       waveform={waveform}
                       selected={selected}
                       url={url}
@@ -2839,8 +2894,8 @@ export default function App() {
 
                   <div hidden={deckTab !== "framing"}>
                     <FramingDrawer
+                      active={deckVisible && deckTab === "framing"}
                       project={project}
-                      time={time}
                       selected={selected}
                       onSelect={selectShot}
                       onSeek={seek}
@@ -2851,9 +2906,9 @@ export default function App() {
 
                   <div hidden={deckTab !== "sequence"}>
                     <SequenceReading
+                      active={deckVisible && deckTab === "sequence"}
                       project={project}
                       range={selectedRange}
-                      currentTime={time}
                       onRangeChange={setSelectedRange}
                       onSeek={seek}
                       onUpdate={handleUpdateSequences}
@@ -2867,9 +2922,9 @@ export default function App() {
 
                   <div hidden={deckTab !== "sound"}>
                     <SoundDrawer
+                      active={deckVisible && deckTab === "sound"}
                       project={project}
                       range={completeSelectedRange}
-                      currentTime={time}
                       selectedShot={current}
                       onRangeChange={setSelectedRange}
                       onPlayRange={playRange}
@@ -2957,9 +3012,9 @@ export default function App() {
                       />
                     </div>
                     <CastDrawer
+                      active={deckVisible && deckTab === "cast"}
                       project={project}
                       shot={shot ?? current}
-                      time={time}
                       thumbnails={thumbnails}
                       range={completeSelectedRange}
                       selectedMember={selectedCharacter}
@@ -2984,9 +3039,9 @@ export default function App() {
                   <div hidden={deckTab !== "color"}>
                     {project && (
                       <ColorDrawer
+                        active={deckVisible && deckTab === "color"}
                         project={project}
                         shot={shot ?? current}
-                        time={time}
                         thumbnails={thumbnails}
                         selected={selected}
                         onSelect={(id) => {
@@ -3057,7 +3112,7 @@ export default function App() {
                 <video
                   ref={video}
                   id="studioVideoPlayer"
-                  src={url || (pendingFile.current ? URL.createObjectURL(pendingFile.current) : undefined)}
+                  src={url || (pendingFile.current ? sideLoadedUrl(pendingFile.current) : undefined)}
                   muted={workspaceMode !== "studio"}
                   playsInline
                   style={squintMode ? { filter: getSquintFilter(squintLevel) } : undefined}
@@ -3067,7 +3122,7 @@ export default function App() {
                     if (v.src && !url) {
                       setUrl(v.src);
                     }
-                    v.currentTime = Math.min(time, Math.max(0, v.duration - 1 / project.frameRate));
+                    v.currentTime = Math.min(playhead.get(), Math.max(0, v.duration - 1 / project.frameRate));
                     if (!f) {
                       if (!project.videoMetadata && v.duration) {
                         update({
@@ -3169,9 +3224,7 @@ export default function App() {
               </div>
               {workspaceMode === "studio" ? (
                 <div className="transport studio-transport-bar">
-                  <span className="timecode studio-timecode mono">
-                    {formatTimecode(time, project.frameRate, project.dropFrame)}
-                  </span>
+                  <PlayheadTimecode className="timecode studio-timecode mono" frameRate={project.frameRate} dropFrame={project.dropFrame} />
                   <div className="studio-transport-center">
                     <button
                       type="button"
@@ -3258,7 +3311,7 @@ export default function App() {
                     aria-label="Previous frame"
                     onClick={() => {
                       video.current?.pause();
-                      seek(time - 1 / actualRate(project.frameRate));
+                      seek(playhead.get() - 1 / actualRate(project.frameRate));
                     }}
                   >
                     Ⅰ‹
@@ -3277,24 +3330,13 @@ export default function App() {
                     aria-label="Next frame"
                     onClick={() => {
                       video.current?.pause();
-                      seek(time + 1 / actualRate(project.frameRate));
+                      seek(playhead.get() + 1 / actualRate(project.frameRate));
                     }}
                   >
                     ›Ⅰ
                   </button>
-                  <span className="timecode">
-                    {formatTimecode(time, project.frameRate, project.dropFrame)}
-                  </span>
-                  <input
-                    className="seek"
-                    aria-label="Seek film"
-                    type="range"
-                    min="0"
-                    max={project.duration || 1}
-                    step={1 / actualRate(project.frameRate)}
-                    value={time}
-                    onChange={(e) => seek(Number(e.target.value))}
-                  />
+                  <PlayheadTimecode className="timecode" frameRate={project.frameRate} dropFrame={project.dropFrame} />
+                  <PlayheadSeekSlider duration={project.duration} frameRate={project.frameRate} onSeek={seek} />
                   <button
                     aria-label={muted ? "Unmute" : "Mute"}
                     onClick={() => setMuted(!muted)}
@@ -3427,7 +3469,6 @@ export default function App() {
             <EditingMap
               project={project}
               thumbnails={thumbnails}
-              time={time}
               selected={selected}
               active={current?.id}
               onSeek={seek}
@@ -4058,7 +4099,6 @@ export default function App() {
       {isFullscreenGraph && project && (
         <FullscreenMapVisualization
           project={project}
-          time={time}
           playing={playing}
           onTogglePlay={toggle}
           onSeek={seek}

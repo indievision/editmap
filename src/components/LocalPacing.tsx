@@ -1,4 +1,5 @@
 import { memo, useMemo, useState } from "react";
+import { usePlayhead } from "../playback/playhead";
 import type { Project } from "../models/project";
 import {
   cutTimes,
@@ -15,15 +16,17 @@ import PacingChart from "./charts/PacingChart";
 
 const LocalPacing = memo(function LocalPacing({
   project,
-  time,
+  active = true,
   onSeek,
   onOpenCompare,
 }: {
   project: Project;
-  time: number;
+  /** False while hidden, so it stops following the playback clock. */
+  active?: boolean;
   onSeek: (time: number) => void;
   onOpenCompare?: (measure: "cutRate") => void;
 }) {
+  const time = usePlayhead(active);
   const [window, setWindow] = useState(30);
 
   const cuts = useMemo(() => cutTimes(project.shots), [project.shots]);

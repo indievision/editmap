@@ -1,4 +1,5 @@
 import { memo, useMemo, useState, useRef, useCallback } from "react";
+import { usePlayhead } from "../playback/playhead";
 import type { Project, Shot } from "../models/project";
 import { formatTimecode } from "../utils/timecode";
 import {
@@ -11,7 +12,7 @@ import { generateMotionFlowPathAndArea } from "../timeline/FullscreenMapVisualiz
 
 const MotionEnergyArc = memo(function MotionEnergyArc({
   project,
-  time,
+  active = true,
   url,
   selected,
   onSelect,
@@ -20,7 +21,8 @@ const MotionEnergyArc = memo(function MotionEnergyArc({
   onOpenCompare,
 }: {
   project: Project;
-  time: number;
+  /** False while hidden, so it stops following the playback clock. */
+  active?: boolean;
   url?: string;
   selected?: string;
   onSelect: (shot: Shot) => void;
@@ -28,6 +30,7 @@ const MotionEnergyArc = memo(function MotionEnergyArc({
   onUpdateShots?: (updatedShots: Shot[]) => void;
   onOpenCompare?: (measure: "motion") => void;
 }) {
+  const time = usePlayhead(active);
   const [batchScanning, setBatchScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
   const [hover, setHover] = useState<number | undefined>(undefined);

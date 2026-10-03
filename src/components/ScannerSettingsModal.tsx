@@ -53,7 +53,7 @@ export default function ScannerSettingsModal({
 
   const handleUpdate = async () => {
     setUpdating(true);
-    setStatusMessage("Verifying local models and checking for updates…");
+    setStatusMessage("Checking local engine readiness…");
     setErrorMessage(null);
     try {
       const res = await fetchLocalModel("/api/scanners/update", {
@@ -66,7 +66,7 @@ export default function ScannerSettingsModal({
       if (data.engines) {
         setEngines(data.engines);
       }
-      setStatusMessage(data.message || "All local scanner models are verified and up to date.");
+      setStatusMessage(data.message || "Readiness check complete.");
       onUpdateCompleted?.();
     } catch (err: any) {
       setErrorMessage(err.message || "Failed to update scanners. Check local service connection.");
@@ -123,7 +123,7 @@ export default function ScannerSettingsModal({
                 Installed AI Engines
               </div>
               <div style={{ fontSize: 11, color: "var(--text-muted, #888)", marginTop: 2 }}>
-                Check model integrity or download updated scanner weights
+                Re-check that each local engine is ready
               </div>
             </div>
 
@@ -144,12 +144,12 @@ export default function ScannerSettingsModal({
               {updating ? (
                 <>
                   <span className="spinner-dot" />
-                  <span>Updating…</span>
+                  <span>Checking…</span>
                 </>
               ) : (
                 <>
                   <span>⟳</span>
-                  <span>Update Scanners</span>
+                  <span>Check Engines</span>
                 </>
               )}
             </button>

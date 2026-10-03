@@ -12,12 +12,12 @@ type RhythmTabId = (typeof RHYTHM_TABS)[number];
 
 const EditingRhythm = memo(function EditingRhythm({
   project,
-  time,
   waveform,
   selected,
   url,
   onSelect,
   onSeek,
+  active = true,
   onUpdateShots,
   onClose,
   variant = "deck",
@@ -30,11 +30,12 @@ const EditingRhythm = memo(function EditingRhythm({
   onToggleLoopRange,
 }: {
   project: Project;
-  time: number;
   waveform: number[];
   selected?: string;
   url?: string;
   onSelect: (shot: Shot) => void;
+  /** False while the component is hidden, so it stops following the playback clock. */
+  active?: boolean;
   onSeek: (time: number) => void;
   onUpdateShots?: (shots: Shot[]) => void;
   onClose?: () => void;
@@ -257,7 +258,7 @@ const EditingRhythm = memo(function EditingRhythm({
       <div hidden={tab !== "pacing"}>
         <LocalPacing
           project={project}
-          time={time}
+          active={active && tab === "pacing"}
           onSeek={onSeek}
           onOpenCompare={handleOpenCompare}
         />
@@ -265,7 +266,7 @@ const EditingRhythm = memo(function EditingRhythm({
       <div hidden={tab !== "compare"}>
         <ComparisonView
           project={project}
-          time={time}
+          active={active && tab === "compare"}
           initialMeasure={compareMeasure}
           onSeek={onSeek}
           onSelectShot={onSelect}
@@ -279,7 +280,7 @@ const EditingRhythm = memo(function EditingRhythm({
       <div hidden={tab !== "audiovisual"}>
         <AudiovisualRhythm
           project={project}
-          time={time}
+          active={active && tab === "audiovisual"}
           waveform={waveform}
           onSeek={onSeek}
         />
@@ -287,7 +288,7 @@ const EditingRhythm = memo(function EditingRhythm({
       <div hidden={tab !== "motion"}>
         <MotionEnergyArc
           project={project}
-          time={time}
+          active={active && tab === "motion"}
           url={url}
           selected={selected}
           onSelect={onSelect}
