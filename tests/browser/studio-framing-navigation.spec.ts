@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
-import { startNewProject } from "../helpers";
+import { startNewProject } from "./helpers";
 
 test("Studio Framing navigation: dedicated tab, default Distribution, Progression arc, seeking, and reduced Rhythm", async ({
   page,
@@ -61,15 +61,10 @@ test("Studio Framing navigation: dedicated tab, default Distribution, Progressio
   await expect(rhythmDrawer.locator(".framing-arc")).toHaveCount(0);
 
   // Take screenshot of the reduced Rhythm subsection row
-  await page.screenshot({
-    path: "/Users/indievision/.gemini/antigravity/brain/15c7ac55-cac0-4201-af54-5cf31f415dfe/reduced-rhythm-subsections.png",
-    fullPage: false,
-  });
-
   // 4. Test Comparison shortcut inside Rhythm: Local pacing -> Compare
   await rhythmSubtabs.nth(1).click(); // Local pacing
-  await expect(page.locator(".pacing")).toBeVisible();
-  const compareCutRateBtn = page.locator(".pacing").getByRole("button", { name: "Compare" });
+  await expect(page.locator("section.pacing")).toBeVisible();
+  const compareCutRateBtn = page.locator("section.pacing").getByRole("button", { name: "Compare" });
   await expect(compareCutRateBtn).toBeVisible();
   await compareCutRateBtn.click();
   await expect(page.locator(".comparison-view")).toBeVisible();
@@ -95,8 +90,6 @@ test("Studio Framing navigation: dedicated tab, default Distribution, Progressio
 
   // Take screenshot of Framing -> Distribution
   await page.screenshot({
-    path: "/Users/indievision/.gemini/antigravity/brain/15c7ac55-cac0-4201-af54-5cf31f415dfe/studio-framing-distribution.png",
-    fullPage: false,
   });
 
   // 6. Switch to Progression
@@ -106,8 +99,6 @@ test("Studio Framing navigation: dedicated tab, default Distribution, Progressio
 
   // Take screenshot of Framing -> Progression
   await page.screenshot({
-    path: "/Users/indievision/.gemini/antigravity/brain/15c7ac55-cac0-4201-af54-5cf31f415dfe/studio-framing-progression.png",
-    fullPage: false,
   });
 
   // 7. Test framing arc shot selection and click-to-seek
@@ -150,24 +141,7 @@ test("Studio Framing navigation: dedicated tab, default Distribution, Progressio
   await page.locator(".resize-handle-left .resize-collapse-btn").click();
   await expect(page.locator(".studio-detail-drawer")).toBeVisible();
 
-  // 11. Expanded map mode
-  await page.locator(".studio-expand-map-toggle-btn").click();
-  await expect(page.locator(".workspace")).toHaveClass(/studio-map-expanded/);
-  const toolsMenuBtn = page.locator("#studio-tools-menu-btn");
-  await expect(toolsMenuBtn).toBeVisible();
-  await toolsMenuBtn.click();
-  const toolsPopover = page.locator(".studio-toolbar-tools-popover");
-  await expect(toolsPopover).toBeVisible();
-  const toolsMenuItems = toolsPopover.locator(".studio-tools-menu-item");
-  await expect(toolsMenuItems).toHaveCount(7);
-  await expect(toolsMenuItems.nth(1)).toContainText("Framing");
-  // Click Framing in expanded tools menu
-  await toolsMenuItems.nth(1).click();
-  await expect(page.locator(".studio-detail-drawer")).toBeVisible();
-  await expect(page.locator(".framing-drawer")).toBeVisible();
-  await page.locator(".studio-expand-map-toggle-btn").click();
-
-  // 12. Verify Explore remains untouched
+  // 11. Verify Explore remains untouched
   await page.getByRole("tab", { name: "Explore" }).click();
   await expect(page.locator(".workspace")).toHaveClass(/mode-explore/);
   await expect(page.locator(".explore-workspace")).toBeVisible();

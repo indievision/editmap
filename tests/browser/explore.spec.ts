@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
 import fs from "node:fs";
+import { openRecentProjectInStudio } from "./helpers";
 
 test("Explore module: sequence builder, playlist playback, time mapping, Studio location, and saved sequences", async ({
   page,
@@ -64,17 +65,10 @@ test("Explore module: sequence builder, playlist playback, time mapping, Studio 
   await page.reload();
 
   // Open the project
-  await page.locator(".recent-item").filter({ hasText: /cinematic score test/i }).click();
+  await openRecentProjectInStudio(page, /cinematic score test/i);
 
-  // Verify Studio workspace is initial default
-  await expect(page.locator(".workspace")).toHaveClass(/mode-studio/);
   const originalFirstShotText = await page.locator(".shot").first().innerText();
 
-  // Connect fixture video
-  await page
-    .locator("input[type=file]")
-    .first()
-    .setInputFiles(path.resolve("fixtures/test-film.mp4"));
 
   // Verify header has Studio and Explore tabs
   const studioTab = page.getByRole("tab", { name: "Studio" });
@@ -208,12 +202,12 @@ test("Explore module: sequence builder, playlist playback, time mapping, Studio 
   await expect(page.locator(".explore-status-banner")).toContainText('Saved sequence "Explore Saved Order Test"');
 
   // Save project to IndexedDB before reloading
-  await page.locator(".header-action-btn.primary-save").click();
-  await expect(page.locator(".save-indicator")).toContainText("Saved");
+  await page.getByRole("button", { name: /^Save project/ }).click();
+  await expect(page.getByRole("button", { name: "Project saved" })).toBeVisible();
 
   // Reload page to test full IndexedDB persistence
   await page.reload();
-  await page.locator(".recent-item").filter({ hasText: /cinematic score test/i }).click();
+  await openRecentProjectInStudio(page, /cinematic score test/i);
   await exploreTab.click();
 
   // Open Saved Sequences modal

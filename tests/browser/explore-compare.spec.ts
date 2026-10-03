@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
 import fs from "node:fs";
+import { openRecentProjectInStudio } from "./helpers";
 
 test("Compare subpage: navigation, dual-passage selection, independent playback, independent zoom, measurements, and saving", async ({
   page,
@@ -64,16 +65,9 @@ test("Compare subpage: navigation, dual-passage selection, independent playback,
   await page.reload();
 
   // Open the project from Welcome screen
-  await page.locator(".recent-item").filter({ hasText: /cinematic score test/i }).click();
+  await openRecentProjectInStudio(page, /cinematic score test/i);
 
-  // Connect fixture video
-  await page
-    .locator("input[type=file]")
-    .first()
-    .setInputFiles(path.resolve("fixtures/test-film.mp4"));
 
-  // Verify Studio workspace is initial default
-  await expect(page.locator(".workspace")).toHaveClass(/mode-studio/);
 
   // --------------------------------------------------------------------------
   // 1. NAVIGATION: Studio -> Explore -> Assemble -> Compare
