@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
+import { startNewProject } from "../helpers";
 
 test("Studio Framing navigation: dedicated tab, default Distribution, Progression arc, seeking, and reduced Rhythm", async ({
   page,
@@ -9,7 +10,7 @@ test("Studio Framing navigation: dedicated tab, default Distribution, Progressio
 
   // 1. Setup new project with test video and EDL
   await page.goto("/");
-  await page.getByRole("button", { name: "New project" }).first().click();
+  await startNewProject(page);
   await page.getByLabel("Project name").fill("Framing Navigation Spec");
 
   await page

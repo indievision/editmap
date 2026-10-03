@@ -1,11 +1,12 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
+import { startNewProject } from "../helpers";
 
 test("framing summary, arc selection and local share follow current tags", async ({
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "New project" }).first().click();
+  await startNewProject(page);
   await page
     .locator('input[accept*=".edl"]')
     .setInputFiles(path.resolve("fixtures/cuts-24.edl"));

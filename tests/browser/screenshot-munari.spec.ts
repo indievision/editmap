@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
 import fs from "node:fs";
+import { startNewProject } from "./helpers";
 
 const ARTIFACT_DIR = "/Users/indievision/.gemini/antigravity/brain/d1fb208b-f675-4e6a-9a53-962bd40d05e6";
 
@@ -9,7 +10,7 @@ test("Capture Studio Munari Layout Screenshots: Compact & Enlarged Cast", async 
   await page.goto("http://127.0.0.1:5173/");
 
   // Setup project
-  await page.locator('button.header-action-btn[aria-label="New project"]').click();
+  await startNewProject(page);
   await page.getByLabel("Project name").fill("Munari Studio Verification");
 
   await page

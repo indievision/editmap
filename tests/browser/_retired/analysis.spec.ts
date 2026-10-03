@@ -1,10 +1,11 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
+import { startNewProject } from "../helpers";
 test("local analysis fills inspector fields and persists after confirmation", async ({
   page,
 }) => {
   await page.goto("/");
-  await page.locator('button.header-action-btn[aria-label="New project"]').click();
+  await startNewProject(page);
   await page
     .locator("input[type=file]")
     .first()
@@ -55,7 +56,7 @@ test("local analysis fills inspector fields and persists after confirmation", as
 
 test("a delayed selected-shot result preserves concurrent notes and manual tags", async ({ page }) => {
   await page.goto("/");
-  await page.locator('button.header-action-btn[aria-label="New project"]').click();
+  await startNewProject(page);
   await page.locator("input[type=file]").first().setInputFiles(path.resolve("fixtures/test-film.mp4"));
   await page.locator('input[accept*=".edl"]').setInputFiles(path.resolve("fixtures/cuts-24.edl"));
   await page.getByRole("button", { name: "Import", exact: true }).click();

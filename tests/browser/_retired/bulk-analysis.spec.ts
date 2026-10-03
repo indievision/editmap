@@ -1,5 +1,6 @@
 import { test, expect, type Page, type Route } from "@playwright/test";
 import path from "node:path";
+import { startNewProject } from "../helpers";
 
 const endpoint = /.*(\/local-model\/api\/chat|\/api\/analyze-shot).*/;
 const predictions = [
@@ -55,7 +56,7 @@ test("scan follows each sampled frame, then scrubbing restores the live monitor"
     );
     await expect
       .poll(() =>
-        page.locator("video").evaluate((v: HTMLVideoElement) => v.currentTime),
+        page.locator("#studioVideoPlayer").evaluate((v: HTMLVideoElement) => v.currentTime),
       )
       .toBeCloseTo(times[i], 3);
     await respond(pending[i], i);
@@ -64,7 +65,7 @@ test("scan follows each sampled frame, then scrubbing restores the live monitor"
     "Framing scan complete",
   );
   await expect(page.locator(".analysis-preview")).toHaveCount(0);
-  await expect.poll(() => page.locator("video").evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThanOrEqual(2);
+  await expect.poll(() => page.locator("#studioVideoPlayer").evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThanOrEqual(2);
   const playhead = page.getByRole("slider", { name: "Timeline playhead" });
   const head = (await playhead.boundingBox())!;
   const canvas = (await page.locator(".map-canvas").boundingBox())!;
@@ -78,7 +79,7 @@ test("scan follows each sampled frame, then scrubbing restores the live monitor"
   await expect(page.locator(".analysis-preview")).toHaveCount(0);
   await expect
     .poll(() =>
-      page.locator("video").evaluate((v: HTMLVideoElement) => v.currentTime),
+      page.locator("#studioVideoPlayer").evaluate((v: HTMLVideoElement) => v.currentTime),
     )
     .toBeCloseTo(1, 1);
   await expect(
@@ -87,7 +88,7 @@ test("scan follows each sampled frame, then scrubbing restores the live monitor"
   await expect
     .poll(() =>
       page
-        .locator("video")
+        .locator("#studioVideoPlayer")
         .evaluate((v: HTMLVideoElement) => v.paused && !v.seeking),
     )
     .toBe(true);
@@ -96,7 +97,7 @@ test("scan follows each sampled frame, then scrubbing restores the live monitor"
   await playhead.press("ArrowRight");
   await expect
     .poll(() =>
-      page.locator("video").evaluate((v: HTMLVideoElement) => v.currentTime),
+      page.locator("#studioVideoPlayer").evaluate((v: HTMLVideoElement) => v.currentTime),
     )
     .toBeCloseTo(1 / 24, 3);
   await page.screenshot({
@@ -114,7 +115,7 @@ async function importShots(page: Page) {
 
 async function setup(page: Page) {
   await page.goto("/");
-  await page.locator('button.header-action-btn[aria-label="New project"]').click();
+  await startNewProject(page);
   const castTab = page.getByRole("tab", { name: "Cast & AI" });
   if (await castTab.isVisible()) {
     await castTab.click();
@@ -311,7 +312,7 @@ for (const change of ["EDL", "video", "project"] as const) {
     }
     if (change === "project") {
       page.once("dialog", (dialog) => dialog.accept());
-      await page.getByRole("button", { name: "New project", exact: true }).click();
+      await startNewProject(page);
       await importShots(page);
     }
     await expect(

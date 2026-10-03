@@ -1,18 +1,19 @@
 import { test, expect } from '@playwright/test';
 import path from 'node:path';
+import { startNewProject } from "../helpers";
 
 test('expanded Studio preserves the live video, timeline state and tools', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.goto('/');
-  await page.getByRole('button', { name: 'New project', exact: true }).click();
+  await startNewProject(page);
   await page.getByLabel('Project name').fill('Expanded Studio verification');
   await page.locator('input[type=file]').first().setInputFiles(path.resolve('fixtures/test-film.mp4'));
   await page.locator('input[accept*=".edl"]').setInputFiles(path.resolve('fixtures/cuts-24.edl'));
   await page.getByRole('button', { name: 'Import', exact: true }).click();
   await expect(page.locator('.shot')).toHaveCount(3);
   await expect(page.getByRole('tab', { name: 'Map Focus', exact: true })).toHaveCount(0);
-  const video = await page.locator('video').elementHandle();
+  const video = await page.locator("#studioVideoPlayer").elementHandle();
   const canvas = await page.locator('.map-canvas').elementHandle();
   await page.locator('.shot').nth(1).click();
   const selected = await page.locator('.shot.selected').getAttribute('aria-label');
@@ -43,13 +44,13 @@ test('expanded Studio preserves the live video, timeline state and tools', async
     expect(Math.abs(a!.y - b!.y)).toBeLessThan(2);
   }
   await page.screenshot({ path: 'tests/browser/screenshots/studio-expanded-map-desktop.png' });
-  await page.locator('video').evaluate((el: HTMLVideoElement) => { el.currentTime = 0; return el.play(); });
+  await page.locator("#studioVideoPlayer").evaluate((el: HTMLVideoElement) => { el.currentTime = 0; return el.play(); });
   await page.getByRole('button', { name: 'Restore Studio', exact: true }).click();
   await expect(page.locator('.studio-detail-drawer')).toBeVisible();
   expect(await video!.evaluate((el: HTMLVideoElement) => !el.paused)).toBe(true);
   await page.getByRole('button', { name: 'Expand map', exact: true }).click();
   expect(await video!.evaluate((el: HTMLVideoElement) => !el.paused)).toBe(true);
-  await page.locator('video').evaluate((el: HTMLVideoElement) => el.pause());
+  await page.locator("#studioVideoPlayer").evaluate((el: HTMLVideoElement) => el.pause());
   for (const width of [1024, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await expect(page.getByRole('button', { name: 'Restore Studio', exact: true })).toBeVisible();

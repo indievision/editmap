@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
+import { startNewProject } from "./helpers";
 
 test("resizable connected panels and splitters", async ({ page }) => {
   const errors: string[] = [];
@@ -8,7 +9,7 @@ test("resizable connected panels and splitters", async ({ page }) => {
   await page.goto("/");
 
   // 1. Setup new project with fixture video and EDL
-  await page.getByRole("button", { name: "New project" }).first().click();
+  await startNewProject(page);
   await page.getByLabel("Project name").fill("Resizable Panels Test");
 
   await page

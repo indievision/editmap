@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
+import { startNewProject } from "../helpers";
 
 test("Studio timeline toolbar simplification across standard and expanded Studio viewports", async ({
   page,
@@ -10,7 +11,7 @@ test("Studio timeline toolbar simplification across standard and expanded Studio
   // 1. Standard Studio at 1440x900
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
-  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await startNewProject(page);
   await page.getByLabel("Project name").fill("Toolbar Simplification Spec");
   await page.locator("input[type=file]").first().setInputFiles(path.resolve("fixtures/test-film.mp4"));
   await page.locator('input[accept*=".edl"]').setInputFiles(path.resolve("fixtures/cuts-24.edl"));

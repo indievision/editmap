@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
 import fs from "node:fs";
+import { startNewProject } from "../helpers";
 
 test("Studio timeline simplification, interactions, viewports, and mode verification", async ({
   page,
@@ -39,7 +40,7 @@ test("Studio timeline simplification, interactions, viewports, and mode verifica
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
 
-  await page.locator('button.header-action-btn[aria-label="New project"]').click();
+  await startNewProject(page);
   await page.getByLabel("Project name").fill("37-Shot Studio Simplification");
 
   await page
@@ -135,7 +136,7 @@ test("Studio timeline simplification, interactions, viewports, and mode verifica
   const rulerBox = await ruler.boundingBox();
   expect(rulerBox).not.toBeNull();
   await page.mouse.click(rulerBox!.x + rulerBox!.width * 0.4, rulerBox!.y + 10);
-  const timeAfterClick = await page.locator("video").evaluate((v: HTMLVideoElement) => v.currentTime);
+  const timeAfterClick = await page.locator("#studioVideoPlayer").evaluate((v: HTMLVideoElement) => v.currentTime);
   expect(timeAfterClick).toBeGreaterThan(5);
 
   // D. Cut boundary selection and roll dragging

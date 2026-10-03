@@ -1,9 +1,10 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
+import { startNewProject } from "../helpers";
 
 async function projectWithTimeline(page: import("@playwright/test").Page) {
   await page.goto("/");
-  await page.locator('button.header-action-btn[aria-label="New project"]').click();
+  await startNewProject(page);
   await page.locator('input[accept*=".edl"]').setInputFiles(path.resolve("fixtures/cuts-24.edl"));
   await page.getByRole("button", { name: "Import", exact: true }).click();
 }

@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
+import { startNewProject } from "../helpers";
 
 test("Studio Rhythm drawer design, interactions, seeking, tabs, and layout preservation", async ({
   page,
@@ -10,7 +11,7 @@ test("Studio Rhythm drawer design, interactions, seeking, tabs, and layout prese
   await page.goto("/");
 
   // 1. Setup new project with fixture video and EDL
-  await page.locator('button.header-action-btn[aria-label="New project"]').click();
+  await startNewProject(page);
   await page.getByLabel("Project name").fill("Studio Rhythm Drawer Verification");
 
   await page
@@ -61,7 +62,7 @@ test("Studio Rhythm drawer design, interactions, seeking, tabs, and layout prese
   await expect(shotTrack).toBeVisible();
 
   // 4. Verify Drawer subtabs are visible and redundant title is omitted
-  await expect(page.locator(".rhythm-tabs.drawer-subtabs")).toBeVisible();
+  await expect(page.locator(".rhythm-tabs.drawer-subtabs:visible")).toBeVisible();
   await expect(page.locator(".rhythm-drawer-title")).toHaveCount(0);
 
   // 5. Test close via 'X' button

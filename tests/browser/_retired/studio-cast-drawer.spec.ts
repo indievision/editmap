@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
+import { startNewProject } from "../helpers";
 
 test("Studio Cast drawer design, interactions, cards, presence arc, and appearances", async ({
   page,
@@ -10,7 +11,7 @@ test("Studio Cast drawer design, interactions, cards, presence arc, and appearan
   await page.goto("/");
 
   // 1. Setup new project with fixture video and EDL
-  await page.locator('button.header-action-btn[aria-label="New project"]').click();
+  await startNewProject(page);
   await page.getByLabel("Project name").fill("Studio Cast Drawer Verification");
 
   await page

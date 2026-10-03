@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
+import { startNewProject } from "../helpers";
 
 test("Studio Color drawer design, interactions, views, curves, barcode seeking, and squint mode", async ({
   page,
@@ -10,7 +11,7 @@ test("Studio Color drawer design, interactions, views, curves, barcode seeking, 
   await page.goto("/");
 
   // 1. Setup new project with fixture video and EDL
-  await page.locator('button.header-action-btn[aria-label="New project"]').click();
+  await startNewProject(page);
   await page.getByLabel("Project name").fill("Studio Color Drawer Verification");
 
   await page

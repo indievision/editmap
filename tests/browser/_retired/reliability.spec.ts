@@ -1,9 +1,10 @@
 import { test, expect, type Page } from "@playwright/test";
 import path from "node:path";
+import { startNewProject } from "../helpers";
 
 async function setup(page: Page) {
   await page.goto("/");
-  await page.locator('button.header-action-btn[aria-label="New project"]').click();
+  await startNewProject(page);
   await page.locator('input[type=file]').first().setInputFiles(path.resolve("fixtures/test-film.mp4"));
   await page.locator('input[accept*=".edl"]').setInputFiles(path.resolve("fixtures/cuts-24.edl"));
   await page.getByRole("button", { name: "Import", exact: true }).click();
@@ -44,7 +45,7 @@ test("DME cancellation cancels the server job and does not install unfinished wa
 
 test("new-film analysis checkpoints failed framing and reports failure counts", async ({ page }) => {
   await page.goto("/");
-  await page.locator('button.header-action-btn[aria-label="New project"]').click();
+  await startNewProject(page);
   await page.locator('input[type=file]').first().setInputFiles(path.resolve("fixtures/test-film.mp4"));
   await page.route("**/api/analyze-shot", route => route.fulfill({ status: 503, json: { detail: "Test framing offline" } }));
   await page.getByRole("button", { name: "Analyze", exact: true }).click();

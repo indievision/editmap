@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
+import { startNewProject } from "../helpers";
 
 test("Timeline story track: moment drag, passage extend in/out, keyboard delete, and clean playhead aesthetics", async ({
   page,
@@ -10,7 +11,7 @@ test("Timeline story track: moment drag, passage extend in/out, keyboard delete,
   await page.goto("/");
 
   // 1. Setup new project with fixture video and EDL
-  await page.locator("button.header-action-btn[aria-label=\"New project\"]").click();
+  await startNewProject(page);
   await page.getByLabel("Project name").fill("Timeline Interactions Test");
 
   await page

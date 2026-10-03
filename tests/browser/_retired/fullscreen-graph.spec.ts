@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
+import { startNewProject } from "../helpers";
 
 test("wordless fullscreen graph visualization from Studio and expanded Studio", async ({ page }) => {
   const errors: string[] = [];
@@ -8,7 +9,7 @@ test("wordless fullscreen graph visualization from Studio and expanded Studio", 
   await page.goto("/");
 
   // 1. Setup new project with fixture video and EDL
-  await page.locator('button.header-action-btn[aria-label="New project"]').click();
+  await startNewProject(page);
   await page.getByLabel("Project name").fill("Fullscreen Graph Test");
 
   await page

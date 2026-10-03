@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
+import { startNewProject } from "../helpers";
 
 test("Studio timeline matches approved design, category order, typography, and vertical resizing", async ({ page }) => {
   const errors: string[] = [];
@@ -7,7 +8,7 @@ test("Studio timeline matches approved design, category order, typography, and v
 
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/");
-  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await startNewProject(page);
   await page.getByLabel("Project name").fill("Studio Timeline Design Verification");
   await page.locator("input[type=file]").first().setInputFiles(path.resolve("fixtures/test-film.mp4"));
   await page.locator('input[accept*=".edl"]').setInputFiles(path.resolve("fixtures/cuts-24.edl"));

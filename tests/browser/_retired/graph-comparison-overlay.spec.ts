@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
+import { startNewProject } from "../helpers";
 
 test.describe("User-Selectable Graph Overlays & Comparison", () => {
   test("1. Verify Mockup Layout, Measure chips, Scope, Window, Range drag, Loop, Save note, and Zoom", async ({
@@ -11,7 +12,7 @@ test.describe("User-Selectable Graph Overlays & Comparison", () => {
     await page.goto("/");
 
     // Setup new project with fixture video and EDL
-    await page.locator('button.header-action-btn[aria-label="New project"]').click();
+    await startNewProject(page);
     await page.getByLabel("Project name").fill("Graph Comparison Mockup Verification");
 
     await page

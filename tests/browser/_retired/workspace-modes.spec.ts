@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
+import { startNewProject } from "../helpers";
 
 test("three workspace modes: studio, map focus, and review desk", async ({ page }) => {
   const errors: string[] = [];
@@ -8,7 +9,7 @@ test("three workspace modes: studio, map focus, and review desk", async ({ page 
   await page.goto("/");
 
   // 1. Setup new project with fixture video and EDL
-  await page.locator('button.header-action-btn[aria-label="New project"]').click();
+  await startNewProject(page);
   await page.getByLabel("Project name").fill("Workspace Modes Test");
 
   await page
@@ -43,7 +44,7 @@ test("three workspace modes: studio, map focus, and review desk", async ({ page 
   await page.locator('.studio-rail-btn[aria-label="Rhythm"]').click();
   await expect(page.locator(".studio-detail-drawer")).toBeVisible();
   await expect(page.locator(".rhythm-drawer-title")).toHaveCount(0);
-  await expect(page.locator(".rhythm-tabs.drawer-subtabs")).toBeVisible();
+  await expect(page.locator(".rhythm-tabs.drawer-subtabs:visible")).toBeVisible();
   await expect(page.getByRole("tab", { name: "Shot duration" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Local pacing" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Audiovisual" })).toBeVisible();
@@ -143,21 +144,21 @@ test("three workspace modes: studio, map focus, and review desk", async ({ page 
   // 5. VERIFY VIDEO ELEMENT CONTINUITY ACROSS MODE SWITCHING
   // --------------------------------------------------------------------------
   // Start playback
-  await page.locator("video").evaluate((v: HTMLVideoElement) => v.play());
-  await expect.poll(() => page.locator("video").evaluate((v: HTMLVideoElement) => !v.paused)).toBe(true);
+  await page.locator("#studioVideoPlayer").evaluate((v: HTMLVideoElement) => v.play());
+  await expect.poll(() => page.locator("#studioVideoPlayer").evaluate((v: HTMLVideoElement) => !v.paused)).toBe(true);
 
   // Switch to Studio while playing
   await page.getByRole("tab", { name: "Studio" }).click();
   // Video must still be playing without interruption!
-  await expect.poll(() => page.locator("video").evaluate((v: HTMLVideoElement) => !v.paused)).toBe(true);
+  await expect.poll(() => page.locator("#studioVideoPlayer").evaluate((v: HTMLVideoElement) => !v.paused)).toBe(true);
 
   // Switch to Map Focus while playing
   await page.getByRole("tab", { name: "Map Focus" }).click();
   // Video must still be playing without interruption!
-  await expect.poll(() => page.locator("video").evaluate((v: HTMLVideoElement) => !v.paused)).toBe(true);
+  await expect.poll(() => page.locator("#studioVideoPlayer").evaluate((v: HTMLVideoElement) => !v.paused)).toBe(true);
 
   // Pause playback
-  await page.locator("video").evaluate((v: HTMLVideoElement) => v.pause());
+  await page.locator("#studioVideoPlayer").evaluate((v: HTMLVideoElement) => v.pause());
 
   // --------------------------------------------------------------------------
   // 6. REGRESSION: P1-B Analytical deck persists during mode switch
