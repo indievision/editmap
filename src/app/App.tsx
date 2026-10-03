@@ -51,6 +51,9 @@ import ProjectHeader, { type WorkspaceMode } from "../components/ProjectHeader";
 import ShotInspector from "../components/ShotInspector";
 import ScreeningReview from "../components/ScreeningReview";
 import DuetConsole from "../components/DuetConsole";
+import { useRoomWorkspaceRelay } from "../hooks/useRoomWorkspaceRelay";
+import { useRoomDataRelay } from "../hooks/useRoomDataRelay";
+import type { ExploreSubpage } from "../playback/workspaceState";
 import ExploreWorkspace from "../components/explore/ExploreWorkspace";
 import MapShotSummary from "../components/MapShotSummary";
 import ResizeHandle from "../components/ResizeHandle";
@@ -196,6 +199,7 @@ export default function App() {
   const [selectedCharacter, setSelectedCharacter] = useState<string>();
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("screening");
+  const [exploreSubpage, setExploreSubpage] = useState<ExploreSubpage>("assemble");
   const [isScreeningRoomEntered, setIsScreeningRoomEntered] = useState(false);
   const isScreeningSetup = workspaceMode === "screening" && !isScreeningRoomEntered;
   const [filmReplacementPending, setFilmReplacementPending] = useState<{
@@ -378,6 +382,23 @@ export default function App() {
   const currentId = usePlayheadSelector((t) => project ? activeShot(project.shots, t)?.id : undefined);
   // The analytical drawer is on screen only in Studio with the panel open; hidden drawers stop following the clock.
   const deckVisible = workspaceMode === "studio" && (mapExpanded ? studioDrawerOpen : !leftCollapsed);
+  // Guests open a read-only Studio and Explore on the same analysis.
+  useRoomDataRelay(project, thumbnails, colorProfiles);
+  // Guests in the screening room follow what the host is looking at.
+  useRoomWorkspaceRelay(
+    {
+      mode: workspaceMode,
+      selectedShot: selected,
+      selectedCut,
+      selectedSequence: selectedSequenceId,
+      selectedCharacter,
+      deckTab,
+      drawerOpen: mapExpanded ? studioDrawerOpen : !leftCollapsed,
+      reviewFilter,
+      exploreSubpage,
+    },
+    playing,
+  );
   const current = project && currentId ? project.shots.find((s) => s.id === currentId) : undefined,
     shot = project?.shots.find((s) => s.id === selected);
   const [reviewSearchQuery, setReviewSearchQuery] = useState("");
@@ -2611,6 +2632,7 @@ export default function App() {
                 setWorkspaceMode("studio");
               }}
               onRelinkVideo={openVideoPicker}
+              onSubpageChange={setExploreSubpage}
             />
           </div>
           <main

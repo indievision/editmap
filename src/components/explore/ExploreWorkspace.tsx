@@ -15,6 +15,10 @@ interface ExploreWorkspaceProps {
   onUpdateProject: (patch: Partial<Project>) => void;
   onLocateInStudio: (shotId: string, sourceTime: number, passageId?: string) => void;
   onRelinkVideo: () => void;
+  /** Reports the open subpage, so the screening room can show guests the same one. */
+  onSubpageChange?: (subpage: ExploreSubpageType) => void;
+  /** Shows this subpage and keeps following it (a guest following the host). */
+  subpage?: ExploreSubpageType;
 }
 
 export type ExploreSubpageType = "assemble" | "compare";
@@ -29,8 +33,16 @@ export default function ExploreWorkspace({
   onUpdateProject,
   onLocateInStudio,
   onRelinkVideo,
+  onSubpageChange,
+  subpage,
 }: ExploreWorkspaceProps) {
   const [activeSubpage, setActiveSubpage] = useState<ExploreSubpageType>("assemble");
+  useEffect(() => {
+    if (subpage) setActiveSubpage(subpage);
+  }, [subpage]);
+  useEffect(() => {
+    onSubpageChange?.(activeSubpage);
+  }, [activeSubpage, onSubpageChange]);
   const [statusNotice, setStatusNotice] = useState<string>("");
 
   // Modals state
