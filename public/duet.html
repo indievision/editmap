@@ -1298,7 +1298,7 @@
     let isFollowing = true;
     let hostState = { time: 0, playing: false };
     let hostWorkspace = null;
-    const PAGE_BUILD = '2026-10-03-mirror4';   // shown in the diagnostic, to tell a stale cached page from a current one
+    const PAGE_BUILD = '2026-10-03-mirror5';   // shown in the diagnostic, to tell a stale cached page from a current one
     const roomLog = [];                      // the last room messages, for the diagnostic (Shift+D)
     let pendingCueRender = false;
     document.addEventListener('focusout', (e) => {
@@ -1482,12 +1482,16 @@
     const pictureCanvas = document.getElementById('guestPicture');
     const pictureCtx = pictureCanvas ? pictureCanvas.getContext('2d') : null;
     function mirrorActive() { return pictureMirror && isGuest && currentMode === 'review'; }
-    function drawPicture() {
+    let drawnMediaTime = -1;
+    function drawPicture(force) {
       if (!pictureCtx || !mirrorActive() || video.readyState < 2 || !video.videoWidth) return;
       const box = pictureCanvas.getBoundingClientRect();
       const w = Math.round(box.width), h = Math.round(box.height);
       if (!w || !h) return;
-      if (pictureCanvas.width !== w || pictureCanvas.height !== h) { pictureCanvas.width = w; pictureCanvas.height = h; }
+      if (pictureCanvas.width !== w || pictureCanvas.height !== h) { pictureCanvas.width = w; pictureCanvas.height = h; force = true; }
+      // While playing, one copy per presented frame is enough; repeats only cost frames.
+      if (!force && !video.paused && video.currentTime === drawnMediaTime) return;
+      drawnMediaTime = video.currentTime;
       const scale = Math.min(w / video.videoWidth, h / video.videoHeight);
       const dw = video.videoWidth * scale, dh = video.videoHeight * scale;
       pictureCtx.fillStyle = '#000';
@@ -1497,24 +1501,29 @@
     function updatePictureMirror() {
       if (!pictureCanvas) return;
       pictureCanvas.classList.toggle('hidden', !mirrorActive());
-      if (mirrorActive()) drawPicture();
+      if (mirrorActive()) drawPicture(true);
     }
     // Draw when the browser actually presents a new frame (requestVideoFrameCallback), because at the moment of
     // 'seeked' Safari still holds the previous frame; the timed redraws are the fallback where that is missing.
+    // Only while the film is not playing: playback is drawn by the frame callback below.
     function drawPictureSoon() {
-      drawPicture();
-      [60, 200, 500, 1000].forEach(ms => setTimeout(drawPicture, ms));
+      if (!video.paused) return;
+      drawPicture(true);
+      [60, 200, 500, 1000].forEach(ms => setTimeout(() => { if (video.paused) drawPicture(true); }, ms));
     }
-    ['loadeddata', 'loadedmetadata', 'canplay', 'seeked', 'seeking', 'timeupdate', 'pause', 'play', 'playing'].forEach(n => video.addEventListener(n, drawPictureSoon));
-    window.addEventListener('resize', drawPicture);
+    ['loadeddata', 'loadedmetadata', 'canplay', 'seeked', 'seeking', 'pause'].forEach(n => video.addEventListener(n, drawPictureSoon));
+    window.addEventListener('resize', () => drawPicture(true));
     if (typeof video.requestVideoFrameCallback === 'function') {
-      const onFrame = () => { drawPicture(); video.requestVideoFrameCallback(onFrame); };
+      const onFrame = () => { drawPicture(!video.paused ? false : true); video.requestVideoFrameCallback(onFrame); };
       video.requestVideoFrameCallback(onFrame);
     }
-    (function mirrorLoop() {
-      if (mirrorActive() && !video.paused) drawPicture();
-      requestAnimationFrame(mirrorLoop);
-    })();
+    if (typeof video.requestVideoFrameCallback !== 'function') {
+      // No frame callback (older Safari): fall back to one copy per animation frame while playing.
+      (function mirrorLoop() {
+        if (mirrorActive() && !video.paused) drawPicture();
+        requestAnimationFrame(mirrorLoop);
+      })();
+    }
     window.addEventListener('keydown', (e) => {
       if (e.shiftKey && (e.key === 'M' || e.key === 'm') && !/INPUT|TEXTAREA/.test(e.target.tagName)) { pictureMirror = !pictureMirror; updatePictureMirror(); }
     });
