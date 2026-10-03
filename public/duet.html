@@ -1298,7 +1298,7 @@
     let isFollowing = true;
     let hostState = { time: 0, playing: false };
     let hostWorkspace = null;
-    const PAGE_BUILD = '2026-10-03-steady6';   // shown in the diagnostic, to tell a stale cached page from a current one
+    const PAGE_BUILD = '2026-10-03-steady7';   // shown in the diagnostic, to tell a stale cached page from a current one
     const roomLog = [];                      // the last room messages, for the diagnostic (Shift+D)
     let pendingCueRender = false;
     document.addEventListener('focusout', (e) => {
@@ -4033,6 +4033,13 @@
         }
       } else if (data.type === 'WORKSPACE_STATE' && data.state) {
         lastWorkspaceMessage = { type: 'WORKSPACE_STATE', state: data.state };
+        // The app plays the film in Studio and Explore; this page's own player must not keep playing (and
+        // sending its play signals to the room) underneath.
+        if ((data.state.mode === 'studio' || data.state.mode === 'explore') && video && !video.paused) {
+          video.pause();
+          updatePlayButtonUI(false);
+          stopContinuousSync();
+        }
         if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(lastWorkspaceMessage));
       } else if (data.type === 'RESET_FILM') {
         resetFilm();
