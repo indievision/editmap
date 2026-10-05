@@ -35,3 +35,6 @@ __pycache__/
 
 # Personal Claude Code overrides
 .claude/settings.local.json
+
+# Uploaded videos stay on this machine
+uploads/
