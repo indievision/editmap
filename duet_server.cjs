@@ -161,6 +161,14 @@ const server = http.createServer((req, res) => {
     return res.end('Open the join link shown on the host to connect.');
   }
 
+  // Which markers are in use in a room, so the join screen can grey them out.
+  if (reqPath === '/api/room-markers' && req.method === 'GET') {
+    const room = rooms.get(String(parsedUrl.searchParams.get('room') || ''));
+    const taken = takenMarkers(room, null);
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify({ taken, full: room ? room.clientMeta.size >= MAX_PARTICIPANTS : false, max: MAX_PARTICIPANTS }));
+  }
+
   // 0. Analysis data for guests: GET /api/room-data/:part, POST (host machine only)
   const dataMatch = /^\/api\/room-data\/([A-Za-z]+)$/.exec(reqPath);
   if (dataMatch) {
@@ -364,6 +372,21 @@ const wss = new WebSocketServer({
 // Rooms map: roomCode -> { clients: Set, clientMeta: Map, state: { isPlaying, currentTime, markers, activeMarkerId, videoUrl, videoName, mode } }
 const rooms = new Map();
 
+// Every participant has their own marker. These are the picker's markers (public/duet.html); a join that
+// asks for one already in use, or when the room is full, is refused so the page can send the guest back.
+const MAX_PARTICIPANTS = 20;
+const MARKERS = [
+  '🎬', '🎥', '🎞️', '🍿', '✂️', '👁️', '🎭', '🎨', '🎧', '🎙️',
+  '⚡', '🦊', '🦁', '🦉', '🚀', '🎓', '☕', '🔥', '💡', '⭐'
+];
+
+function takenMarkers(room, exceptWs) {
+  const taken = [];
+  if (!room) return taken;
+  for (const [client, meta] of room.clientMeta) if (client !== exceptWs) taken.push(meta.avatar);
+  return taken;
+}
+
 function getOrCreateRoom(roomCode) {
   if (!rooms.has(roomCode)) {
     rooms.set(roomCode, {
@@ -462,6 +485,22 @@ function setPlayhead(room, currentTime, isPlaying) {
   room.state.updatedAt = Date.now();
 }
 
+// Who has a copy of the film. Only the host is told: each guest reports whether it is still copying the shared
+// film to its own device, has it, or is streaming it instead (too large, or the copy failed).
+const FILM_COPY_STATES = new Set(['copying', 'ready', 'streaming']);
+
+function sendFilmCopies(room) {
+  const copies = [];
+  for (const meta of room.clientMeta.values()) {
+    if (meta.role === 'host') continue;
+    copies.push({ id: meta.id, name: meta.name, state: meta.copy ? meta.copy.state : 'waiting', progress: meta.copy ? meta.copy.progress : 0 });
+  }
+  const payload = JSON.stringify({ type: 'FILM_COPIES', film: Boolean(room.state.videoUrl), copies });
+  for (const [client, meta] of room.clientMeta) {
+    if (meta.role === 'host' && client.readyState === WebSocket.OPEN) client.send(payload);
+  }
+}
+
 wss.on('connection', (ws, req) => {
   // The host is the machine running this server. A client cannot claim it: a
   // connection from any other device is a guest whatever role it asks for.
@@ -475,12 +514,31 @@ wss.on('connection', (ws, req) => {
       const { type, roomCode } = data;
 
       if (type === 'JOIN_ROOM') {
-        currentRoomCode = roomCode || '4821';
+        const code = roomCode || '4821';
         const role = fromHostMachine && data.role === 'host' ? 'host' : 'student';
+        // A guest who names no marker gets the first free one.
+        const inUse = takenMarkers(rooms.get(code), ws);
+        const avatar = data.avatar || (role === 'host' ? '🎓' : MARKERS.find((m) => !inUse.includes(m)) || '🎬');
+
+        // Guests need a free marker and a free seat; the host (the machine running this server) always gets in.
+        if (role !== 'host') {
+          const existing = rooms.get(code);
+          const taken = takenMarkers(existing, ws);
+          const inRoom = existing && existing.clients.has(ws);
+          const reason = !inRoom && existing && existing.clientMeta.size >= MAX_PARTICIPANTS ? 'room_full'
+            : !MARKERS.includes(avatar) || taken.includes(avatar) ? 'marker_taken' : null;
+          if (reason) {
+            ws.send(JSON.stringify({ type: 'JOIN_REJECTED', reason, taken }));
+            ws.close(1000);
+            return;
+          }
+        }
+
+        currentRoomCode = code;
         clientInfo = {
           id: clientInfo.id,
           name: data.name || (role === 'host' ? 'Teacher' : 'Student'),
-          avatar: data.avatar || (role === 'host' ? '🎓' : '🎬'),
+          avatar,
           role
         };
 
@@ -507,6 +565,8 @@ wss.on('connection', (ws, req) => {
           connectedCount: room.clients.size
         }, false);
 
+        sendFilmCopies(room);
+
         console.log(`[Room ${currentRoomCode}] ${clientInfo.name} (${clientInfo.avatar} - ${clientInfo.role}) joined. Total: ${room.clients.size}`);
       } 
       else if (currentRoomCode) {
@@ -526,12 +586,21 @@ wss.on('connection', (ws, req) => {
           room.state.markers = [];
           room.state.activeMarkerId = null;
           room.state.currentTime = 0;
+          for (const meta of room.clientMeta.values()) delete meta.copy;
           broadcastToRoom(currentRoomCode, ws, {
             type: 'VIDEO_SHARED',
             videoUrl: data.videoUrl,
             videoName: data.videoName,
             sender: clientInfo
           }, false);
+          sendFilmCopies(room);
+        }
+        // A guest reporting its copy of the film (only for the film the room is on now)
+        else if (type === 'FILM_COPY') {
+          if (clientInfo.role === 'host' || !FILM_COPY_STATES.has(data.state) || data.videoUrl !== room.state.videoUrl) return;
+          const progress = Number.isFinite(data.progress) ? Math.min(1, Math.max(0, data.progress)) : 0;
+          clientInfo.copy = { state: data.state, progress };
+          sendFilmCopies(room);
         }
         // Explicit clean slate request
         else if (type === 'CLEAR_MARKERS') {
@@ -711,6 +780,7 @@ wss.on('connection', (ws, req) => {
   ws.on('close', () => {
     if (currentRoomCode && rooms.has(currentRoomCode)) {
       const room = rooms.get(currentRoomCode);
+      if (!room.clients.has(ws)) return;
       room.clients.delete(ws);
       room.clientMeta.delete(ws);
       const participants = Array.from(room.clientMeta.values());
@@ -722,6 +792,7 @@ wss.on('connection', (ws, req) => {
           participants: participants,
           connectedCount: room.clients.size
         }, false);
+        sendFilmCopies(room);
       }
     }
   });

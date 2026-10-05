@@ -2099,7 +2099,7 @@ export default function App() {
           muted: false,
           notes: dm.note || dm.notes || prev?.notes || "",
           resolved: Boolean(dm.solved || dm.resolved || prev?.resolved),
-          colorHex: dm.colorHex || dm.hex || (dm.colorKey === "1" ? "#f43f5e" : dm.colorKey === "2" ? "#fbbf24" : dm.colorKey === "3" ? "#34d399" : dm.colorKey === "4" ? "#38bdf8" : "#e5a93c"),
+          colorHex: dm.colorHex || dm.hex || (dm.colorKey === "1" ? "#FF5A36" : dm.colorKey === "2" ? "#F5D90A" : dm.colorKey === "3" ? "#4DA3FF" : dm.colorKey === "4" ? "#E052D0" : "#e5a93c"),
           colorKey: dm.colorKey || dm.key,
           authorName: dm.authorName || prev?.authorName || "Reviewer",
           authorAvatar: dm.authorAvatar || prev?.authorAvatar || "🎬",

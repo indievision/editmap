@@ -169,22 +169,53 @@
     }
 
     /* Cue item & sheet styling */
-    .cue-item {
+    .cue-card {
       position: relative;
-      border-bottom: 1px solid #27323e;
-      transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+      display: flex; flex-direction: column; gap: 10px;
+      padding: 12px 14px;
+      border: 0.5px solid #232a34;
+      border-radius: 10px;
+      background: #0e141b;
+      cursor: pointer;
+      transition: background-color 0.15s ease, border-color 0.15s ease;
     }
-    .cue-item.selected {
-      border-color: #70523c !important;
-      background: #201b1b !important;
-      box-shadow: 0 0 0 1px #70523c, 0 4px 12px rgba(0,0,0,0.5) !important;
+    .cue-card:hover { background: #121922; border-color: #2f3845; }
+    .cue-card.selected { border: 1px solid #d1a653; background: #15130f; padding: 11.5px 13.5px; }
+    .cue-head { display: flex; align-items: center; gap: 9px; }
+    .cue-pips { display: flex; flex: none; }
+    .cue-pip { width: 12px; height: 12px; border-radius: 50%; display: block; box-sizing: border-box; background: var(--pip); box-shadow: 0 0 0 2px #0e141b; }
+    .cue-pip.note { background: transparent; border: 1.5px solid var(--pip); }
+    .note-field { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 6px 0 12px; border: 0.5px solid #2f3845; background: #10161d; border-radius: 8px; }
+    .note-field:focus-within { border-color: #d1a653; }
+    .note-field input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: #e4e8ee; font-size: 13px; }
+    .note-field input::placeholder { color: #6b7686; }
+    .note-send { width: 28px; height: 28px; flex: none; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: transparent; color: #6b7686; cursor: pointer; transition: background-color .15s, color .15s; }
+    .note-field.has-text .note-send { background: #d1a653; color: #17130a; }
+    .note-send:focus-visible { outline: 2px solid #d4b36b; outline-offset: 1px; }
+    .cue-card.selected .cue-pip { box-shadow: 0 0 0 2px #15130f; }
+    .cue-pip + .cue-pip { margin-left: -4px; }
+    .cue-tc { font: 500 15px ui-monospace, SFMono-Regular, Menlo, monospace; color: #fff; letter-spacing: .02em; }
+    .cue-count { font: 500 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: #c9b3f5; background: #2a2040; border-radius: 9px; padding: 1px 7px; }
+    .cue-num { margin-left: auto; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: #6b7686; }
+    .cue-card.selected .cue-num { color: #d1a653; }
+    .cue-row { display: flex; gap: 9px; align-items: flex-start; }
+    .cue-avatar { width: 22px; height: 22px; border-radius: 50%; background: #1c222b; display: flex; align-items: center; justify-content: center; flex: none; margin-top: 5px; }
+    .cue-body { flex: 1; min-width: 0; }
+    .cue-name { margin: 0 0 3px; font-size: 11px; color: #8a94a3; }
+    .cue-name em { font-style: normal; color: #d1a653; margin-left: 4px; }
+    .cue-field {
+      display: block; width: 100%; resize: none;
+      border: 0.5px solid #2f3845; background: #10161d; border-radius: 7px;
+      padding: 7px 9px; font: 13px/1.45 inherit; color: #e4e8ee;
+      field-sizing: content; min-height: 34px; max-height: 140px;
     }
-    .cue-dot {
-      background-color: var(--c);
-    }
-    .cue-item.selected .cue-dot {
-      box-shadow: 0 0 0 3px #57373d;
-    }
+    .cue-field::placeholder { color: #6b7686; }
+    .cue-field:focus { outline: none; border-color: #d1a653; }
+    .cue-readonly { font-size: 13px; line-height: 1.45; color: #aeb7c4; padding: 0 2px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .cue-trash { width: 24px; height: 24px; margin-top: 3px; flex: none; display: flex; align-items: center; justify-content: center; color: #8a94a3; background: transparent; border: 0; border-radius: 6px; cursor: pointer; }
+    .cue-trash:hover { color: #f0607a; background: #1c222b; }
+    .cue-trash:focus-visible { outline: 2px solid #d4b36b; outline-offset: 1px; }
+    .cue-sep { height: 0.5px; background: #1a212b; }
     .avatar-emoji {
       font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
       font-size: 17px;
@@ -372,6 +403,7 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .dropzone small:empty { display: none; }
     .dropzone small {
       font-size: 12px;
       color: #8c96a4;
@@ -453,6 +485,18 @@
       font-family: inherit;
       outline: none;
     }
+    .join-link-field {
+      height: 30px;
+      padding: 0 10px;
+      background: #0d1014;
+      border: 1px solid #2a323c;
+      border-radius: 6px;
+      color: #eff1f4;
+      font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+      outline: none;
+    }
+    .join-link-field:focus { border-color: #d1a653; }
+    .join-link-field::selection { background: #d1a653; color: #111; }
     .input-box input::placeholder {
       color: #556170;
     }
@@ -521,6 +565,39 @@
       box-shadow: 0 0 0 1px rgba(209, 166, 83, 0.35) !important;
       transform: scale(1.05);
     }
+    .token-btn:disabled {
+      opacity: 0.22;
+      filter: grayscale(1);
+      cursor: not-allowed;
+      transform: none;
+      border-color: #303743;
+      background: #1b2029;
+    }
+    .join-notice {
+      margin: 10px 0 0;
+      font-size: 12px;
+      color: #d1a653;
+    }
+    .timeline-zoom { display: flex; align-items: center; gap: 8px; color: #6b7686; }
+    .timeline-zoom { flex: 0 1 auto; min-width: 0; padding-left: 12px; }
+    .timeline-zoom input[type=range] { width: 120px; min-width: 48px; flex: 1 1 120px; accent-color: #d1a653; cursor: pointer; }
+    .timeline-zoom-label { min-width: 32px; text-align: right; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: #8a94a3; }
+    .timeline-fit { height: 24px; padding: 0 10px; border: 0.5px solid #2a323c; background: #10161d; border-radius: 6px; color: #c5ccd6; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; cursor: pointer; }
+    .timeline-fit:hover { border-color: #4f5a6b; }
+    .timeline-fit.on { border-color: #d1a653; color: #d1a653; }
+    .timeline-ruler { position: absolute; left: 0; right: 0; top: 0; height: 16px; pointer-events: none; z-index: 5; overflow: hidden; }
+    .timeline-ruler i { position: absolute; top: 0; width: 1px; height: 5px; background: #2f3845; }
+    .timeline-ruler span { position: absolute; top: 4px; transform: translateX(3px); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; color: #6b7686; }
+    .timeline-map { position: relative; flex: 0 1 150px; min-width: 64px; height: 22px; margin-right: 4px; background: #080b0f; border: 0.5px solid #1c222b; border-radius: 6px; overflow: hidden; cursor: pointer; user-select: none; }
+    .timeline-map canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .tm-needle { position: absolute; top: 0; bottom: 0; width: 1px; background: #fbbf24; pointer-events: none; }
+    .tm-cue { position: absolute; top: 0; bottom: 0; width: 1px; opacity: 0.35; pointer-events: none; }
+    .tm-window { position: absolute; top: 0; bottom: 0; border: 1.5px solid #d1a653; background: rgba(209,166,83,.12); border-radius: 5px; cursor: grab; }
+    .tm-window:active { cursor: grabbing; }
+    .tm-window:focus-visible { outline: 2px solid #d4b36b; outline-offset: 1px; }
+    .tm-window:before, .tm-window:after { content: ""; position: absolute; top: 50%; width: 2px; height: 8px; margin-top: -4px; border-radius: 2px; background: #d1a653; }
+    .tm-window:before { left: 2px; }
+    .tm-window:after { right: 2px; }
     .token-btn:focus-visible {
       outline: 2px solid #d4b36b;
       outline-offset: 1px;
@@ -561,7 +638,7 @@
     .launch-foot {
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      justify-content: flex-end;
       gap: 12px;
       margin-top: 12px;
     }
@@ -774,45 +851,36 @@
       <main class="setup-main">
         <div class="intro">
           <div>
-            <p class="eyebrow">DUET · Screening hub</p>
-            <h1>Screen a cut together.</h1>
-            <p>Choose a film and set up the room before you begin.</p>
+            <p class="eyebrow">Screening room</p>
+            <h1>Everyone on the same frame.</h1>
           </div>
           <div class="flex items-center gap-3">
             <button type="button" id="btnCancelChangeFilm" onclick="cancelChangeFilm()" class="hidden px-3.5 py-1.5 rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-slate-300 font-mono text-xs transition flex items-center gap-1.5 cursor-pointer" title="Cancel and return to current screening session">
               <span>←</span> <span>Cancel (Return to film)</span>
             </button>
-            <div class="intro-note">Your film, reactions, and review tools stay in one workspace.</div>
           </div>
         </div>
 
         <div class="work">
           <!-- PANEL 1: CHOOSE THE CUT -->
           <section class="panel">
-            <div class="panel-head">
-              <span class="step">01 / 02</span>
-              <div>
-                <h2>Choose the cut</h2>
-                <p>Select the video everyone will watch.</p>
-              </div>
-            </div>
 
             <!-- Method Switch -->
             <div class="method" role="tablist" aria-label="Video selection method">
-              <button type="button" id="tabLocalFile" role="tab" aria-selected="true" class="selected" onclick="setVideoMethod('local')">Local file</button>
-              <button type="button" id="tabWifiTransfer" role="tab" aria-selected="false" onclick="setVideoMethod('wifi')">Wi‑Fi transfer</button>
+              <button type="button" id="tabLocalFile" role="tab" aria-selected="true" class="selected" onclick="setVideoMethod('local')">Local</button>
+              <button type="button" id="tabWifiTransfer" role="tab" aria-selected="false" onclick="setVideoMethod('wifi')">Wi-Fi</button>
             </div>
 
             <!-- Local Dropzone Box -->
             <div id="methodLocalBox" class="flex-1 flex flex-col">
               <div id="dropzoneBox" onclick="document.getElementById('videoFileInput').click()"
                    onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();document.getElementById('videoFileInput').click();}"
-                   tabindex="0" role="button" aria-label="Choose a video from this Mac"
+                   tabindex="0" role="button" aria-label="Choose a video file"
                    class="dropzone group">
                 <span class="upload" aria-hidden="true">↥</span>
-                <strong id="fileNameLabel">Drop a video here</strong>
-                <small id="fileNameSub">Or choose a file from this Mac.</small>
-                <span class="browse">Browse files →</span>
+                <strong id="fileNameLabel">Drop your file here</strong>
+                <small id="fileNameSub"></small>
+                <span class="browse">Browse</span>
                 <input type="file" id="videoFileInput" accept="video/*" class="hidden" onchange="handleLocalFileSelect(event)">
               </div>
             </div>
@@ -821,18 +889,17 @@
             <div id="methodWifiBox" class="hidden flex-1 flex flex-col">
               <div onclick="document.getElementById('wifiFileInput').click()"
                    onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();document.getElementById('wifiFileInput').click();}"
-                   tabindex="0" role="button" aria-label="Share cut across Wi-Fi network"
+                   tabindex="0" role="button" aria-label="Choose a video file to send to guests"
                    class="dropzone group wifi-dropzone">
                 <span class="upload" aria-hidden="true">📡</span>
-                <strong id="wifiFileLabel">Share cut across Wi-Fi network</strong>
-                <small id="wifiFileSub">Pre-loads automatically on room laptops before playback.</small>
-                <span class="browse">Browse files to share →</span>
+                <strong id="wifiFileLabel">Drop your file here</strong>
+                <span class="browse">Browse</span>
                 <input type="file" id="wifiFileInput" accept="video/*" class="hidden" onchange="handleWifiFileSelect(event)">
               </div>
 
               <div id="uploadProgressBarContainer" class="hidden p-3 mt-2 rounded-xl bg-black border border-[#1d212b] flex flex-col gap-1.5">
                 <div class="flex items-center justify-between text-[11px] font-mono">
-                  <span id="uploadStatusText" class="text-slate-300">Sending cut across Wi-Fi...</span>
+                  <span id="uploadStatusText" class="text-slate-300">Sending to guests…</span>
                   <span id="uploadPercentText" class="text-emerald-400 font-bold">0%</span>
                 </div>
                 <div class="w-full h-2 bg-slate-900 rounded-full overflow-hidden">
@@ -841,22 +908,10 @@
               </div>
             </div>
 
-            <!-- Helper Line -->
-            <div class="helper">
-              <span id="transferDescLabel"><b>Local file:</b> use the video on this Mac.</span>
-              <span id="transferQualityLabel">Full quality · No transfer wait</span>
-            </div>
           </section>
 
           <!-- PANEL 2: SET UP THE ROOM -->
           <section class="panel">
-            <div class="panel-head">
-              <span class="step">02 / 02</span>
-              <div>
-                <h2>Set up the room</h2>
-                <p>Choose how you’ll take part.</p>
-              </div>
-            </div>
 
             <!-- Role Switch -->
             <div class="role" role="tablist" aria-label="Room role">
@@ -876,7 +931,7 @@
                   </button>
                 </div>
                 <!-- Join View -->
-                <input type="text" id="inputRoomCode" placeholder="Enter 4-digit code (e.g. 9503)" maxlength="6"
+                <input type="text" id="inputRoomCode" placeholder="Room code" maxlength="6"
                        class="input-box code-box hidden" aria-label="Enter room code">
               </div>
 
@@ -891,7 +946,7 @@
 
             <!-- Character Token Selection -->
             <div class="token-label">
-              Character token <span class="token-sub">Your marker in the room</span>
+              Your marker
             </div>
             <div class="tokens" aria-label="Twenty character tokens" role="radiogroup">
               <button type="button" onclick="pickAvatar('🎬')" class="token-btn selected" role="radio" aria-checked="true" aria-label="Clapperboard">🎬</button>
@@ -916,20 +971,21 @@
               <button type="button" onclick="pickAvatar('⭐')" class="token-btn" role="radio" aria-checked="false" aria-label="Star">⭐</button>
             </div>
 
+            <p id="joinNotice" class="join-notice" role="status" hidden></p>
+
             <!-- Launch Area -->
             <div class="launch">
               <button type="button" id="btnEnterRoom" class="primary" onclick="enterScreeningRoom()">
-                <span id="btnEnterRoomText">Enter screening room</span>
+                <span id="btnEnterRoomText">Enter</span>
                 <span id="btnEnterRoomIcon" aria-hidden="true">→</span>
               </button>
               <div class="launch-foot">
-                <span id="roleNotice">Host controls playback for the room.</span>
                 <button type="button" id="btnProjectorLaunch" class="projector" onclick="openProjectorWindow()">Open projector display ↗</button>
               </div>
               <div id="joinLinkRow" hidden style="margin-top:10px;font-size:12px;opacity:.85">
-                <label for="joinLink">Wi‑Fi join link (secret for this launch)</label>
+                <label for="joinLink">Guest link</label>
                 <div style="display:flex;gap:6px;margin-top:4px">
-                  <input id="joinLink" readonly style="flex:1;min-width:0" aria-label="Wi-Fi join link">
+                  <input id="joinLink" class="join-link-field" readonly style="flex:1;min-width:0" aria-label="Guest link" onfocus="this.select()">
                   <button type="button" id="btnCopyJoinLink">Copy</button>
                 </div>
               </div>
@@ -958,6 +1014,7 @@
   <iframe id="guestHeaderFrame" title="EditMap header" class="hidden flex-shrink-0 w-full" style="height:64px;border:0"></iframe>
   <header id="duetConsoleHeader" class="hidden h-14 border-b theater-border theater-panel px-5 flex items-center justify-between z-50 relative flex-shrink-0 bg-[#0e1218]">
     
+    <div id="roomToasts" aria-live="polite" style="position:fixed;top:56px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none"></div>
     <!-- LEFT: BRAND & CUT INFO & CONNECTED STATUS -->
     <div class="flex items-center gap-3">
       <div class="w-8 h-8 rounded-lg bg-[#e2e8f0] text-[#0c0e12] flex items-center justify-center font-bold font-mono text-xs select-none shadow-sm">
@@ -974,6 +1031,11 @@
         <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
         <span class="font-mono font-bold text-emerald-400" id="connectedCountBadge">1</span>
         <span>Active</span>
+      </div>
+      <!-- Host only: how many guests have their own copy of the film -->
+      <div id="filmCopyBadge" class="hidden items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-900 border theater-border text-[11px] text-slate-300 ml-1 cursor-default">
+        <span id="filmCopyDot" class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+        <span id="filmCopyText" class="font-mono">Film copies</span>
       </div>
       <!-- Background Full Scan Live Badge -->
       <div id="duetScanBadge" class="hidden items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-950/70 border border-amber-600/40 text-[11px] text-amber-300 ml-1 transition-all">
@@ -1028,31 +1090,24 @@
     </div>
 
     <div class="text-center max-w-xl w-full">
-      <h1 id="screeningHeading" class="text-slate-200 font-semibold text-3xl tracking-tight">Ready to screen</h1>
-      <p id="screeningLead" class="text-slate-400 text-sm mt-2 mb-8">Screen dimmed for the theater. Use keys 1–4 to mark reactions.</p>
-
       <!-- Blind Keypad Panel (1, 2, 3, 4 + Space) -->
       <div class="p-6 rounded-2xl bg-black border border-slate-900 text-left shadow-2xl">
-        <div class="flex items-center justify-between text-xs font-mono mb-3.5">
-          <strong class="uppercase tracking-widest text-slate-400 font-bold">Blind Keys</strong>
-          <span class="text-slate-500">Reaction auto-offset <b class="text-amber-400 font-bold">−12 frames</b></span>
-        </div>
         <div class="grid grid-cols-4 gap-3 text-center">
-          <div id="darkKeyBox1" onclick="dropReactionMarker('1')" class="h-24 flex items-center justify-center gap-3.5 rounded-lg bg-[#101619] border border-[#334047] text-rose-400 cursor-pointer hover:border-rose-500 hover:bg-rose-950/20 transition select-none" role="button" aria-label="Drop reaction marker 1">
+          <div id="darkKeyBox1" onclick="dropReactionMarker('1')" class="h-24 flex items-center justify-center gap-3.5 rounded-lg bg-[#101619] border border-[#334047] text-[#FF5A36] cursor-pointer hover:border-[#FF5A36] hover:bg-[#FF5A36]/10 transition select-none" role="button" aria-label="Drop reaction marker 1">
             <span class="font-bold text-3xl font-mono text-[#eff2f0]">1</span>
-            <span class="w-2.5 h-2.5 rounded-full bg-[#ef5578]"></span>
+            <span class="w-2.5 h-2.5 rounded-full bg-[#FF5A36]"></span>
           </div>
-          <div id="darkKeyBox2" onclick="dropReactionMarker('2')" class="h-24 flex items-center justify-center gap-3.5 rounded-lg bg-[#101619] border border-[#334047] text-amber-400 cursor-pointer hover:border-amber-500 hover:bg-amber-950/20 transition select-none" role="button" aria-label="Drop reaction marker 2">
+          <div id="darkKeyBox2" onclick="dropReactionMarker('2')" class="h-24 flex items-center justify-center gap-3.5 rounded-lg bg-[#101619] border border-[#334047] text-[#F5D90A] cursor-pointer hover:border-[#F5D90A] hover:bg-[#F5D90A]/10 transition select-none" role="button" aria-label="Drop reaction marker 2">
             <span class="font-bold text-3xl font-mono text-[#eff2f0]">2</span>
-            <span class="w-2.5 h-2.5 rounded-full bg-[#efbb4a]"></span>
+            <span class="w-2.5 h-2.5 rounded-full bg-[#F5D90A]"></span>
           </div>
-          <div id="darkKeyBox3" onclick="dropReactionMarker('3')" class="h-24 flex items-center justify-center gap-3.5 rounded-lg bg-[#101619] border border-[#334047] text-emerald-400 cursor-pointer hover:border-emerald-500 hover:bg-emerald-950/20 transition select-none" role="button" aria-label="Drop reaction marker 3">
+          <div id="darkKeyBox3" onclick="dropReactionMarker('3')" class="h-24 flex items-center justify-center gap-3.5 rounded-lg bg-[#101619] border border-[#334047] text-[#4DA3FF] cursor-pointer hover:border-[#4DA3FF] hover:bg-[#4DA3FF]/10 transition select-none" role="button" aria-label="Drop reaction marker 3">
             <span class="font-bold text-3xl font-mono text-[#eff2f0]">3</span>
-            <span class="w-2.5 h-2.5 rounded-full bg-[#47cda0]"></span>
+            <span class="w-2.5 h-2.5 rounded-full bg-[#4DA3FF]"></span>
           </div>
-          <div id="darkKeyBox4" onclick="dropReactionMarker('4')" class="h-24 flex items-center justify-center gap-3.5 rounded-lg bg-[#101619] border border-[#334047] text-cyan-400 cursor-pointer hover:border-cyan-500 hover:bg-cyan-950/20 transition select-none" role="button" aria-label="Drop reaction marker 4">
+          <div id="darkKeyBox4" onclick="dropReactionMarker('4')" class="h-24 flex items-center justify-center gap-3.5 rounded-lg bg-[#101619] border border-[#334047] text-[#E052D0] cursor-pointer hover:border-[#E052D0] hover:bg-[#E052D0]/10 transition select-none" role="button" aria-label="Drop reaction marker 4">
             <span class="font-bold text-3xl font-mono text-[#eff2f0]">4</span>
-            <span class="w-2.5 h-2.5 rounded-full bg-[#46cde0]"></span>
+            <span class="w-2.5 h-2.5 rounded-full bg-[#E052D0]"></span>
           </div>
         </div>
 
@@ -1084,7 +1139,7 @@
             </button>
             <button type="button" id="btnScreeningPlay" onclick="togglePlay()" class="h-10 px-6 rounded-lg bg-[#edbd58] hover:bg-[#f3ca6e] text-[#17170f] font-mono font-bold text-sm shadow transition flex items-center gap-2 active:scale-95">
               <span id="screeningPlayIcon">▶</span>
-              <span id="screeningPlayText">Play <small class="text-xs font-normal opacity-70">SPACE</small></span>
+              <span id="screeningPlayText">Play</span>
             </button>
             <button type="button" onclick="stepSecondsScreening(5)" class="h-10 px-3.5 rounded-lg bg-[#151d22] hover:bg-[#1a252b] border border-[#3a474c] text-slate-300 hover:text-white text-xs font-bold font-mono transition flex items-center gap-1 active:scale-95" title="Forward 5 seconds (Shift+Right)">
               <span>+5s</span> <span>&raquo;</span>
@@ -1092,19 +1147,10 @@
           </div>
         </div>
 
-        <div class="shortcuts-legend host-only">
-          <span><kbd>Space</kbd> play / pause</span>
-          <span class="shortcuts-sep">·</span>
-          <span><kbd>←</kbd><kbd>→</kbd> frame step</span>
-          <span class="shortcuts-sep">·</span>
-          <span><kbd>Shift</kbd> + arrows ±5s</span>
-          <span class="shortcuts-sep">·</span>
-          <span><kbd>Esc</kbd> review</span>
-        </div>
       </div>
 
       <button onclick="setMode('review')" class="host-only mt-8 px-6 py-2.5 rounded-lg bg-transparent hover:bg-slate-900/60 border border-slate-700/60 hover:border-slate-500 text-slate-300 text-xs font-mono font-medium transition flex items-center gap-2 mx-auto">
-        <span>Stop Screening & Turn On Review Lights</span> <span class="text-amber-400">→</span>
+        <span>Review</span> <span class="text-amber-400">→</span>
       </button>
     </div>
   </div>
@@ -1174,11 +1220,24 @@
         
         <!-- Timeline Header: cue count and timecode beside the timeline -->
         <div class="flex items-center justify-between text-xs mb-1">
-          <div class="font-mono text-slate-400 text-xs flex items-center gap-1.5" title="Cues logged for this film">
+          <div class="font-mono text-slate-400 text-xs flex items-center gap-1.5 whitespace-nowrap" title="Cues logged for this film">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
             <span>Cues</span> <strong class="text-amber-400 font-mono" id="cueCountBadge">0</strong>
           </div>
-          <div class="font-mono text-slate-400 text-xs">
+          <div class="timeline-zoom ml-auto mr-4" role="group" aria-label="Timeline zoom">
+            <div id="timelineMap" class="timeline-map" aria-label="Timeline overview">
+            <canvas id="timelineMapCanvas"></canvas>
+            <div id="timelineMapCues"></div>
+            <div id="timelineMapNeedle" class="tm-needle"></div>
+            <div id="timelineMapWindow" class="tm-window" tabindex="0" role="slider" aria-label="Visible part of the film" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
+          </div>
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5M8.5 11h5"/></svg>
+            <input type="range" id="tlZoomSlider" min="0" max="100" value="0" step="1" aria-label="Timeline zoom" oninput="setTimelineZoomFromSlider(this.value)">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5M8.5 11h5M11 8.5v5"/></svg>
+            <span id="tlZoomLabel" class="timeline-zoom-label">1×</span>
+            <button type="button" id="tlFitBtn" class="timeline-fit on" onclick="fitTimeline()">Fit</button>
+          </div>
+          <div class="font-mono text-slate-400 text-xs whitespace-nowrap">
             <strong id="currentTimecodeLabel" class="text-slate-100 font-bold">00:00:00:00</strong> / <span id="durationTimecodeLabel">00:00:00:00</span>
           </div>
         </div>
@@ -1187,6 +1246,9 @@
         <div class="relative w-full h-24 bg-black/80 rounded-xl border border-slate-800/90 flex flex-col justify-end pb-3 pt-1 overflow-visible select-none cursor-ew-resize shadow-inner group/timeline"
              id="timelineContainer">
           
+          <!-- Time ruler (shown while zoomed in) -->
+          <div id="timelineRuler" class="timeline-ruler"></div>
+
           <!-- Heatmap Glow Containers (Injected dynamically) -->
           <div id="heatmapGlowLayer" class="absolute inset-0 pointer-events-none overflow-hidden rounded-xl"></div>
 
@@ -1266,18 +1328,14 @@
 
       <!-- Add Discussion Note Bar -->
       <div class="p-3 border-t theater-border bg-[#111921] flex-shrink-0">
-        <label for="discussionInput" class="block text-[11px] font-semibold text-slate-300 mb-1.5">
-          Add a discussion note at <span id="noteCurrentTc" class="font-mono text-amber-400 font-bold">00:00:00:00</span>
-        </label>
-        <div class="flex gap-2">
-          <input type="text" id="discussionInput" placeholder="Write what you noticed or want to try…" 
-                 onkeydown="if(event.key==='Enter')addManualCueFromInput()"
-                 class="flex-1 bg-[#0a1118] border border-[#3b4a57] rounded px-2.5 py-1.5 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-amber-400 font-sans">
-          <button type="button" onclick="addManualCueFromInput()" class="px-3.5 py-1.5 rounded bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs font-mono shadow transition cursor-pointer">
-            Add note
+        <div id="noteField" class="note-field">
+          <input type="text" id="discussionInput" placeholder="Add a note at 00:00:00:00" aria-label="Add a note at the current time"
+                 oninput="document.getElementById('noteField').classList.toggle('has-text', this.value.trim().length > 0)"
+                 onkeydown="if(event.key==='Enter')addManualCueFromInput()">
+          <button type="button" onclick="addManualCueFromInput()" class="note-send" aria-label="Add note" title="Add note (Enter)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
           </button>
         </div>
-        <small class="block text-slate-500 text-[10px] mt-1.5">The note will be attached to the current playhead.</small>
       </div>
 
     </div>
@@ -1589,6 +1647,100 @@
       }
     });
 
+    // A guest keeps its own copy of the film for the length of the screening: the picture then seeks and plays
+    // from this device, not over Wi-Fi, which is what made guests stall and drift. It streams from the host
+    // until the copy is whole, then swaps to it. Films above the cap, or a failed copy, keep streaming.
+    // Host side: a short message when someone joins, and a badge for who has the film on their own device.
+    function showRoomToast(text) {
+      const box = document.getElementById('roomToasts');
+      if (!box) return;
+      const el = document.createElement('div');
+      el.textContent = text;
+      el.style.cssText = 'background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:999px;padding:6px 14px;font-size:12px;box-shadow:0 4px 16px rgba(0,0,0,.4);transition:opacity .3s';
+      box.appendChild(el);
+      setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 4000);
+    }
+    function renderFilmCopies(msg) {
+      const badge = document.getElementById('filmCopyBadge');
+      if (!badge || isGuest) return;
+      const copies = msg.copies || [];
+      if (!msg.film || !copies.length) { badge.classList.add('hidden'); badge.classList.remove('flex'); return; }
+      const ready = copies.filter(c => c.state === 'ready').length;
+      const copying = copies.filter(c => c.state === 'copying' || c.state === 'waiting');
+      const done = !copying.length;
+      const lead = copying.length ? Math.min(...copying.map(c => c.progress || 0)) : 1;
+      document.getElementById('filmCopyText').textContent = done
+        ? (ready === copies.length ? `All ${ready} have the film` : `${ready} of ${copies.length} have the film`)
+        : `Copying to ${copying.length} of ${copies.length} · ${Math.round(lead * 100)}%`;
+      document.getElementById('filmCopyDot').className = `w-2 h-2 rounded-full ${done ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`;
+      const label = { ready: 'has the film', streaming: 'streams the film', copying: 'copying', waiting: 'waiting' };
+      badge.title = copies.map(c => `${c.name}: ${c.state === 'copying' ? 'copying ' + Math.round((c.progress || 0) * 100) + '%' : label[c.state]}`).join('\n');
+      badge.classList.remove('hidden');
+      badge.classList.add('flex');
+    }
+
+    // Guest side: tell the host how this device's copy is doing (at most about once a second while copying).
+    let lastCopyReport = null, lastCopyReportAt = 0;
+    function reportFilmCopy(url, state, progress = 0) {
+      lastCopyReport = { videoUrl: url, state, progress };
+      if (state === 'copying' && performance.now() - lastCopyReportAt < 1000) return;
+      lastCopyReportAt = performance.now();
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'FILM_COPY', ...lastCopyReport }));
+    }
+
+    const FILM_COPY_MAX_BYTES = 1.5 * 1024 * 1024 * 1024;
+    let filmCopy = null; // { url, ctl, blobUrl }
+    function dropFilmCopy() {
+      if (!filmCopy) return;
+      filmCopy.ctl.abort();
+      if (filmCopy.blobUrl) URL.revokeObjectURL(filmCopy.blobUrl);
+      filmCopy = null;
+    }
+    function showCopyProgress(name, fraction) {
+      const el = document.getElementById('headerCutName');
+      if (el) el.textContent = fraction == null ? `Cut: ${name}` : `Cut: ${name} · copying ${Math.round(fraction * 100)}%`;
+      postGuestHeader();
+    }
+    async function copyFilmToThisDevice(url, name) {
+      dropFilmCopy();
+      const ctl = new AbortController();
+      const copy = filmCopy = { url, ctl, blobUrl: null };
+      reportFilmCopy(url, 'copying', 0);
+      const streamInstead = () => { if (filmCopy === copy) { filmCopy = null; showCopyProgress(name, null); reportFilmCopy(url, 'streaming'); loadAudioWaveform(url); } };
+      try {
+        const res = await fetch(url, { signal: ctl.signal });
+        const total = Number(res.headers.get('content-length')) || 0;
+        if (!res.ok || !res.body || !total || total > FILM_COPY_MAX_BYTES) { ctl.abort(); return streamInstead(); }
+        const reader = res.body.getReader();
+        const chunks = [];
+        let got = 0, lastShown = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          got += value.length;
+          if (performance.now() - lastShown > 500) { lastShown = performance.now(); showCopyProgress(name, got / total); reportFilmCopy(url, 'copying', got / total); }
+        }
+        if (filmCopy !== copy) return; // another film, or left the room
+        if (got !== total) return streamInstead();
+        const blob = new Blob(chunks, { type: res.headers.get('content-type') || 'video/mp4' });
+        copy.blobUrl = URL.createObjectURL(blob);
+        // Swap without losing the place: same frame, playing or paused.
+        const at = video.currentTime, wasPlaying = !video.paused;
+        video.addEventListener('loadedmetadata', () => {
+          video.currentTime = at;
+          if (wasPlaying) video.play().catch(() => {});
+        }, { once: true });
+        video.src = copy.blobUrl;
+        video.load();
+        showCopyProgress(name, null);
+        reportFilmCopy(url, 'ready', 1);
+        loadAudioWaveform(blob);
+      } catch (err) {
+        if (!ctl.signal.aborted) streamInstead();
+      }
+    }
+
     // Say what the film is doing when there is no picture, instead of leaving a black box.
     function updateFilmStatus() {
       const el = document.getElementById('filmStatus');
@@ -1686,11 +1838,42 @@
 
     // 4 Pure Unnamed Colors Palette
     const COLOR_PALETTE = {
-      '1': { key: '1', hex: '#f43f5e', resolveColor: 'ResolveColorRed', name: 'Red' },
-      '2': { key: '2', hex: '#fbbf24', resolveColor: 'ResolveColorYellow', name: 'Yellow' },
-      '3': { key: '3', hex: '#34d399', resolveColor: 'ResolveColorGreen', name: 'Green' },
-      '4': { key: '4', hex: '#38bdf8', resolveColor: 'ResolveColorCyan', name: 'Cyan' }
+      '1': { key: '1', hex: '#FF5A36', resolveColor: 'ResolveColorRed', name: 'Red' },
+      '2': { key: '2', hex: '#F5D90A', resolveColor: 'ResolveColorYellow', name: 'Yellow' },
+      '3': { key: '3', hex: '#4DA3FF', resolveColor: 'ResolveColorBlue', name: 'Blue' },
+      '4': { key: '4', hex: '#E052D0', resolveColor: 'ResolveColorFuchsia', name: 'Fuchsia' }
     };
+
+    function showJoinNotice(text) {
+      const el = document.getElementById('joinNotice');
+      if (!el) return;
+      el.textContent = text;
+      el.hidden = !text;
+    }
+
+    // Grey out the markers other people in the room already use (guests only; the host starts the room).
+    async function refreshTakenMarkers() {
+      const buttons = document.querySelectorAll('.token-btn');
+      const code = selectedRole === 'student' ? (document.getElementById('inputRoomCode')?.value || '').trim() : '';
+      let status = null;
+      if (code) {
+        try {
+          const response = await fetch(`${roomServerBase()}/api/room-markers?room=${encodeURIComponent(code)}`, { cache: 'no-store' });
+          if (response.ok) status = await response.json();
+        } catch (_) { /* the room server is not reachable from this page */ }
+      }
+      const taken = new Set(status ? status.taken : []);
+      buttons.forEach(btn => {
+        const used = taken.has(btn.textContent.trim());
+        btn.disabled = used;
+        btn.title = used ? 'Taken' : '';
+      });
+      if (taken.has(userAvatar)) {
+        const free = Array.from(buttons).find(btn => !btn.disabled);
+        if (free) pickAvatar(free.textContent.trim());
+      }
+      return status;
+    }
 
     function pickAvatar(emoji) {
       userAvatar = emoji;
@@ -1712,8 +1895,6 @@
       const tabWifi = document.getElementById('tabWifiTransfer');
       const boxLocal = document.getElementById('methodLocalBox');
       const boxWifi = document.getElementById('methodWifiBox');
-      const quality = document.getElementById('transferQualityLabel');
-      const desc = document.getElementById('transferDescLabel');
 
       if (method === 'local') {
         if (tabLocal) {
@@ -1726,8 +1907,6 @@
         }
         if (boxLocal) boxLocal.classList.remove('hidden');
         if (boxWifi) boxWifi.classList.add('hidden');
-        if (desc) desc.innerHTML = '<b>Local file:</b> use the video on this Mac.';
-        if (quality) quality.textContent = 'Full quality · No transfer wait';
       } else {
         if (tabWifi) {
           tabWifi.classList.add('selected');
@@ -1739,8 +1918,6 @@
         }
         if (boxWifi) boxWifi.classList.remove('hidden');
         if (boxLocal) boxLocal.classList.add('hidden');
-        if (desc) desc.innerHTML = '<b>Wi‑Fi transfer:</b> stream to devices on same network.';
-        if (quality) quality.textContent = 'Pre-loads on Wi-Fi';
       }
     }
 
@@ -1756,8 +1933,8 @@
       if (previous && previous.startsWith('blob:')) URL.revokeObjectURL(previous);
       clearMarkersState(false);
       const setText = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
-      setText('fileNameLabel', 'Drop a video here');
-      setText('fileNameSub', 'Or choose a file from this Mac.');
+      setText('fileNameLabel', 'Drop your file here');
+      setText('fileNameSub', '');
       setText('headerCutName', 'Cut: No video loaded');
       for (const id of ['videoFileInput', 'wifiFileInput']) {
         const input = document.getElementById(id);
@@ -1849,15 +2026,15 @@
           const pct = Math.round((evt.loaded / evt.total) * 100);
           fill.style.width = `${pct}%`;
           percentText.textContent = `${pct}%`;
-          statusText.textContent = `Transferring across Wi-Fi: ${(evt.loaded/(1024*1024)).toFixed(1)} MB / ${(evt.total/(1024*1024)).toFixed(1)} MB`;
+          statusText.textContent = `Sending to guests: ${(evt.loaded/(1024*1024)).toFixed(1)} MB / ${(evt.total/(1024*1024)).toFixed(1)} MB`;
         }
       };
 
       xhr.onload = () => {
         if (xhr.status === 200) {
           const resp = JSON.parse(xhr.responseText);
-          statusText.textContent = `✓ Transfer complete! Loaded in screening room.`;
-          document.getElementById('wifiFileLabel').textContent = `✓ ${file.name} (Shared across Wi-Fi)`;
+          statusText.textContent = `✓ Sent to guests`;
+          document.getElementById('wifiFileLabel').textContent = `✓ ${file.name}`;
           document.getElementById('headerCutName').textContent = `Cut: ${file.name}`;
           
           // The room server's address, in full, so it also resolves when this page is the one served by Vite.
@@ -1893,7 +2070,7 @@
       const btnText = document.getElementById('btnEnterRoomText');
       const btnIcon = document.getElementById('btnEnterRoomIcon');
       const projectorBtn = document.getElementById('btnProjectorLaunch');
-      const roleNotice = document.getElementById('roleNotice');
+      const joinRow = document.getElementById('joinLinkRow');
 
       if (role === 'host') {
         currentRoomCode = autoRoomCode;
@@ -1908,10 +2085,12 @@
         if (hostBox) hostBox.classList.remove('hidden');
         if (joinInput) joinInput.classList.add('hidden');
         if (label) label.textContent = 'Room code';
-        if (btnText) btnText.textContent = 'Enter screening room';
+        if (btnText) btnText.textContent = 'Enter';
         if (btnIcon) btnIcon.textContent = '→';
-        if (roleNotice) roleNotice.textContent = 'Host controls playback for the room.';
         if (projectorBtn) projectorBtn.classList.remove('hidden');
+        if (joinRow) joinRow.style.display = '';
+        refreshTakenMarkers();
+        showJoinNotice('');
       } else {
         if (joinBtn) {
           joinBtn.classList.add('selected');
@@ -1926,11 +2105,12 @@
           joinInput.classList.remove('hidden');
           joinInput.focus();
         }
-        if (label) label.textContent = 'Enter room code';
-        if (btnText) btnText.textContent = 'Connect to session';
+        if (label) label.textContent = 'Room code';
+        if (btnText) btnText.textContent = 'Enter';
         if (btnIcon) btnIcon.textContent = '→';
-        if (roleNotice) roleNotice.textContent = 'Joined viewer. Follows the host timeline.';
         if (projectorBtn) projectorBtn.classList.add('hidden');
+        if (joinRow) joinRow.style.display = 'none';
+        refreshTakenMarkers();
       }
     }
 
@@ -1988,7 +2168,7 @@
         grid.innerHTML = `
           <div class="recent-empty">
             <p>No saved projects yet</p>
-            <small>Drop a video above or choose a cut to begin your first screening session.</small>
+            <small>Drop a video file above to begin your first screening.</small>
           </div>
         `;
       }
@@ -2067,7 +2247,19 @@
       }
     }
 
-    function enterScreeningRoom() {
+    // Guests check the room first: a taken marker or a full room sends them back to the picker.
+    async function enterScreeningRoom() {
+      if (selectedRole === 'student') {
+        const chosen = userAvatar;
+        const status = await refreshTakenMarkers();
+        if (status && status.full) { showJoinNotice('This room is full.'); return; }
+        if (status && status.taken.includes(chosen)) { showJoinNotice('That marker was just taken. Pick another.'); return; }
+      }
+      showJoinNotice('');
+      startScreeningRoom();
+    }
+
+    function startScreeningRoom() {
       const nameInput = document.getElementById('inputUserName').value.trim();
       if (nameInput) userName = nameInput;
 
@@ -2161,6 +2353,17 @@
         roomLog.push(`${msg.type}${msg.currentTime !== undefined ? ' ' + Number(msg.currentTime).toFixed(1) : ''}${msg.isPlaying !== undefined ? (msg.isPlaying ? ' playing' : ' paused') : ''}`);
         if (roomLog.length > 10) roomLog.shift();
 
+        if (msg.type === 'JOIN_REJECTED') {
+          // Lost a race for the marker (or the last seat): go back to the picker with the reason.
+          try {
+            sessionStorage.setItem('duetJoinRetry', JSON.stringify({
+              code: currentRoomCode, name: userName,
+              notice: msg.reason === 'room_full' ? 'This room is full.' : 'That marker was just taken. Pick another.'
+            }));
+          } catch (_) { /* private mode: the page still reloads to the picker */ }
+          location.reload();
+          return;
+        }
         if (msg.type === 'INIT_STATE') {
           document.getElementById('connectedCountBadge').textContent = msg.connectedCount;
           myId = msg.yourInfo ? msg.yourInfo.id : null;
@@ -2178,11 +2381,13 @@
             hostState = { time: msg.state.currentTime || 0, playing: !!msg.state.isPlaying, at: performance.now() };
             hostWorkspace = msg.state.workspace || null;
           }
+          if (isGuest && lastCopyReport && lastCopyReport.videoUrl === msg.state.videoUrl) ws.send(JSON.stringify({ type: 'FILM_COPY', ...lastCopyReport }));
           if (msg.state.videoUrl && !video.src) {
             video.src = msg.state.videoUrl;
             video.load();
             document.getElementById('headerCutName').textContent = `Cut: ${msg.state.videoName || 'Shared Video'}`;
-            loadAudioWaveform(msg.state.videoUrl);
+            if (isGuest) copyFilmToThisDevice(msg.state.videoUrl, msg.state.videoName || 'Shared Video');
+            else loadAudioWaveform(msg.state.videoUrl);
           }
           if (msg.state.markers && msg.state.markers.length) {
             msg.state.markers.forEach(m => {
@@ -2205,13 +2410,20 @@
         }
         else if (msg.type === 'PEER_JOINED' || msg.type === 'PEER_LEFT') {
           document.getElementById('connectedCountBadge').textContent = msg.connectedCount;
+          if (!isGuest && msg.user && msg.user.role !== 'host') {
+            showRoomToast(`${msg.user.avatar || ''} ${msg.user.name} ${msg.type === 'PEER_JOINED' ? 'joined the room' : 'left the room'}`.trim());
+          }
+        }
+        else if (msg.type === 'FILM_COPIES') {
+          renderFilmCopies(msg);
         }
         else if (msg.type === 'VIDEO_SHARED') {
           video.src = msg.videoUrl;
           video.load();
           document.getElementById('headerCutName').textContent = `Cut: ${msg.videoName}`;
           postGuestHeader();
-          loadAudioWaveform(msg.videoUrl);
+          if (isGuest) copyFilmToThisDevice(msg.videoUrl, msg.videoName);
+          else loadAudioWaveform(msg.videoUrl);
           clearMarkersState(false);
         }
         else if (msg.type === 'CLEAR_MARKERS') {
@@ -2750,22 +2962,39 @@
     // ==============================================
     // REVIEW MODE: RENDER TIMELINE, HEATMAP & CUES  -->
     // ==============================================
+    // The timeline can be zoomed: tlZoom is how many times the film is magnified (1 = the whole film) and
+    // tlStart the left edge of what is shown, as a fraction of the film. Everything on the timeline (needle,
+    // tokens, waveform, scrubbing) goes through these helpers.
+    let tlZoom = 1;
+    let tlStart = 0;
+    let tlManualUntil = 0;   // after a hand pan, the view stops following the playhead for a moment
+    const TL_MAX_ZOOM = 16;
+    const tlSpan = () => 1 / tlZoom;
+    function tlClamp() { tlStart = Math.max(0, Math.min(1 - tlSpan(), tlStart)); }
+    function tlPct(seconds) { return (((seconds / (video.duration || 1)) - tlStart) / tlSpan()) * 100; }
+    function tlTimeAtRatio(ratio) { return (tlStart + ratio * tlSpan()) * (video.duration || 1); }
+
     function renderReviewTimelineAndCues() {
+      const clusters = getConsensusClusters();
+      renderTimelineTokens();
+
+      renderEditorialCueSheet(clusters);
+    }
+
+    // Heatmap glows and avatar tokens on the timeline (only the cues inside the current view).
+    function renderTimelineTokens() {
       const dur = video.duration || 1;
       const clusters = getConsensusClusters();
-
-      // 2. Render Heatmap Glows & Avatar Tokens on Timeline
       const glowLayer = document.getElementById('heatmapGlowLayer');
       const avatarLayer = document.getElementById('avatarTokensLayer');
       if (glowLayer) glowLayer.innerHTML = '';
       if (avatarLayer) avatarLayer.innerHTML = '';
 
       clusters.forEach((cluster, idx) => {
-        // Exact percentage matching video.currentTime / dur * 100
-        const pct = (cluster.seconds / dur) * 100;
+        const pct = tlPct(cluster.seconds);
+        if (pct < -3 || pct > 103) return;
         const count = cluster.markers.length;
         const isCluster = count > 1;
-
         // Radial Heatmap Glow if consensus (2+ students)
         if (isCluster && glowLayer) {
           const glow = document.createElement('div');
@@ -2858,8 +3087,11 @@
         `;
         if (avatarLayer) avatarLayer.appendChild(tokenContainer);
       });
+      renderTimelineChrome(clusters);
+    }
 
-      // 3. Render Editorial Cue Sheet (Right Sidebar)
+    // 3. Render Editorial Cue Sheet (Right Sidebar)
+    function renderEditorialCueSheet(clusters) {
       const feed = document.getElementById('cueCardsFeed');
       if (feed) {
         feed.innerHTML = '';
@@ -2868,54 +3100,57 @@
           const isSelected = idx === activeCueIndex;
           const count = cluster.markers.length;
           const firstM = cluster.markers[0];
-          // A guest edits their own marker in the cue; everyone else's is read-only for them.
-          const noteM = isGuest ? (cluster.markers.find(m => isMine(m)) || firstM) : firstM;
-          const noteLocked = !isMine(noteM);
-          const deletable = cluster.markers.filter(m => isMine(m));
-          // Everyone else's notes in this cue, read-only, so a note written on one machine shows on all of them.
-          const otherNotes = cluster.markers
-            .filter(m => m !== noteM && String(m.note || '').trim() && !/^Flagged at /.test(m.note))
-            .map(m => `<div class="cue-other-note text-[11px] text-slate-400 pl-4 flex gap-1.5 leading-snug"><span>${escapeHtml(m.authorAvatar || '🎬')}</span><span><b class="text-slate-300">${escapeHtml(m.authorName || 'Host')}:</b> ${escapeHtml(m.note)}</span></div>`)
-            .join('');
-          const resolveColorName = (firstM.resolveColor || '').replace('ResolveColor', '') || COLOR_PALETTE[firstM.key]?.name || 'Red';
-          const authorsLabel = cluster.markers.map(m => m.authorName || 'Host').join(' + ');
+          // Each person in the cue gets a row. Your own marker's note is the one you type in (the host, who
+          // may edit any marker, falls back to the first one when they did not press a key themselves).
+          const wroteIt = (m) => (m.authorId && myId) ? m.authorId === myId : !isGuest;
+          const own = cluster.markers.find(wroteIt) || null;
+          const editable = own || (isGuest ? null : firstM);
+          const ordered = [...cluster.markers].sort((a, b) => (b === editable) - (a === editable));
+          const colorOf = (m) => /^#[0-9a-fA-F]{3,8}$/.test(m.colorHex || '') ? m.colorHex : '#f59e0b';
+          const resolveName = (m) => (m.resolveColor || '').replace('ResolveColor', '') || COLOR_PALETTE[m.key]?.name || 'Red';
+          const shownNote = (m) => /^Flagged at /.test(m.note || '') ? '' : String(m.note || '');
+          const trashIcon = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>';
+
+          const pips = [];
+          ordered.forEach(m => { if (!pips.some(p => colorOf(p).toLowerCase() === colorOf(m).toLowerCase())) pips.push(m); });
+          const pipsHtml = pips.map(m => `<i class="cue-pip${m.key === 'n' ? ' note' : ''}" style="--pip:${escapeHtml(colorOf(m))}" title="Resolve · ${escapeHtml(resolveName(m))}"></i>`).join('');
+
+          const rowsHtml = ordered.map(m => {
+            const isEditable = m === editable;
+            const text = shownNote(m);
+            if (!isEditable && !text.trim()) return '';
+            const name = escapeHtml(m.authorName || 'Host');
+            const ring = `box-shadow:0 0 0 1.5px ${escapeHtml(colorOf(m))}`;
+            const canDelete = isMine(m);
+            const body = isEditable
+              ? `<textarea data-marker-id="${escapeHtml(String(m.id))}"
+                      onchange="updateCueNote(${escapeHtml(JSON.stringify(m.id))}, this.value)"
+                      oninput="updateCueNote(${escapeHtml(JSON.stringify(m.id))}, this.value)"
+                      onclick="event.stopPropagation()"
+                      placeholder="Add a note"
+                      aria-label="Your note for cue ${idx + 1}"
+                      rows="2"
+                      class="cue-note-area cue-field">${escapeHtml(text)}</textarea>`
+              : `<div class="cue-readonly">${escapeHtml(text)}</div>`;
+            return `<div class="cue-row">
+              <span class="cue-avatar tiny-avatar" style="${ring}">${escapeHtml(m.authorAvatar || '🎬')}</span>
+              <div class="cue-body"><p class="cue-name">${name}${isEditable && wroteIt(m) ? ' <em>you</em>' : ''}</p>${body}</div>
+              ${canDelete ? `<button type="button" class="cue-trash" title="Delete this marker" aria-label="Delete marker by ${name}" onclick="event.stopPropagation(); deleteMarker(${escapeHtml(JSON.stringify(m.id))})">${trashIcon}</button>` : ''}
+            </div>`;
+          }).join('<div class="cue-sep"></div>');
 
           const card = document.createElement('div');
-          card.className = `cue-item p-3 rounded-lg border transition cursor-pointer flex flex-col justify-between gap-1.5 ${
-            isSelected 
-              ? 'selected border-[#70523c] bg-[#201b1b] shadow-lg ring-1 ring-[#70523c]' 
-              : 'border-[#27323e] bg-[#0e141b]/70 hover:bg-[#141b24] hover:border-slate-700'
-          }`;
+          card.className = `cue-item cue-card ${isSelected ? 'selected' : ''}`;
           card.onclick = () => jumpToCue(idx, true);
 
           card.innerHTML = `
-            <div class="cue-head flex items-center gap-2">
-              <span class="cue-dot w-2.5 h-2.5 rounded-full flex-shrink-0 ${isSelected ? 'ring-2 ring-[#70523c]' : ''}" style="background-color: ${escapeHtml(cluster.primaryColorHex)};"></span>
-              <strong class="font-mono font-bold text-slate-100 text-xs">${escapeHtml(cluster.smpte)}</strong>
-              ${count > 1 ? `<span class="text-[9px] font-mono px-1.5 py-0.2 rounded-full bg-purple-900/80 border border-purple-500/60 text-purple-200 font-bold ml-1">${count}&times;</span>` : ''}
-              <small class="text-slate-400 ml-auto font-mono text-[10px] ${isSelected ? 'text-[#f5c759] font-semibold' : ''}">
-                ${isSelected ? 'Current · ' : ''}Cue ${String(idx + 1).padStart(2, '0')}
-              </small>
+            <div class="cue-head">
+              <span class="cue-pips">${pipsHtml}</span>
+              <strong class="cue-tc">${escapeHtml(cluster.smpte)}</strong>
+              ${count > 1 ? `<span class="cue-count" title="${count} people flagged this moment">${count}&times;</span>` : ''}
+              <span class="cue-num">${String(idx + 1).padStart(2, '0')}</span>
             </div>
-
-            <textarea data-marker-id="${escapeHtml(String(noteM.id))}"
-                      onchange="updateCueNote(${escapeHtml(JSON.stringify(noteM.id))}, this.value)" 
-                      oninput="updateCueNote(${escapeHtml(JSON.stringify(noteM.id))}, this.value)"
-                      ${noteLocked ? 'readonly' : ''}
-                      onclick="event.stopPropagation()"
-                      placeholder="No discussion note yet"
-                      rows="2"
-                      class="cue-note-area w-full bg-transparent text-xs text-slate-300 resize-none focus:outline-none focus:bg-black/40 rounded px-1.5 py-1 border border-transparent focus:border-slate-700 leading-relaxed font-sans placeholder:italic placeholder:text-slate-600 pl-4">${escapeHtml(noteM.note)}</textarea>
-            ${otherNotes}
-            ${deletable.length ? `<div class="cue-delete-row flex flex-wrap gap-1.5 pl-4">${deletable.map(m => `<button type="button" class="cue-delete-btn text-[10px] font-mono px-1.5 py-0.5 rounded border border-slate-700 text-slate-400 hover:text-rose-300 hover:border-rose-500/60 transition" title="Delete this marker" onclick="event.stopPropagation(); deleteMarker(${escapeHtml(JSON.stringify(m.id))})">✕ ${escapeHtml(m.authorAvatar || '🎬')} ${escapeHtml(m.authorName || 'Host')}</button>`).join('')}</div>` : ''}
-
-            <div class="cue-meta flex items-center justify-between text-[10px] font-mono text-slate-400 border-t border-slate-900/80 pt-1.5 mt-0.5 pl-4">
-              <span class="author flex items-center gap-1.5 truncate max-w-[170px]" title="${escapeHtml(authorsLabel)}">
-                <span class="tiny-avatar text-xs">${escapeHtml(firstM.authorAvatar || '🎬')}</span>
-                <span class="truncate">${escapeHtml(authorsLabel)}</span>
-              </span>
-              <b class="${isSelected ? 'text-[#ed9eae]' : 'text-[#d7b664]'} font-semibold">Resolve · ${resolveColorName}</b>
-            </div>
+            ${rowsHtml}
           `;
           feed.appendChild(card);
         });
@@ -3168,9 +3403,9 @@
         id: Date.now(),
         seconds: video.currentTime,
         smpte: smpte,
-        key: '2',
-        colorHex: '#fbbf24',
-        resolveColor: 'ResolveColorYellow',
+        key: 'n',   // a typed note, not a reaction: neutral colour, its own Resolve marker colour
+        colorHex: '#9aa4b2',
+        resolveColor: 'ResolveColorCream',
         note: text,
         thumbnail: '',
         authorId: myId,
@@ -3196,6 +3431,7 @@
       syncChannel?.postMessage({ type: 'ADD_MARKER', marker: newMarker });
       notifyParentMarkersUpdate();
       input.value = '';
+      document.getElementById('noteField')?.classList.remove('has-text');
     }
 
     function togglePlay() {
@@ -3254,14 +3490,14 @@
         if (playing) {
           screeningBtn.className = "px-5 py-1.5 rounded-lg bg-rose-500 hover:bg-rose-400 text-white font-mono font-bold text-xs shadow-lg transition flex items-center gap-1.5 active:scale-95";
           screeningIcon.textContent = "⏸";
-          screeningText.textContent = "Pause (Space)";
+          screeningText.textContent = "Pause";
           if (screeningDot) {
             screeningDot.className = "w-2 h-2 rounded-full bg-emerald-400 animate-pulse";
           }
         } else {
           screeningBtn.className = "px-5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-mono font-bold text-xs shadow-lg transition flex items-center gap-1.5 active:scale-95";
           screeningIcon.textContent = "▶";
-          screeningText.textContent = "Play (Space)";
+          screeningText.textContent = "Play";
           if (screeningDot) {
             screeningDot.className = "w-2 h-2 rounded-full bg-slate-600";
           }
@@ -3309,6 +3545,7 @@
       waveformRafId = requestAnimationFrame(() => {
         waveformRafId = null;
         drawAudioWaveform();
+        drawTimelineMap();
       });
     }
 
@@ -3451,7 +3688,7 @@
       const dur = video.duration || 1;
       const cur = video.currentTime || 0;
       const playheadRatio = Math.max(0, Math.min(1, cur / dur));
-      const splitX = playheadRatio * targetW;
+      const splitX = Math.max(0, Math.min(1, (playheadRatio - tlStart) / tlSpan())) * targetW;
 
       // Waveform Bars Geometry
       const barWidth = 2 * dpr;
@@ -3461,7 +3698,7 @@
 
       for (let b = 0; b < totalBars; b++) {
         const x = b * barSlot;
-        const peakIdx = Math.floor((b / totalBars) * cachedWaveformPeaks.length);
+        const peakIdx = Math.min(cachedWaveformPeaks.length - 1, Math.floor((tlStart + (b / totalBars) * tlSpan()) * cachedWaveformPeaks.length));
         const rawAmp = cachedWaveformPeaks[peakIdx] || 0.03;
         const amp = Math.pow(rawAmp, 0.85);
         const barHalfH = Math.max(1.5 * dpr, amp * maxAmp);
@@ -3484,6 +3721,147 @@
       }
     }
     window.drawAudioWaveform = drawAudioWaveform;
+
+    // ==============================================
+    // TIMELINE ZOOM: slider, minimap, ruler          -->
+    // ==============================================
+    function updateTimelineNeedle() {
+      const needle = document.getElementById('timelineNeedle');
+      const pct = tlPct(video.currentTime || 0);
+      if (needle) {
+        needle.style.left = `${pct}%`;
+        needle.style.display = pct < -0.5 || pct > 100.5 ? 'none' : '';
+      }
+      const scrubProg = document.getElementById('scrubProgress');
+      if (scrubProg) scrubProg.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+      const mapNeedle = document.getElementById('timelineMapNeedle');
+      if (mapNeedle) mapNeedle.style.left = `${Math.max(0, Math.min(1, (video.currentTime || 0) / (video.duration || 1))) * 100}%`;
+    }
+
+    function drawTimelineMap() {
+      const canvas = document.getElementById('timelineMapCanvas');
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const dpr = window.devicePixelRatio || 1;
+      if (canvas.width !== Math.floor(rect.width * dpr) || canvas.height !== Math.floor(rect.height * dpr)) {
+        canvas.width = Math.floor(rect.width * dpr);
+        canvas.height = Math.floor(rect.height * dpr);
+      }
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!cachedWaveformPeaks || !cachedWaveformPeaks.length) return;
+      const playedX = Math.max(0, Math.min(1, (video.currentTime || 0) / (video.duration || 1))) * canvas.width;
+      const slot = 2 * dpr;
+      const bars = Math.floor(canvas.width / slot);
+      const mid = canvas.height / 2;
+      for (let b = 0; b < bars; b++) {
+        const amp = Math.pow(cachedWaveformPeaks[Math.floor((b / bars) * cachedWaveformPeaks.length)] || 0.03, 0.85);
+        const h = Math.max(1.5 * dpr, amp * canvas.height * 0.7);
+        ctx.fillStyle = b * slot <= playedX ? 'rgba(217, 140, 30, 0.75)' : 'rgba(110, 124, 142, 0.38)';
+        ctx.fillRect(b * slot, mid - h / 2, dpr * 1.4, h);
+      }
+    }
+
+    function renderTimelineChrome(clusters) {
+      const fit = tlZoom < 1.05;
+      const label = document.getElementById('tlZoomLabel');
+      if (label) label.textContent = `${tlZoom < 10 ? tlZoom.toFixed(1).replace('.0', '') : Math.round(tlZoom)}×`;
+      document.getElementById('tlFitBtn')?.classList.toggle('on', fit);
+      const slider = document.getElementById('tlZoomSlider');
+      const sliderValue = Math.round(Math.log(tlZoom) / Math.log(TL_MAX_ZOOM) * 100);
+      if (slider && Number(slider.value) !== sliderValue && document.activeElement !== slider) slider.value = sliderValue;
+
+      // Ruler: labelled ticks, only while zoomed in.
+      const ruler = document.getElementById('timelineRuler');
+      if (ruler) {
+        ruler.innerHTML = '';
+        const dur = video.duration || 0;
+        if (!fit && dur) {
+          const span = tlSpan() * dur;
+          const step = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600].find(n => span / n <= 8) || 600;
+          let html = '';
+          for (let t = Math.ceil(tlStart * dur / step) * step; t <= (tlStart + tlSpan()) * dur; t += step) {
+            const left = tlPct(t);
+            const mm = Math.floor(t / 60), ss = Math.floor(t % 60);
+            html += `<i style="left:${left}%"></i><span style="left:${left}%">${mm}:${String(ss).padStart(2, '0')}</span>`;
+          }
+          ruler.innerHTML = html;
+        }
+      }
+
+      // Minimap: window over the visible part, one dot per cue.
+      const win = document.getElementById('timelineMapWindow');
+      if (win) {
+        win.style.display = fit ? 'none' : 'block';
+        win.style.left = `${tlStart * 100}%`;
+        win.style.width = `${tlSpan() * 100}%`;
+        win.setAttribute('aria-valuenow', String(Math.round(tlStart / Math.max(0.0001, 1 - tlSpan()) * 100)));
+      }
+      const cueLayer = document.getElementById('timelineMapCues');
+      if (cueLayer) {
+        const dur = video.duration || 1;
+        cueLayer.innerHTML = (clusters || getConsensusClusters()).map(c =>
+          `<span class="tm-cue" style="left:${(c.seconds / dur) * 100}%;background:${escapeHtml(c.primaryColorHex)}"></span>`).join('');
+      }
+      updateTimelineNeedle();
+      drawTimelineMap();
+    }
+
+    function applyTimelineView() {
+      tlClamp();
+      renderTimelineTokens();   // also refreshes the ruler and the minimap
+      requestWaveformRedraw();
+    }
+
+    function setTimelineZoomFromSlider(value) {
+      // Zoom around the playhead, so it stays in the middle of what you are looking at.
+      const centre = (video.currentTime || 0) / (video.duration || 1);
+      tlZoom = Math.pow(TL_MAX_ZOOM, Number(value) / 100);
+      tlStart = centre - tlSpan() / 2;
+      applyTimelineView();
+    }
+    window.setTimelineZoomFromSlider = setTimelineZoomFromSlider;
+
+    function fitTimeline() {
+      tlZoom = 1;
+      tlStart = 0;
+      applyTimelineView();
+    }
+    window.fitTimeline = fitTimeline;
+
+    // While playing, page the view ahead when the playhead reaches its right edge (unless it was just panned by hand).
+    function followPlayhead() {
+      if (tlZoom < 1.05 || video.paused || isTimelineScrubbing || Date.now() < tlManualUntil) return;
+      const pct = tlPct(video.currentTime || 0);
+      if (pct > 94 || pct < 0) {
+        tlStart = (video.currentTime || 0) / (video.duration || 1) - tlSpan() * 0.08;
+        applyTimelineView();
+      }
+    }
+
+    (function setupTimelineMap() {
+      const map = document.getElementById('timelineMap');
+      const win = document.getElementById('timelineMapWindow');
+      if (!map || !win) return;
+      let grab = null;
+      const ratioOf = (e) => { const r = map.getBoundingClientRect(); return (e.clientX - r.left) / r.width; };
+      const pan = (start) => { tlStart = start; tlManualUntil = Date.now() + 4000; applyTimelineView(); };
+      map.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        const x = ratioOf(e);
+        grab = e.target === win ? x - tlStart : tlSpan() / 2;
+        if (e.target !== win) pan(x - grab);
+        e.preventDefault();
+      });
+      window.addEventListener('mousemove', (e) => { if (grab !== null) pan(ratioOf(e) - grab); });
+      window.addEventListener('mouseup', () => { grab = null; });
+      win.addEventListener('keydown', (e) => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        pan(tlStart + (e.key === 'ArrowRight' ? 1 : -1) * tlSpan() * 0.1);
+        e.preventDefault();
+      });
+    })();
     window.loadAudioWaveform = loadAudioWaveform;
     window.toggleWaveformDisplay = toggleWaveformDisplay;
 
@@ -3501,11 +3879,11 @@
       const rect = container.getBoundingClientRect();
       const clickX = clientX - rect.left;
       const ratio = Math.max(0, Math.min(1, clickX / rect.width));
-      let targetTime = ratio * (video.duration || 1);
+      let targetTime = tlTimeAtRatio(ratio);
 
       if (snapToMarker) {
         // Magnetic Snapping to closest marker within 20px threshold
-        const snapThresholdSec = (20 / rect.width) * (video.duration || 1);
+        const snapThresholdSec = (20 / rect.width) * tlSpan() * (video.duration || 1);
         const clusters = getConsensusClusters();
         let closestCluster = null;
         let minDiff = Infinity;
@@ -3618,15 +3996,13 @@
       if (hostTimeElem) hostTimeElem.textContent = smpte;
       const currentTcElem = document.getElementById('currentTimecodeLabel');
       if (currentTcElem) currentTcElem.textContent = smpte;
-      const noteCurrentTc = document.getElementById('noteCurrentTc');
-      if (noteCurrentTc) noteCurrentTc.textContent = smpte;
+      const noteInput = document.getElementById('discussionInput');
+      if (noteInput) noteInput.placeholder = `Add a note at ${smpte}`;
 
       const dur = video.duration || 1;
       const pct = Math.max(0, Math.min(100, (video.currentTime / dur) * 100));
-      const scrubProg = document.getElementById('scrubProgress');
-      if (scrubProg) scrubProg.style.width = `${pct}%`;
-      const needle = document.getElementById('timelineNeedle');
-      if (needle) needle.style.left = `${pct}%`;
+      followPlayhead();
+      updateTimelineNeedle();
       requestWaveformRedraw();
 
       // Dark Screening Option A Scrubber
@@ -3657,6 +4033,8 @@
 
     video.addEventListener('timeupdate', updateTimecodeUI);
     video.addEventListener('loadedmetadata', () => {
+      tlZoom = 1;
+      tlStart = 0;
       const durationSMPTE = formatSMPTE(video.duration);
       const durLabel = document.getElementById('durationTimecodeLabel');
       if (durLabel) durLabel.textContent = durationSMPTE;
@@ -4099,6 +4477,27 @@
     window.addEventListener('DOMContentLoaded', () => {
       // Load recent projects
       loadRecentProjects();
+
+      // Taken markers follow the room code a guest types, and change while they wait on this screen.
+      const codeInput = document.getElementById('inputRoomCode');
+      let codeTimer = null;
+      if (codeInput) codeInput.addEventListener('input', () => { clearTimeout(codeTimer); codeTimer = setTimeout(refreshTakenMarkers, 300); });
+      setInterval(() => {
+        const onboarding = document.getElementById('onboardingScreen');
+        if (selectedRole === 'student' && onboarding && !onboarding.classList.contains('hidden')) refreshTakenMarkers();
+      }, 3000);
+      try {
+        const retry = JSON.parse(sessionStorage.getItem('duetJoinRetry') || 'null');
+        sessionStorage.removeItem('duetJoinRetry');
+        if (retry) {
+          selectRole('student');
+          if (codeInput) codeInput.value = retry.code || '';
+          const nameInput = document.getElementById('inputUserName');
+          if (nameInput && retry.name) nameInput.value = retry.name;
+          showJoinNotice(retry.notice);
+          refreshTakenMarkers();
+        }
+      } catch (_) { /* nothing to restore */ }
 
       // Attach drag-and-drop to dropzone
       const dropzone = document.getElementById('dropzoneBox');

@@ -286,6 +286,36 @@ test("a guest can erase their own pencil strokes, and the room is told whose", a
   host.close();
 });
 
+// --- Film copies: only the host hears how each guest's copy of the film is doing ------------------
+
+test("the host is told who has copied the shared film; guests are not, and a stale report is ignored", async () => {
+  const room = "film-copies";
+  const host = await joinRoom(room, "host", "Teacher", false);
+  const anna = await joinRoom(room, "student", "Anna", true);
+  host.send({ type: "SHARE_VIDEO", videoUrl: "/uploads/a.mp4", videoName: "a.mp4" });
+  await until(() => received(anna, "VIDEO_SHARED").length === 1);
+
+  anna.send({ type: "FILM_COPY", videoUrl: "/uploads/a.mp4", state: "copying", progress: 0.4 });
+  await until(() => received(host, "FILM_COPIES").some((m) => m.copies[0]?.state === "copying"));
+  anna.send({ type: "FILM_COPY", videoUrl: "/uploads/a.mp4", state: "ready", progress: 1 });
+  await until(() => received(host, "FILM_COPIES").some((m) => m.copies[0]?.state === "ready"));
+  const last = received(host, "FILM_COPIES").at(-1);
+  assert.equal(last.film, true);
+  assert.deepEqual(last.copies.map((c: any) => [c.name, c.state]), [["Anna", "ready"]]);
+  assert.equal(received(anna, "FILM_COPIES").length, 0, "guests are not told");
+
+  // A report for a film the room has left, and one from the host, change nothing.
+  host.send({ type: "SHARE_VIDEO", videoUrl: "/uploads/b.mp4", videoName: "b.mp4" });
+  await until(() => received(host, "FILM_COPIES").at(-1).copies[0]?.state === "waiting");
+  anna.send({ type: "FILM_COPY", videoUrl: "/uploads/a.mp4", state: "ready", progress: 1 });
+  host.send({ type: "FILM_COPY", videoUrl: "/uploads/b.mp4", state: "ready", progress: 1 });
+  await settle();
+  assert.equal(received(host, "FILM_COPIES").at(-1).copies[0].state, "waiting");
+
+  anna.close();
+  host.close();
+});
+
 // --- Temporary drawing: per-author undo, one shared layer, cleared when the host moves --------------
 
 const line = (color = "#e5a93c") => ({ points: [{ x: 0.1, y: 0.1 }, { x: 0.8, y: 0.7 }], color });
@@ -568,4 +598,54 @@ test("a marker id is the same marker whether it arrives as a number or as text",
   anna.close();
   late.close();
   host.close();
+});
+
+async function joinWith(room: string, avatar: string, name: string) {
+  const ws = new WebSocket(`ws://127.0.0.1:${PORT}`, { headers: { Host: `192.168.0.9:${PORT}`, Cookie: `duet_token=${token}` } });
+  const messages: any[] = [];
+  ws.on("message", (raw) => messages.push(JSON.parse(String(raw))));
+  await new Promise<void>((resolve, reject) => { ws.on("open", () => resolve()); ws.on("error", reject); });
+  ws.send(JSON.stringify({ type: "JOIN_ROOM", roomCode: room, role: "student", name, avatar }));
+  await until(() => messages.some((m) => m.type === "INIT_STATE" || m.type === "JOIN_REJECTED"));
+  return { ws, messages };
+}
+
+test("a marker is used by one person at a time, and the room lists what is taken", async () => {
+  const first = await joinWith("7001", "🦊", "Ana");
+  assert.ok(first.messages.some((m) => m.type === "INIT_STATE"));
+
+  const second = await joinWith("7001", "🦊", "Ben");
+  const rejected = second.messages.find((m) => m.type === "JOIN_REJECTED");
+  assert.equal(rejected?.reason, "marker_taken");
+  assert.deepEqual(rejected?.taken, ["🦊"]);
+
+  const info = JSON.parse((await request({ path: "/api/room-markers?room=7001" })).body);
+  assert.deepEqual(info.taken, ["🦊"]);
+  assert.equal(info.full, false);
+
+  const third = await joinWith("7001", "🦉", "Cy");
+  assert.ok(third.messages.some((m) => m.type === "INIT_STATE"), "a different marker is fine");
+
+  // Leaving frees the marker.
+  first.ws.close();
+  await until(() => true, 50);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const again = await joinWith("7001", "🦊", "Ben");
+  assert.ok(again.messages.some((m) => m.type === "INIT_STATE"));
+  third.ws.close(); again.ws.close();
+});
+
+test("a room holds 20 people; the 21st is turned away, the host still gets in", async () => {
+  const markers = ["🎬", "🎥", "🎞️", "🍿", "✂️", "👁️", "🎭", "🎨", "🎧", "🎙️", "⚡", "🦊", "🦁", "🦉", "🚀", "🎓", "☕", "🔥", "💡", "⭐"];
+  const sockets = [];
+  for (let i = 0; i < 20; i++) sockets.push(await joinWith("7002", markers[i], `G${i}`));
+  assert.equal(JSON.parse((await request({ path: "/api/room-markers?room=7002" })).body).full, true);
+
+  const late = await joinWith("7002", "🎬", "Late");
+  assert.equal(late.messages.find((m) => m.type === "JOIN_REJECTED")?.reason, "room_full");
+
+  const host = await joinRoom("7002", "host", "Host", false);
+  assert.ok(host.messages.some((m) => m.type === "INIT_STATE"));
+  host.close();
+  sockets.forEach((s) => s.ws.close());
 });
